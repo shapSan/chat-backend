@@ -50,13 +50,13 @@ export default async function handler(req, res) {
         // Fetch environment variables
         const airtableApiKey = process.env.AIRTABLE_API_KEY;
         const openAIApiKey = process.env.OPENAI_API_KEY;
-        const heygenApiKey = process.env.HEYGEN_API_KEY; // <-- Add HeyGen API Key here
+        const heygenApiKey = process.env.HEYGEN_API_KEY; // <-- Ensure this is set in your environment variables
 
         if (!airtableApiKey || !openAIApiKey || !heygenApiKey) {
             console.error('Missing API keys:', { 
                 hasAirtableKey: !!airtableApiKey, 
                 hasOpenAIKey: !!openAIApiKey,
-                hasHeygenKey: !!heygenApiKey 
+                hasHeyGenKey: !!heygenApiKey 
             });
             return res.status(500).json({ error: 'Server configuration error' });
         }
@@ -148,19 +148,19 @@ export default async function handler(req, res) {
             });
         }
 
-        // Call HeyGen API only if voice response is enabled
+        // **Generate Voice Response Using HeyGen API**
         let heygenResponseUrl = null;
         if (useHeyGenVoice) {
             try {
-                const heygenResponse = await fetch('https://api.heygen.com/v1/voice', {
+                const heygenResponse = await fetch('https://api.heygen.com/v1/tts', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${heygenApiKey}`
+                        'X-Api-Key': heygenApiKey, // Updated header for HeyGen API
                     },
                     body: JSON.stringify({
                         text: aiReply,
-                        voice: "default", // Specify desired voice here if options are available
+                        voice_id: "en_us_001", // Replace with your desired voice ID
                     }),
                 });
 
@@ -170,7 +170,7 @@ export default async function handler(req, res) {
                 }
 
                 const heygenData = await heygenResponse.json();
-                heygenResponseUrl = heygenData.audio_url; // URL of the generated voice audio
+                heygenResponseUrl = heygenData.data.url; // URL of the generated voice audio
             } catch (error) {
                 console.error("Error with HeyGen API:", error);
             }
