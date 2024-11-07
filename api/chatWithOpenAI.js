@@ -1,22 +1,11 @@
+// /api/chatWithOpenAI.js
+
 import { NextResponse } from 'next/server';
 require('dotenv').config();
 const fetch = require('node-fetch');
 
 function getCurrentTimeInPDT() {
     const timeZone = 'America/Los_Angeles';
-    return new Intl.DateTimeFormat('en-US', { 
-        timeZone, 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric', 
-        hour: 'numeric', 
-        minute: 'numeric', 
-        second: 'numeric', 
-        timeZoneName: 'short' 
-    }).format(new Date());
-}
-
-function getTimeInTimeZone(timeZone) {
     return new Intl.DateTimeFormat('en-US', { 
         timeZone, 
         year: 'numeric', 
@@ -68,7 +57,7 @@ export default async function handler(req, res) {
 
         // Fetch knowledge base from Airtable
         const knowledgeBaseTableName = 'Chat-KnowledgeBase';
-        const airtableBaseId = 'appTYnw2qIaBIGRbR';
+        const airtableBaseId = 'appTYnw2qIaBIGRbR'; // Make sure this is set correctly
         const knowledgeBaseUrl = `https://api.airtable.com/v0/${airtableBaseId}/${encodeURIComponent(knowledgeBaseTableName)}`;
         const headersAirtable = {
             'Content-Type': 'application/json',
@@ -160,7 +149,7 @@ export default async function handler(req, res) {
                     },
                     body: JSON.stringify({
                         text: aiReply,
-                        voice_id: "en_us_001", // Replace with your desired voice ID
+                        voice_id: "YOUR_HEYGEN_VOICE_ID", // Replace with your desired voice ID
                     }),
                 });
 
