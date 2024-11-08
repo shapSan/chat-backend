@@ -2,7 +2,7 @@
 
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
-import { WebSocket } from 'ws';
+import ws from 'ws';
 
 dotenv.config();
 
@@ -108,7 +108,7 @@ export default async function handler(req, res) {
           const audioBuffer = Buffer.from(audioData, 'base64');
           const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
 
-          const openaiWs = new WebSocket(openaiWsUrl, {
+          const openaiWs = new ws(openaiWsUrl, {
             headers: {
               Authorization: `Bearer ${openAIApiKey}`,
               'OpenAI-Beta': 'realtime=v1',
