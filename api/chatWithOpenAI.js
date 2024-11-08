@@ -1,9 +1,8 @@
-// /api/chatWithOpenAI.ts
+// /api/chatWithOpenAI.js
 
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
-import type { NextApiRequest, NextApiResponse } from 'next';
 
 dotenv.config();
 
@@ -32,17 +31,14 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // **Set CORS headers for all responses**
-  res.setHeader('Access-Control-Allow-Origin', '*'); // You can specify a specific origin instead of '*'
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   if (req.method === 'OPTIONS') {
-    // **Handle preflight request**
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
 
   if (req.method === 'POST') {
@@ -50,27 +46,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { userMessage, sessionId, audioData } = req.body;
 
       // Log incoming data for debugging
-      console.log('Received POST request with data:', {
-        userMessage,
-        sessionId,
-        audioDataLength: audioData ? audioData.length : 0,
-      });
+      console.log('Received POST request with data:', { userMessage, sessionId, audioDataLength: audioData ? audioData.length : 0 });
 
       // Validate that sessionId is present, and that either userMessage or audioData is provided
       if (!sessionId) {
-        res.status(400).json({ error: 'Missing sessionId' });
-        return;
+        return res.status(400).json({ error: 'Missing sessionId' });
       }
       if (!userMessage && !audioData) {
-        res.status(400).json({
+        return res.status(400).json({
           error: 'Missing required fields',
           details: 'Either userMessage or audioData along with sessionId is required.',
         });
-        return;
       }
 
       // System context for OpenAI API, based on knowledge base and conversation history
-      let systemMessageContent = `You are a helpful assistant specialized in AI & Automation.`;
+      let systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
       let conversationContext = '';
       let existingRecordId = null;
 
@@ -78,10 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const airtableBaseId = 'appTYnw2qIaBIGRbR';
       const knowledgeBaseUrl = `https://api.airtable.com/v0/${airtableBaseId}/Chat-KnowledgeBase`;
       const eagleViewChatUrl = `https://api.airtable.com/v0/${airtableBaseId}/EagleView_Chat`;
-      const headersAirtable = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${airtableApiKey}`,
-      };
+      const headersAirtable = { 'Content-Type': 'application/json', Authorization: `Bearer ${airtableApiKey}` };
 
       // Attempt to fetch knowledge base and conversation history
       try {
@@ -133,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             type: 'session.update',
             session: { instructions: systemMessageContent },
           }));
-          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioData }));
+          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioBuffer.toString('base64') }));
           openaiWs.send(JSON.stringify({
             type: 'response.create',
             response: { modalities: ['text'], instructions: 'Please respond to the user.' },
@@ -168,8 +155,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     } catch (error) {
       console.error('Error in handler:', error);
-      // **Ensure CORS headers are set before sending the error response**
-      res.status(500).json({ error: 'Internal server error', details: error.message });
+      return res.status(500).json({ error: 'Internal server error', details: error.message });
     }
   } else {
     res.status(405).json({ error: 'Method not allowed' });
@@ -178,12 +164,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 // Utility function to get text response from OpenAI
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
-  const openaiApiKey = process.env.OPENAI_API_KEY;
   const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${openaiApiKey}`,
+      Authorization: `Bearer ${openAIApiKey}`,
     },
     body: JSON.stringify({
       model: 'gpt-4',
