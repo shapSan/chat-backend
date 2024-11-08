@@ -35,9 +35,13 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
 
   if (req.method === 'OPTIONS') {
+    // Preflight request handling for CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
     return res.status(200).end();
   }
 
@@ -75,7 +79,9 @@ export default async function handler(req, res) {
         const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
         if (kbResponse.ok) {
           const knowledgeBaseData = await kbResponse.json();
-          const knowledgeEntries = knowledgeBaseData.records.map((record) => record.fields.Summary).join('\n\n');
+          const knowledgeEntries = knowledgeBaseData.records.map((record) => record.fields.Summary).join('
+
+');
           systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
         }
       } catch (error) {
@@ -133,7 +139,9 @@ export default async function handler(req, res) {
               const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
               // Update Airtable with conversation
-              const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
+              const updatedConversation = `${conversationContext}
+User: [Voice Message]
+AI: ${aiReply}`;
               console.log('Updating Airtable with conversation:', updatedConversation);
               await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
               res.setHeader('Access-Control-Allow-Origin', '*');
@@ -160,7 +168,9 @@ export default async function handler(req, res) {
       } else if (userMessage) {
         // Text message processing with OpenAI Chat Completion API
         const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-        const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
+        const updatedConversation = `${conversationContext}
+User: ${userMessage}
+AI: ${aiReply}`;
         await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
         res.setHeader('Access-Control-Allow-Origin', '*');
         return res.json({ reply: aiReply });
@@ -203,4 +213,19 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
 async function updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId) {
   try {
     if (existingRecordId) {
-      await fetch(`${e
+      await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+        method: 'PATCH',
+        headers: headersAirtable,
+        body: JSON.stringify({ fields: { Conversation: updatedConversation } }),
+      });
+    } else {
+      await fetch(eagleViewChatUrl, {
+        method: 'POST',
+        headers: headersAirtable,
+        body: JSON.stringify({ fields: { SessionID: sessionId, Conversation: updatedConversation } }),
+      });
+    }
+  } catch (error) {
+    console.error('Error updating Airtable conversation:', error);
+  }
+}
