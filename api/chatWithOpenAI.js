@@ -63,7 +63,10 @@ export default async function handler(req, res) {
 
       // Check if either userMessage or audioData is present
       if (!userMessage && !audioData) {
-        return res.status(400).json({ error: 'Missing required fields', details: 'Both userMessage and sessionId are required' });
+        return res.status(400).json({ 
+          error: 'Missing required fields', 
+          details: 'Either userMessage or audioData along with sessionId is required.' 
+        });
       }
 
       // Initialize system message and context for OpenAI
