@@ -1,4 +1,4 @@
-// Updated version of /api/chatWithOpenAI.js to integrate Realtime API for audio handling
+// Updated version of /api/chatWithOpenAI.js to integrate Realtime API for audio handling with enhanced logging
 
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
@@ -127,12 +127,14 @@ export default async function handler(req, res) {
           });
 
           ws.on('message', async (message) => {
+            console.log('Received message from OpenAI Realtime API:', message);
             const event = JSON.parse(message);
             if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
               const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
               // Update Airtable with conversation
               const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
+              console.log('Updating Airtable with conversation:', updatedConversation);
               await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
               res.json({ reply: aiReply });
               ws.close();
@@ -141,7 +143,11 @@ export default async function handler(req, res) {
 
           ws.on('error', (error) => {
             console.error('Error with OpenAI WebSocket:', error);
-            res.status(500).json({ error: 'Failed to communicate with OpenAI' });
+            res.status(500).json({ error: 'Failed to communicate with OpenAI', details: error.message });
+          });
+
+          ws.on('close', (code, reason) => {
+            console.log(`WebSocket connection closed: code=${code}, reason=${reason}`);
           });
 
         } catch (error) {
@@ -191,19 +197,4 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
 async function updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId) {
   try {
     if (existingRecordId) {
-      await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
-        method: 'PATCH',
-        headers: headersAirtable,
-        body: JSON.stringify({ fields: { Conversation: updatedConversation } }),
-      });
-    } else {
-      await fetch(eagleViewChatUrl, {
-        method: 'POST',
-        headers: headersAirtable,
-        body: JSON.stringify({ fields: { SessionID: sessionId, Conversation: updatedConversation } }),
-      });
-    }
-  } catch (error) {
-    console.error('Error updating Airtable conversation:', error);
-  }
-}
+      await fetch(`${e
