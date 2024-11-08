@@ -1,4 +1,10 @@
-// /api/chatWithOpenAI.ts
+// /api/chatWithOpenAI.js
+
+import dotenv from 'dotenv';
+import fetch from 'node-fetch';
+import WebSocket from 'ws';
+
+dotenv.config();
 
 export const config = {
   api: {
@@ -26,7 +32,7 @@ function getCurrentTimeInPDT() {
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
@@ -95,84 +101,55 @@ export default async function handler(req, res) {
       const currentTimePDT = getCurrentTimeInPDT();
       systemMessageContent += ` Current time in PDT: ${currentTimePDT}.`;
 
-      let aiReply = '';
-
+      // Handle Audio Data if provided
       if (audioData) {
-        // Decode Base64 audioData
-        const buffer = Buffer.from(audioData, 'base64');
-
-        // Establish WebSocket connection to OpenAI Realtime API
+        // Decode Base64 to Buffer and set up WebSocket connection
+        const audioBuffer = Buffer.from(audioData, 'base64');
         const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
 
-        // Use built-in WebSocket if available
-        const WebSocket = require('ws');
-
-        const ws = new WebSocket(openaiWsUrl, {
+        const openaiWs = new WebSocket(openaiWsUrl, {
           headers: {
-            'Authorization': `Bearer ${openAIApiKey}`,
+            Authorization: `Bearer ${openAIApiKey}`,
             'OpenAI-Beta': 'realtime=v1',
           },
         });
 
-        ws.on('open', () => {
+        openaiWs.on('open', () => {
           console.log('Connected to OpenAI Realtime API');
-
-          // Update session with system message
-          ws.send(JSON.stringify({
+          openaiWs.send(JSON.stringify({
             type: 'session.update',
             session: { instructions: systemMessageContent },
           }));
-
-          // Append audio data to input buffer
-          ws.send(JSON.stringify({
-            type: 'input_audio_buffer.append',
-            data: audioData,
-          }));
-
-          // Request a response
-          ws.send(JSON.stringify({
+          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioData }));
+          openaiWs.send(JSON.stringify({
             type: 'response.create',
             response: { modalities: ['text'], instructions: 'Please respond to the user.' },
           }));
         });
 
-        ws.on('message', async (message) => {
+        openaiWs.on('message', async (message) => {
           const event = JSON.parse(message);
-          console.log('Received event:', event);
-
-          if (event.type === 'response.done') {
-            // Close the WebSocket connection
-            ws.close();
-          }
-
-          if (event.type === 'response.content_part.done') {
-            const aiReply = event.content.text;
+          if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
+            const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
             // Update Airtable with conversation
             const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
             await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
-
-            // Send the AI's reply back to the client
             res.json({ reply: aiReply });
-
-            // Close the WebSocket connection
-            ws.close();
+            openaiWs.close();
           }
         });
 
-        ws.on('error', (error) => {
-          console.error('WebSocket error:', error);
-          res.status(500).json({ error: 'Failed to communicate with OpenAI Realtime API' });
+        openaiWs.on('error', (error) => {
+          console.error('Error with OpenAI WebSocket:', error);
+          res.status(500).json({ error: 'Failed to communicate with OpenAI' });
         });
 
       } else if (userMessage) {
-        // Handle text message processing with OpenAI Chat Completion API
-        aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-
-        // Update Airtable with conversation
+        // Text message processing with OpenAI Chat Completion API
+        const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
         const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
         await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
-
         return res.json({ reply: aiReply });
       }
 
