@@ -1,3 +1,5 @@
+// /api/chatWithOpenAI.js
+
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
@@ -47,16 +49,22 @@ export default async function handler(req, res) {
     try {
       const { userMessage, sessionId, audioData } = req.body;
 
-      if (!sessionId) {
-        return res.status(400).json({ error: 'Missing sessionId' });
-      }
-
       console.log('Received POST request');
       console.log('Content-Type:', req.headers['content-type']);
       console.log('Request body:', req.body);
       console.log('userMessage:', userMessage);
       console.log('sessionId:', sessionId);
       console.log('audioData length:', audioData ? audioData.length : 'No audioData');
+
+      // Validate sessionId
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Missing sessionId' });
+      }
+
+      // Check if either userMessage or audioData is present
+      if (!userMessage && !audioData) {
+        return res.status(400).json({ error: 'Missing required fields', details: 'Both userMessage and sessionId are required' });
+      }
 
       // Initialize system message and context for OpenAI
       let systemMessageContent = `You are a friendly, professional, and cheeky assistant specializing in AI & Automation.`;
@@ -151,7 +159,7 @@ export default async function handler(req, res) {
             // Send audio data
             const audioEvent = {
               type: 'input_audio_buffer.append',
-              audio: audioBuffer.toString('base64'), // Re-encode if necessary
+              audio: audioData, // Already Base64 encoded
             };
             openaiWs.send(JSON.stringify(audioEvent));
 
