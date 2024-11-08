@@ -1,10 +1,6 @@
 // /api/chatWithOpenAI.js
 
-import dotenv from 'dotenv';
-import fetch from 'node-fetch';
-import WebSocket from 'ws';
-
-dotenv.config();
+// Ensure you're using Node.js 18+ for built-in fetch and WebSocket support
 
 export const config = {
   api: {
@@ -101,48 +97,78 @@ export default async function handler(req, res) {
       const currentTimePDT = getCurrentTimeInPDT();
       systemMessageContent += ` Current time in PDT: ${currentTimePDT}.`;
 
-      // Handle Audio Data if provided
+      let aiReply = '';
+
       if (audioData) {
-        // Decode Base64 to Buffer and set up WebSocket connection
+        // Decode Base64 audioData
         const audioBuffer = Buffer.from(audioData, 'base64');
+
+        // Establish WebSocket connection to OpenAI Realtime API
         const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
 
-        const openaiWs = new WebSocket(openaiWsUrl, {
+        // Use built-in WebSocket module in Node.js 18+
+        const ws = new WebSocket(openaiWsUrl, {
           headers: {
-            Authorization: `Bearer ${openAIApiKey}`,
+            'Authorization': `Bearer ${openAIApiKey}`,
             'OpenAI-Beta': 'realtime=v1',
           },
         });
 
-        openaiWs.on('open', () => {
+        ws.on('open', () => {
           console.log('Connected to OpenAI Realtime API');
-          openaiWs.send(JSON.stringify({
+
+          // Update session with system instructions
+          ws.send(JSON.stringify({
             type: 'session.update',
             session: { instructions: systemMessageContent },
           }));
-          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioData }));
-          openaiWs.send(JSON.stringify({
+
+          // Append audio data to input buffer
+          ws.send(JSON.stringify({
+            type: 'input_audio_buffer.append',
+            data: audioData,
+          }));
+
+          // Request a response
+          ws.send(JSON.stringify({
             type: 'response.create',
-            response: { modalities: ['text'], instructions: 'Please respond to the user.' },
+            response: { modalities: ['text'] },
           }));
         });
 
-        openaiWs.on('message', async (message) => {
-          const event = JSON.parse(message);
-          if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
-            const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
+        ws.on('message', async (data) => {
+          const event = JSON.parse(data);
 
+          console.log('Received event:', event);
+
+          // Check if the response is complete
+          if (event.type === 'response.done') {
+            // Close the WebSocket connection
+            ws.close();
+          }
+
+          // Collect the AI's reply
+          if (event.type === 'response.text') {
+            aiReply += event.text.delta || '';
+          }
+
+          // When the text is done, send the response
+          if (event.type === 'response.text.done') {
             // Update Airtable with conversation
             const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
             await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+
+            // Send the AI's reply back to the client
             res.json({ reply: aiReply });
-            openaiWs.close();
+
+            // Close the WebSocket connection
+            ws.close();
           }
         });
 
-        openaiWs.on('error', (error) => {
-          console.error('Error with OpenAI WebSocket:', error);
-          res.status(500).json({ error: 'Failed to communicate with OpenAI' });
+        ws.on('error', (error) => {
+          console.error('WebSocket error:', error);
+          res.status(500).json({ error: 'Failed to communicate with OpenAI Realtime API' });
         });
 
       } else if (userMessage) {
