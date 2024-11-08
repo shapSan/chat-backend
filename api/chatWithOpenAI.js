@@ -1,5 +1,3 @@
-// /api/chatWithOpenAI.js
-
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
@@ -60,7 +58,7 @@ export default async function handler(req, res) {
       }
 
       // System context for OpenAI API, based on knowledge base and conversation history
-      let systemMessageContent = `You are a helpful assistant specialized in AI & Automation.`;
+      let systemMessageContent = 'You are a helpful assistant specialized in AI & Automation.';
       let conversationContext = '';
       let existingRecordId = null;
 
@@ -103,48 +101,11 @@ export default async function handler(req, res) {
 
       // Handle Audio Data if provided
       if (audioData) {
-        // Decode Base64 to Buffer and set up WebSocket connection
-        const audioBuffer = Buffer.from(audioData, 'base64');
-        const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
-
-        const openaiWs = new WebSocket(openaiWsUrl, {
-          headers: {
-            Authorization: `Bearer ${openAIApiKey}`,
-            'OpenAI-Beta': 'realtime=v1',
-          },
-        });
-
-        openaiWs.on('open', () => {
-          console.log('Connected to OpenAI Realtime API');
-          openaiWs.send(JSON.stringify({
-            type: 'session.update',
-            session: { instructions: systemMessageContent },
-          }));
-          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioData }));
-          openaiWs.send(JSON.stringify({
-            type: 'response.create',
-            response: { modalities: ['text'], instructions: 'Please respond to the user.' },
-          }));
-        });
-
-        openaiWs.on('message', async (message) => {
-          const event = JSON.parse(message);
-          if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
-            const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
-
-            // Update Airtable with conversation
-            const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
-            await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
-            res.json({ reply: aiReply });
-            openaiWs.close();
-          }
-        });
-
-        openaiWs.on('error', (error) => {
-          console.error('Error with OpenAI WebSocket:', error);
-          res.status(500).json({ error: 'Failed to communicate with OpenAI' });
-        });
-
+        // Placeholder: Audio data processing not yet implemented
+        const aiReply = '[Audio data processing not yet implemented]';
+        const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
+        await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+        res.json({ reply: aiReply });
       } else if (userMessage) {
         // Text message processing with OpenAI Chat Completion API
         const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
@@ -164,12 +125,11 @@ export default async function handler(req, res) {
 
 // Utility function to get text response from OpenAI
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
-  const openaiApiKey = process.env.OPENAI_API_KEY;
   const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${openaiApiKey}`,
+      Authorization: `Bearer ${openAIApiKey}`,
     },
     body: JSON.stringify({
       model: 'gpt-4',
