@@ -79,9 +79,7 @@ export default async function handler(req, res) {
         const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
         if (kbResponse.ok) {
           const knowledgeBaseData = await kbResponse.json();
-          const knowledgeEntries = knowledgeBaseData.records.map((record) => record.fields.Summary).join('
-
-');
+          const knowledgeEntries = knowledgeBaseData.records.map((record) => record.fields.Summary).join('\n\n');
           systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
         }
       } catch (error) {
@@ -113,9 +111,7 @@ export default async function handler(req, res) {
       } else if (userMessage) {
         // Text message processing with OpenAI Chat Completion API
         const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-        const updatedConversation = `${conversationContext}
-User: ${userMessage}
-AI: ${aiReply}`;
+        const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
         await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
         res.setHeader('Access-Control-Allow-Origin', '*');
         return res.json({ reply: aiReply });
@@ -163,9 +159,7 @@ function handleAudioDataWithRealtimeAPI(audioData, systemMessageContent, session
         const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
         // Update Airtable with conversation
-        const updatedConversation = `${conversationContext}
-User: [Voice Message]
-AI: ${aiReply}`;
+        const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
         console.log('Updating Airtable with conversation:', updatedConversation);
         await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
         res.setHeader('Access-Control-Allow-Origin', '*');
