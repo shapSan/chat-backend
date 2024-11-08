@@ -1,4 +1,4 @@
-// Updated version of /api/chatWithOpenAI.js to integrate Realtime API for audio handling with enhanced logging
+// Updated version of /api/chatWithOpenAI.js to integrate Realtime API for audio handling with enhanced logging and improved CORS handling
 
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
@@ -32,7 +32,7 @@ function getCurrentTimeInPDT() {
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
@@ -136,6 +136,7 @@ export default async function handler(req, res) {
               const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
               console.log('Updating Airtable with conversation:', updatedConversation);
               await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+              res.setHeader('Access-Control-Allow-Origin', '*');
               res.json({ reply: aiReply });
               ws.close();
             }
@@ -143,6 +144,7 @@ export default async function handler(req, res) {
 
           ws.on('error', (error) => {
             console.error('Error with OpenAI WebSocket:', error);
+            res.setHeader('Access-Control-Allow-Origin', '*');
             res.status(500).json({ error: 'Failed to communicate with OpenAI', details: error.message });
           });
 
@@ -152,6 +154,7 @@ export default async function handler(req, res) {
 
         } catch (error) {
           console.error('Error processing audio data:', error);
+          res.setHeader('Access-Control-Allow-Origin', '*');
           return res.status(500).json({ error: 'Failed to process audio data', details: error.message });
         }
       } else if (userMessage) {
@@ -159,14 +162,17 @@ export default async function handler(req, res) {
         const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
         const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
         await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+        res.setHeader('Access-Control-Allow-Origin', '*');
         return res.json({ reply: aiReply });
       }
 
     } catch (error) {
       console.error('Error in handler:', error);
+      res.setHeader('Access-Control-Allow-Origin', '*');
       return res.status(500).json({ error: 'Internal server error', details: error.message });
     }
   } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.status(405).json({ error: 'Method not allowed' });
   }
 }
