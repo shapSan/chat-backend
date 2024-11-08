@@ -1,10 +1,6 @@
-// /api/chatWithOpenAI.js
+// /api/chatWithOpenAI.ts
 
-import dotenv from 'dotenv';
-import fetch from 'node-fetch';
-import WebSocket from 'ws';
-
-dotenv.config();
+import fetch from 'node-fetch'
 
 export const config = {
   api: {
@@ -101,55 +97,50 @@ export default async function handler(req, res) {
       const currentTimePDT = getCurrentTimeInPDT();
       systemMessageContent += ` Current time in PDT: ${currentTimePDT}.`;
 
-      // Handle Audio Data if provided
-      if (audioData) {
-        // Decode Base64 to Buffer and set up WebSocket connection
-        const audioBuffer = Buffer.from(audioData, 'base64');
-        const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
+      let aiReply = '';
 
-        const openaiWs = new WebSocket(openaiWsUrl, {
+      if (audioData) {
+        // Decode Base64 audioData
+        const buffer = Buffer.from(audioData, 'base64');
+
+        // Prepare form data for OpenAI Whisper API
+        const formData = new FormData();
+        formData.append('file', new Blob([buffer], { type: 'audio/webm' }), 'audio.webm');
+        formData.append('model', 'whisper-1');
+
+        // Call OpenAI Whisper API for transcription
+        const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
           headers: {
             Authorization: `Bearer ${openAIApiKey}`,
-            'OpenAI-Beta': 'realtime=v1',
           },
+          body: formData,
         });
 
-        openaiWs.on('open', () => {
-          console.log('Connected to OpenAI Realtime API');
-          openaiWs.send(JSON.stringify({
-            type: 'session.update',
-            session: { instructions: systemMessageContent },
-          }));
-          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioData }));
-          openaiWs.send(JSON.stringify({
-            type: 'response.create',
-            response: { modalities: ['text'], instructions: 'Please respond to the user.' },
-          }));
-        });
+        const whisperData = await whisperResponse.json();
+        const transcribedText = whisperData.text;
 
-        openaiWs.on('message', async (message) => {
-          const event = JSON.parse(message);
-          if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
-            const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
+        if (!transcribedText) {
+          return res.status(500).json({ error: 'Failed to transcribe audio' });
+        }
 
-            // Update Airtable with conversation
-            const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
-            await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
-            res.json({ reply: aiReply });
-            openaiWs.close();
-          }
-        });
+        // Call OpenAI Chat Completion API with transcribed text
+        aiReply = await getTextResponseFromOpenAI(transcribedText, sessionId, systemMessageContent);
 
-        openaiWs.on('error', (error) => {
-          console.error('Error with OpenAI WebSocket:', error);
-          res.status(500).json({ error: 'Failed to communicate with OpenAI' });
-        });
+        // Update Airtable with conversation
+        const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
+        await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+
+        res.json({ reply: aiReply });
 
       } else if (userMessage) {
-        // Text message processing with OpenAI Chat Completion API
-        const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+        // Handle text message processing
+        aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+
+        // Update Airtable with conversation
         const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
         await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+
         return res.json({ reply: aiReply });
       }
 
