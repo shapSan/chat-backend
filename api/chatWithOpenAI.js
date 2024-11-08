@@ -1,13 +1,13 @@
-// /api/chatWithOpenAI.js
+import dotenv from 'dotenv';
+import fetch from 'node-fetch';
+import WebSocket from 'ws';
 
-require('dotenv').config();
-const fetch = require('node-fetch');
-const WebSocket = require('ws');
+dotenv.config();
 
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: '5mb', // Increase the limit as needed
+      sizeLimit: '10mb', // Increase the limit as needed
     },
   },
 };
@@ -50,6 +50,13 @@ export default async function handler(req, res) {
       if (!sessionId) {
         return res.status(400).json({ error: 'Missing sessionId' });
       }
+
+      console.log('Received POST request');
+      console.log('Content-Type:', req.headers['content-type']);
+      console.log('Request body:', req.body);
+      console.log('userMessage:', userMessage);
+      console.log('sessionId:', sessionId);
+      console.log('audioData length:', audioData ? audioData.length : 'No audioData');
 
       // Initialize system message and context for OpenAI
       let systemMessageContent = `You are a friendly, professional, and cheeky assistant specializing in AI & Automation.`;
@@ -115,7 +122,10 @@ export default async function handler(req, res) {
       systemMessageContent += ` The current time in PDT is ${currentTimePDT}.`;
 
       if (audioData) {
-        // Handle audio data using OpenAI Realtime API
+        // Decode Base64 to Buffer
+        const audioBuffer = Buffer.from(audioData, 'base64');
+
+        // Connect to OpenAI Realtime API via WebSocket
         try {
           const openaiWsUrl =
             'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
@@ -141,7 +151,7 @@ export default async function handler(req, res) {
             // Send audio data
             const audioEvent = {
               type: 'input_audio_buffer.append',
-              audio: audioData, // Already Base64 encoded
+              audio: audioBuffer.toString('base64'), // Re-encode if necessary
             };
             openaiWs.send(JSON.stringify(audioEvent));
 
