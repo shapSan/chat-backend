@@ -4,6 +4,17 @@ require('dotenv').config();
 const fetch = require('node-fetch');
 const WebSocket = require('ws');
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '5mb', // Increase the limit as needed
+    },
+  },
+};
+
+const airtableApiKey = process.env.AIRTABLE_API_KEY;
+const openAIApiKey = process.env.OPENAI_API_KEY;
+
 function getCurrentTimeInPDT() {
   const timeZone = 'America/Los_Angeles';
   return new Intl.DateTimeFormat('en-US', {
@@ -33,163 +44,260 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    let body = '';
+    try {
+      const { userMessage, sessionId, audioData } = req.body;
 
-    req.on('data', (chunk) => {
-      body += chunk.toString();
-    });
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Missing sessionId' });
+      }
 
-    req.on('end', async () => {
+      // Initialize system message and context for OpenAI
+      let systemMessageContent = `You are a friendly, professional, and cheeky assistant specializing in AI & Automation.`;
+      let conversationContext = '';
+      let existingRecordId = null;
+
+      // Fetch knowledge base from Airtable
+      const knowledgeBaseTableName = 'Chat-KnowledgeBase';
+      const airtableBaseId = 'appTYnw2qIaBIGRbR'; // Ensure this is set correctly
+      const knowledgeBaseUrl = `https://api.airtable.com/v0/${airtableBaseId}/${encodeURIComponent(
+        knowledgeBaseTableName
+      )}`;
+      const headersAirtable = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${airtableApiKey}`,
+      };
+
       try {
-        const { userMessage, sessionId, audioData } = JSON.parse(body);
+        const kbResponse = await fetch(knowledgeBaseUrl, {
+          headers: headersAirtable,
+        });
+        if (!kbResponse.ok)
+          throw new Error('Failed to fetch knowledge base');
 
-        if (!sessionId) {
-          return res.status(400).json({ error: 'Missing sessionId' });
+        const knowledgeBaseData = await kbResponse.json();
+
+        if (knowledgeBaseData.records && knowledgeBaseData.records.length > 0) {
+          const knowledgeEntries = knowledgeBaseData.records
+            .map((record) => record.fields.Summary)
+            .join('\n\n');
+          systemMessageContent += ` You have the following knowledge available to assist: "${knowledgeEntries}".`;
         }
+      } catch (error) {
+        console.error('Error fetching knowledge base:', error);
+      }
 
-        // Initialize system message and context for OpenAI
-        let systemMessageContent = `You are a friendly, professional, and cheeky assistant specializing in AI & Automation.`;
-        let conversationContext = '';
-        let existingRecordId = null;
+      // Fetch conversation history from Airtable
+      const eagleViewChatTableName = 'EagleView_Chat';
+      const eagleViewChatUrl = `https://api.airtable.com/v0/${airtableBaseId}/${encodeURIComponent(
+        eagleViewChatTableName
+      )}`;
+      try {
+        const searchUrl = `${eagleViewChatUrl}?filterByFormula=SessionID="${sessionId}"`;
+        const historyResponse = await fetch(searchUrl, {
+          headers: headersAirtable,
+        });
+        if (!historyResponse.ok)
+          throw new Error('Failed to fetch conversation history');
 
-        // Fetch knowledge base and conversation history from Airtable
-        // ... (Include your existing code for fetching from Airtable)
+        const result = await historyResponse.json();
 
-        // Add current time to context
-        const currentTimePDT = getCurrentTimeInPDT();
-        systemMessageContent += ` The current time in PDT is ${currentTimePDT}.`;
+        if (result.records && result.records.length > 0) {
+          conversationContext = result.records[0].fields.Conversation || '';
+          existingRecordId = result.records[0].id;
+          systemMessageContent += ` Here's the conversation so far: "${conversationContext}".`;
+        }
+      } catch (error) {
+        console.error('Error fetching conversation history:', error);
+      }
 
-        if (audioData) {
-          // Handle audio data using OpenAI Realtime API
-          try {
-            const openaiWsUrl =
-              'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
-            const openaiWs = new WebSocket(openaiWsUrl, {
-              headers: {
-                Authorization: 'Bearer ' + process.env.OPENAI_API_KEY,
-                'OpenAI-Beta': 'realtime=v1',
+      // Add current time to context
+      const currentTimePDT = getCurrentTimeInPDT();
+      systemMessageContent += ` The current time in PDT is ${currentTimePDT}.`;
+
+      if (audioData) {
+        // Handle audio data using OpenAI Realtime API
+        try {
+          const openaiWsUrl =
+            'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
+          const openaiWs = new WebSocket(openaiWsUrl, {
+            headers: {
+              Authorization: 'Bearer ' + openAIApiKey,
+              'OpenAI-Beta': 'realtime=v1',
+            },
+          });
+
+          openaiWs.on('open', () => {
+            console.log('Connected to OpenAI Realtime API');
+
+            // Send system message as session update
+            const sessionUpdateEvent = {
+              type: 'session.update',
+              session: {
+                instructions: systemMessageContent,
               },
-            });
+            };
+            openaiWs.send(JSON.stringify(sessionUpdateEvent));
 
-            openaiWs.on('open', () => {
-              console.log('Connected to OpenAI Realtime API');
+            // Send audio data
+            const audioEvent = {
+              type: 'input_audio_buffer.append',
+              audio: audioData, // Already Base64 encoded
+            };
+            openaiWs.send(JSON.stringify(audioEvent));
 
-              // Send system message as session update
-              const sessionUpdateEvent = {
-                type: 'session.update',
-                session: {
-                  instructions: systemMessageContent,
-                },
-              };
-              openaiWs.send(JSON.stringify(sessionUpdateEvent));
+            // Request a response
+            const responseEvent = {
+              type: 'response.create',
+              response: {
+                modalities: ['text'],
+                instructions: 'Please assist the user.',
+              },
+            };
+            openaiWs.send(JSON.stringify(responseEvent));
+          });
 
-              // Send audio data
-              const audioEvent = {
-                type: 'input_audio_buffer.append',
-                audio: audioData, // Already Base64 encoded
-              };
-              openaiWs.send(JSON.stringify(audioEvent));
+          openaiWs.on('message', async (message) => {
+            const event = JSON.parse(message);
 
-              // Request a response
-              const responseEvent = {
-                type: 'response.create',
-                response: {
-                  modalities: ['text'],
-                  instructions: 'Please assist the user.',
-                },
-              };
-              openaiWs.send(JSON.stringify(responseEvent));
-            });
+            if (
+              event.type === 'conversation.item.created' &&
+              event.item.role === 'assistant'
+            ) {
+              const aiReply = event.item.content
+                .filter((contentPart) => contentPart.type === 'text')
+                .map((contentPart) => contentPart.text)
+                .join('');
 
-            openaiWs.on('message', async (message) => {
-              const event = JSON.parse(message);
+              // Update conversation in Airtable
+              const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
 
-              if (
-                event.type === 'conversation.item.created' &&
-                event.item.role === 'assistant'
-              ) {
-                const aiReply = event.item.content
-                  .filter((contentPart) => contentPart.type === 'text')
-                  .map((contentPart) => contentPart.text)
-                  .join('');
-
-                // Update conversation in Airtable
-                const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
-
-                // ... (Include your existing code for updating Airtable)
-
-                // Send the reply back to the client
-                res.json({ reply: aiReply });
-                openaiWs.close();
+              try {
+                if (existingRecordId) {
+                  // Update existing conversation
+                  await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+                    method: 'PATCH',
+                    headers: headersAirtable,
+                    body: JSON.stringify({
+                      fields: {
+                        Conversation: updatedConversation,
+                      },
+                    }),
+                  });
+                } else {
+                  // Create new conversation record
+                  await fetch(eagleViewChatUrl, {
+                    method: 'POST',
+                    headers: headersAirtable,
+                    body: JSON.stringify({
+                      fields: {
+                        SessionID: sessionId,
+                        Conversation: updatedConversation,
+                      },
+                    }),
+                  });
+                }
+              } catch (error) {
+                console.error('Error updating Airtable conversation:', error);
               }
-            });
 
-            openaiWs.on('error', (error) => {
-              console.error('Error with OpenAI WebSocket:', error);
-              res
-                .status(500)
-                .json({ error: 'Failed to communicate with OpenAI' });
-            });
-          } catch (error) {
-            console.error('Error with OpenAI Realtime API:', error);
+              // Send the reply back to the client
+              res.json({ reply: aiReply });
+              openaiWs.close();
+            }
+          });
+
+          openaiWs.on('error', (error) => {
+            console.error('Error with OpenAI WebSocket:', error);
             res
               .status(500)
               .json({ error: 'Failed to communicate with OpenAI' });
-          }
-        } else if (userMessage) {
-          // Handle text message using OpenAI Chat Completion API
-          try {
-            const openaiResponse = await fetch(
-              'https://api.openai.com/v1/chat/completions',
-              {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-                },
-                body: JSON.stringify({
-                  model: 'gpt-4',
-                  messages: [
-                    { role: 'system', content: systemMessageContent },
-                    { role: 'user', content: userMessage },
-                  ],
-                  max_tokens: 500,
-                }),
-              }
-            );
-
-            if (!openaiResponse.ok) {
-              const errorText = await openaiResponse.text();
-              throw new Error(`OpenAI API error: ${errorText}`);
-            }
-
-            const openaiData = await openaiResponse.json();
-            const aiReply = openaiData.choices[0].message.content;
-
-            // Update conversation in Airtable
-            const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
-
-            // ... (Include your existing code for updating Airtable)
-
-            return res.json({ reply: aiReply });
-          } catch (error) {
-            console.error('Error in OpenAI communication:', error);
-            return res.status(500).json({
-              error: 'Failed to communicate with OpenAI',
-              details: error.message,
-            });
-          }
-        } else {
-          res.status(400).json({ error: 'No message or audio data provided' });
+          });
+        } catch (error) {
+          console.error('Error with OpenAI Realtime API:', error);
+          res
+            .status(500)
+            .json({ error: 'Failed to communicate with OpenAI' });
         }
-      } catch (error) {
-        console.error('Error in handler:', error);
-        return res.status(500).json({
-          error: 'Internal server error',
-          details: error.message,
-        });
+      } else if (userMessage) {
+        // Handle text message using OpenAI Chat Completion API
+        try {
+          const openaiResponse = await fetch(
+            'https://api.openai.com/v1/chat/completions',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${openAIApiKey}`,
+              },
+              body: JSON.stringify({
+                model: 'gpt-4',
+                messages: [
+                  { role: 'system', content: systemMessageContent },
+                  { role: 'user', content: userMessage },
+                ],
+                max_tokens: 500,
+              }),
+            }
+          );
+
+          if (!openaiResponse.ok) {
+            const errorText = await openaiResponse.text();
+            throw new Error(`OpenAI API error: ${errorText}`);
+          }
+
+          const openaiData = await openaiResponse.json();
+          const aiReply = openaiData.choices[0].message.content;
+
+          // Update conversation in Airtable
+          const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
+
+          try {
+            if (existingRecordId) {
+              // Update existing conversation
+              await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+                method: 'PATCH',
+                headers: headersAirtable,
+                body: JSON.stringify({
+                  fields: {
+                    Conversation: updatedConversation,
+                  },
+                }),
+              });
+            } else {
+              // Create new conversation record
+              await fetch(eagleViewChatUrl, {
+                method: 'POST',
+                headers: headersAirtable,
+                body: JSON.stringify({
+                  fields: {
+                    SessionID: sessionId,
+                    Conversation: updatedConversation,
+                  },
+                }),
+              });
+            }
+          } catch (error) {
+            console.error('Error updating Airtable conversation:', error);
+          }
+
+          return res.json({ reply: aiReply });
+        } catch (error) {
+          console.error('Error in OpenAI communication:', error);
+          return res.status(500).json({
+            error: 'Failed to communicate with OpenAI',
+            details: error.message,
+          });
+        }
+      } else {
+        res.status(400).json({ error: 'No message or audio data provided' });
       }
-    });
+    } catch (error) {
+      console.error('Error in handler:', error);
+      return res.status(500).json({
+        error: 'Internal server error',
+        details: error.message,
+      });
+    }
   } else {
     res.status(405).json({ error: 'Method not allowed' });
   }
