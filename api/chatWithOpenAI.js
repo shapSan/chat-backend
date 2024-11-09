@@ -145,9 +145,9 @@ export default async function handler(req, res) {
                 res.json({ reply: aiReply });
               } else {
                 console.error('No valid reply received from OpenAI WebSocket.');
-                res.status(500).json({ error: 'No valid reply received from OpenAI.' });
+                openaiWs.close();
+                return res.status(500).json({ error: 'No valid reply received from OpenAI.' });
               }
-              openaiWs.close();
             }
           });
 
@@ -161,7 +161,7 @@ export default async function handler(req, res) {
           });
         } catch (error) {
           console.error('Error processing audio data:', error);
-          res.status(500).json({ error: 'Error processing audio data.' });
+          return res.status(500).json({ error: 'Error processing audio data.' });
         }
       } else if (userMessage) {
         // Text message processing with OpenAI Chat Completion API
