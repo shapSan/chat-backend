@@ -1,3 +1,5 @@
+// /api/chatWithOpenAI.js
+
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
@@ -101,8 +103,13 @@ export default async function handler(req, res) {
 
       // Handle Audio Data if provided
       if (audioData) {
+        // Log audio data length for debugging
+        console.log('Audio data length:', audioData.length);
+
         // Decode Base64 to Buffer and set up WebSocket connection
         const audioBuffer = Buffer.from(audioData, 'base64');
+        console.log('Audio buffer created, length:', audioBuffer.length);
+
         const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
 
         const openaiWs = new WebSocket(openaiWsUrl, {
@@ -127,19 +134,14 @@ export default async function handler(req, res) {
 
         openaiWs.on('message', async (message) => {
           const event = JSON.parse(message);
-          console.log('Received message from OpenAI:', event); // Log received message for debugging
+          console.log('Received message from OpenAI WebSocket:', event);
           if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
             const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
-            if (aiReply) {
-              // Update Airtable with conversation
-              const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
-              await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
-              res.json({ reply: aiReply });
-            } else {
-              console.error('No text reply received from OpenAI.');
-              res.status(500).json({ error: 'No text reply received from OpenAI.' });
-            }
+            // Update Airtable with conversation
+            const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
+            await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+            res.json({ reply: aiReply });
             openaiWs.close();
           }
         });
@@ -168,34 +170,24 @@ export default async function handler(req, res) {
 
 // Utility function to get text response from OpenAI
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
-  try {
-    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4',
-        messages: [
-          { role: 'system', content: systemMessageContent },
-          { role: 'user', content: userMessage },
-        ],
-        max_tokens: 500,
-      }),
-    });
+  const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${openAIApiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: systemMessageContent },
+        { role: 'user', content: userMessage },
+      ],
+      max_tokens: 500,
+    }),
+  });
 
-    const openaiData = await openaiResponse.json();
-    if (openaiData.choices && openaiData.choices.length > 0) {
-      return openaiData.choices[0].message.content;
-    } else {
-      console.error('Unexpected response structure from OpenAI:', openaiData);
-      return 'Sorry, I could not generate a response.';
-    }
-  } catch (error) {
-    console.error('Error fetching response from OpenAI:', error);
-    return 'Sorry, there was an error generating the response.';
-  }
+  const openaiData = await openaiResponse.json();
+  return openaiData.choices[0].message.content;
 }
 
 // Utility function to update conversation in Airtable
