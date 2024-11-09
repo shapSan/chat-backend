@@ -101,6 +101,9 @@ export default async function handler(req, res) {
 
       // Handle Audio Data if provided
       if (audioData) {
+        // Log audio data details for debugging
+        console.log('Audio data properties:', { audioDataLength: audioData.length });
+
         // Decode Base64 to Buffer and set up WebSocket connection
         const audioBuffer = Buffer.from(audioData, 'base64');
         const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
@@ -156,6 +159,10 @@ export default async function handler(req, res) {
         openaiWs.on('error', (error) => {
           console.error('Error with OpenAI WebSocket:', error);
           res.status(500).json({ error: 'Failed to communicate with OpenAI' });
+        });
+
+        openaiWs.on('close', (code, reason) => {
+          console.log(`WebSocket closed with code: ${code}, reason: ${reason}`);
         });
 
       } else if (userMessage) {
