@@ -85,7 +85,6 @@ export default async function handler(req, res) {
       if (audioData) {
         console.log('Processing audio data...');
         
-        // Create WebSocket with correct endpoint and headers
         const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
           headers: {
             'Authorization': `Bearer ${openAIApiKey}`,
@@ -98,25 +97,35 @@ export default async function handler(req, res) {
         ws.on('open', () => {
           console.log('WebSocket connected');
           
-          // Set session configuration
+          // Initial session setup
           ws.send(JSON.stringify({
             type: 'session.update',
             session: {
-              instructions: `Previous conversation: ${conversationContext}`
+              instructions: `Previous conversation: ${conversationContext}`,
+              voice: 'alloy',
+              turn_detection: 'server_vad',
+              input_audio_transcription: { model: 'whisper-1' }
             }
           }));
 
-          // Send audio data according to documentation
+          // Send the audio data
           ws.send(JSON.stringify({
-            type: 'input_audio_buffer.append',
-            audio: audioData // Base64 audio data
+            type: 'conversation.item.create',
+            item: {
+              type: 'message',
+              role: 'user',
+              content: [{
+                type: 'input_audio',
+                audio: audioData
+              }]
+            }
           }));
 
-          // Request response
+          // Request response with both text and audio
           ws.send(JSON.stringify({
             type: 'response.create',
             response: {
-              modalities: ['text']
+              modalities: ['text', 'audio']
             }
           }));
         });
@@ -127,9 +136,32 @@ export default async function handler(req, res) {
             console.log('Received event:', event.type);
 
             switch(event.type) {
+              case 'input_audio_buffer.speech_started':
+                console.log('Speech started');
+                break;
+
+              case 'input_audio_buffer.speech_stopped':
+                console.log('Speech stopped');
+                break;
+
               case 'response.text.delta':
                 if (event.delta) {
                   aiResponse += event.delta;
+                  // Send partial text response to client
+                  res.write(JSON.stringify({
+                    type: 'text',
+                    data: event.delta
+                  }));
+                }
+                break;
+
+              case 'response.audio.delta':
+                if (event.audio) {
+                  // Send audio chunk to client
+                  res.write(JSON.stringify({
+                    type: 'audio',
+                    data: event.audio
+                  }));
                 }
                 break;
 
@@ -162,7 +194,7 @@ export default async function handler(req, res) {
                   console.error('Error updating Airtable:', error);
                 }
 
-                res.json({ reply: aiResponse });
+                res.end(JSON.stringify({ type: 'done', reply: aiResponse }));
                 ws.close();
                 break;
 
