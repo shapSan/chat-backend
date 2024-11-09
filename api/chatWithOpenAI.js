@@ -1,14 +1,14 @@
-// /api/chatWithOpenAI.js
+// /pages/api/chatWithOpenAI.js
 
 import dotenv from 'dotenv';
-import WebSocket from 'ws';
+import { WebSocket } from 'ws';
 
 dotenv.config();
 
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: '10mb',
+      sizeLimit: '10mb', // Adjust as needed
     },
   },
 };
@@ -16,10 +16,14 @@ export const config = {
 const openAIApiKey = process.env.OPENAI_API_KEY;
 
 export default async function handler(req, res) {
+  // CORS Headers
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*'); // Replace '*' with your domain in production
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, X-Requested-With'
+  );
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -49,12 +53,15 @@ export default async function handler(req, res) {
         }
 
         // Initialize WebSocket connection to OpenAI Realtime API
-        const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
-          headers: {
-            'Authorization': `Bearer ${openAIApiKey}`,
-            'OpenAI-Beta': 'realtime=v1',
-          },
-        });
+        const ws = new WebSocket(
+          'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01',
+          {
+            headers: {
+              Authorization: `Bearer ${openAIApiKey}`,
+              'OpenAI-Beta': 'realtime=v1',
+            },
+          }
+        );
 
         let responseSent = false;
 
@@ -65,8 +72,8 @@ export default async function handler(req, res) {
           const sessionInitEvent = {
             type: 'session.update',
             session: {
-              instructions: "You are a helpful, friendly AI assistant.",
-              voice: "alloy", // Choose desired voice
+              instructions: 'You are a helpful, friendly AI assistant.',
+              voice: 'alloy', // Choose desired voice
             },
           };
           ws.send(JSON.stringify(sessionInitEvent));
@@ -92,9 +99,12 @@ export default async function handler(req, res) {
           const event = JSON.parse(data);
           console.log('Received event from OpenAI:', event);
 
-          if (event.type === 'conversation.item.create' && event.item.role === 'assistant') {
+          if (
+            event.type === 'conversation.item.create' &&
+            event.item.role === 'assistant'
+          ) {
             if (event.item.content) {
-              event.item.content.forEach(async (content) => {
+              event.item.content.forEach((content) => {
                 if (content.type === 'text') {
                   // Send text response back to frontend
                   res.write(JSON.stringify({ reply: content.text }));
@@ -114,7 +124,10 @@ export default async function handler(req, res) {
             console.error('OpenAI Realtime API Error:', event.error);
             if (!responseSent) {
               responseSent = true;
-              res.status(500).json({ error: 'OpenAI Realtime API Error', details: event.error });
+              res.status(500).json({
+                error: 'OpenAI Realtime API Error',
+                details: event.error,
+              });
               ws.close();
             }
           }
@@ -124,7 +137,9 @@ export default async function handler(req, res) {
           console.error('WebSocket Error:', error);
           if (!responseSent) {
             responseSent = true;
-            res.status(500).json({ error: 'WebSocket connection failed', details: error.message });
+            res
+              .status(500)
+              .json({ error: 'WebSocket connection failed', details: error.message });
           }
         };
 
@@ -135,38 +150,36 @@ export default async function handler(req, res) {
             res.end();
           }
         });
-
       } else if (userMessage) {
-        // Handle text messages as per your existing implementation
+        // Handle text messages using OpenAI's Chat Completion API
         console.log('Processing text message...');
         if (!openAIApiKey) {
           return res.status(500).json({ error: 'OpenAI API key not configured' });
         }
 
-        const { Configuration, OpenAIApi } = require("openai");
+        const { Configuration, OpenAIApi } = require('openai');
         const configuration = new Configuration({
           apiKey: openAIApiKey,
         });
         const openai = new OpenAIApi(configuration);
 
         const completion = await openai.createChatCompletion({
-          model: "gpt-4",
-          messages: [{ role: "user", content: userMessage }],
+          model: 'gpt-4',
+          messages: [{ role: 'user', content: userMessage }],
         });
 
         const reply = completion.data.choices[0].message?.content;
         if (reply) {
-          addMessage("assistant", reply, "text");
+          addMessage('assistant', reply, 'text');
           res.json({ reply: reply });
         } else {
-          res.status(500).json({ error: "No reply from assistant" });
+          res.status(500).json({ error: 'No reply from assistant' });
         }
 
         setIsTyping(false);
       } else {
         return res.status(400).json({ error: 'No valid input provided' });
       }
-
     } catch (error) {
       console.error('Error:', error);
       res.status(500).json({ error: 'Internal Server Error', details: error.message });
