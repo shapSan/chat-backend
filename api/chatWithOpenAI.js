@@ -7,7 +7,7 @@ dotenv.config();
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: '10mb', // Increase the limit as needed
+      sizeLimit: '10mb',
     },
   },
 };
@@ -43,10 +43,8 @@ export default async function handler(req, res) {
     try {
       const { userMessage, sessionId, audioData } = req.body;
 
-      // Log incoming data for debugging
-      console.log('Received POST request with data:', { userMessage, sessionId, audioDataLength: audioData ? audioData.length : 0 });
+      console.log('Received POST request:', { userMessage, sessionId, audioDataLength: audioData ? audioData.length : 0 });
 
-      // Validate that sessionId is present, and that either userMessage or audioData is provided
       if (!sessionId) {
         return res.status(400).json({ error: 'Missing sessionId' });
       }
@@ -57,18 +55,17 @@ export default async function handler(req, res) {
         });
       }
 
-      // System context for OpenAI API, based on knowledge base and conversation history
+      // System context for OpenAI API
       let systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
       let conversationContext = '';
       let existingRecordId = null;
 
-      // Fetch knowledge base and conversation history
+      // Airtable setup to fetch conversation history and knowledge base
       const airtableBaseId = 'appTYnw2qIaBIGRbR';
       const knowledgeBaseUrl = `https://api.airtable.com/v0/${airtableBaseId}/Chat-KnowledgeBase`;
       const eagleViewChatUrl = `https://api.airtable.com/v0/${airtableBaseId}/EagleView_Chat`;
       const headersAirtable = { 'Content-Type': 'application/json', Authorization: `Bearer ${airtableApiKey}` };
 
-      // Attempt to fetch knowledge base and conversation history
       try {
         const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
         if (kbResponse.ok) {
@@ -99,9 +96,8 @@ export default async function handler(req, res) {
       const currentTimePDT = getCurrentTimeInPDT();
       systemMessageContent += ` Current time in PDT: ${currentTimePDT}.`;
 
-      // Handle Audio Data if provided
+      // Process audio data if provided
       if (audioData) {
-        // Decode Base64 to Buffer and set up WebSocket connection
         const audioBuffer = Buffer.from(audioData, 'base64');
         const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
 
@@ -121,18 +117,21 @@ export default async function handler(req, res) {
           openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioBuffer.toString('base64') }));
           openaiWs.send(JSON.stringify({
             type: 'response.create',
-            response: { modalities: ['text'], instructions: 'Please respond to the user.' },
+            response: { modalities: ['text'], instructions: 'Respond to the user' },
           }));
         });
 
         openaiWs.on('message', async (message) => {
           const event = JSON.parse(message);
-          console.log('Received message from OpenAI:', event); // Log received message for debugging
+          console.log('Received message from OpenAI:', event);
+
           if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
-            const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
+            const aiReply = event.item.content
+              .filter((content) => content.type === 'text')
+              .map((content) => content.text)
+              .join('');
 
             if (aiReply) {
-              // Update Airtable with conversation
               const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
               await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
               res.json({ reply: aiReply });
@@ -148,15 +147,12 @@ export default async function handler(req, res) {
           console.error('Error with OpenAI WebSocket:', error);
           res.status(500).json({ error: 'Failed to communicate with OpenAI' });
         });
-
       } else if (userMessage) {
-        // Text message processing with OpenAI Chat Completion API
         const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
         const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
         await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
         return res.json({ reply: aiReply });
       }
-
     } catch (error) {
       console.error('Error in handler:', error);
       return res.status(500).json({ error: 'Internal server error', details: error.message });
@@ -166,7 +162,7 @@ export default async function handler(req, res) {
   }
 }
 
-// Utility function to get text response from OpenAI
+// Text response from OpenAI for text-based messages
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
   try {
     const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -189,16 +185,16 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
     if (openaiData.choices && openaiData.choices.length > 0) {
       return openaiData.choices[0].message.content;
     } else {
-      console.error('Unexpected response structure from OpenAI:', openaiData);
+      console.error('Unexpected response from OpenAI:', openaiData);
       return 'Sorry, I could not generate a response.';
     }
   } catch (error) {
-    console.error('Error fetching response from OpenAI:', error);
+    console.error('Error fetching OpenAI response:', error);
     return 'Sorry, there was an error generating the response.';
   }
 }
 
-// Utility function to update conversation in Airtable
+// Airtable conversation update function
 async function updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId) {
   try {
     if (existingRecordId) {
