@@ -17,9 +17,6 @@ export const config = {
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 
-// Keep track of active connections
-const activeConnections = new Map();
-
 function getCurrentTimeInPDT() {
   const timeZone = 'America/Los_Angeles';
   return new Intl.DateTimeFormat('en-US', {
@@ -87,7 +84,8 @@ export default async function handler(req, res) {
       // Handle audio data
       if (audioData) {
         console.log('Processing audio data...');
-
+        
+        // Create WebSocket with correct endpoint and headers
         const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
           headers: {
             'Authorization': `Bearer ${openAIApiKey}`,
@@ -97,29 +95,24 @@ export default async function handler(req, res) {
 
         let aiResponse = '';
 
-        ws.on('error', (error) => {
-          console.error('WebSocket error:', error);
-          res.status(500).json({ error: 'WebSocket connection failed' });
-        });
-
         ws.on('open', () => {
           console.log('WebSocket connected');
-
-          // Set initial session configuration
+          
+          // Set session configuration
           ws.send(JSON.stringify({
             type: 'session.update',
             session: {
-              instructions: `Previous conversation: ${conversationContext}\nCurrent time: ${getCurrentTimeInPDT()}`
+              instructions: `Previous conversation: ${conversationContext}`
             }
           }));
 
-          // Send the audio data
+          // Send audio data according to documentation
           ws.send(JSON.stringify({
             type: 'input_audio_buffer.append',
-            audio: audioData
+            audio: audioData // Base64 audio data
           }));
 
-          // Create response request
+          // Request response
           ws.send(JSON.stringify({
             type: 'response.create',
             response: {
@@ -131,7 +124,7 @@ export default async function handler(req, res) {
         ws.on('message', async (data) => {
           try {
             const event = JSON.parse(data.toString());
-            console.log('Received WebSocket event:', event.type);
+            console.log('Received event:', event.type);
 
             switch(event.type) {
               case 'response.text.delta':
@@ -141,63 +134,60 @@ export default async function handler(req, res) {
                 break;
 
               case 'response.done':
-                if (aiResponse) {
-                  // Update Airtable with the conversation
-                  const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiResponse}`;
-                  
-                  try {
-                    if (existingRecordId) {
-                      await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
-                        method: 'PATCH',
-                        headers: headersAirtable,
-                        body: JSON.stringify({
-                          fields: { Conversation: updatedConversation }
-                        }),
-                      });
-                    } else {
-                      await fetch(eagleViewChatUrl, {
-                        method: 'POST',
-                        headers: headersAirtable,
-                        body: JSON.stringify({
-                          fields: {
-                            SessionID: sessionId,
-                            Conversation: updatedConversation
-                          }
-                        }),
-                      });
-                    }
-                  } catch (error) {
-                    console.error('Error updating Airtable:', error);
+                // Update Airtable conversation
+                const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiResponse}`;
+                
+                try {
+                  if (existingRecordId) {
+                    await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+                      method: 'PATCH',
+                      headers: headersAirtable,
+                      body: JSON.stringify({
+                        fields: { Conversation: updatedConversation }
+                      }),
+                    });
+                  } else {
+                    await fetch(eagleViewChatUrl, {
+                      method: 'POST',
+                      headers: headersAirtable,
+                      body: JSON.stringify({
+                        fields: {
+                          SessionID: sessionId,
+                          Conversation: updatedConversation
+                        }
+                      }),
+                    });
                   }
-
-                  res.json({ reply: aiResponse });
-                } else {
-                  res.status(500).json({ error: 'No response generated' });
+                } catch (error) {
+                  console.error('Error updating Airtable:', error);
                 }
+
+                res.json({ reply: aiResponse });
                 ws.close();
                 break;
 
               case 'error':
-                console.error('Error event received:', event.error);
+                console.error('Received error event:', event.error);
                 ws.close();
                 res.status(500).json({ error: event.error.message });
                 break;
             }
           } catch (error) {
-            console.error('Error processing WebSocket message:', error);
+            console.error('Error processing message:', error);
             ws.close();
-            res.status(500).json({ error: 'Error processing audio response' });
+            res.status(500).json({ error: 'Error processing response' });
           }
         });
 
-        // Store the connection
-        activeConnections.set(sessionId, ws);
+        ws.on('error', (error) => {
+          console.error('WebSocket error:', error);
+          res.status(500).json({ error: 'WebSocket connection failed' });
+        });
 
         // Clean up on client disconnect
         res.on('close', () => {
-          if (activeConnections.has(sessionId)) {
-            activeConnections.get(sessionId).close();
-            activeConnections.delete(sessionId);
+          if (ws.readyState === ws.OPEN) {
+            ws.close();
           }
         });
 
