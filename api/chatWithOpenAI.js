@@ -77,6 +77,8 @@ export default async function handler(req, res) {
           const knowledgeBaseData = await kbResponse.json();
           const knowledgeEntries = knowledgeBaseData.records.map((record) => record.fields.Summary).join('\n\n');
           systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
+        } else {
+          console.error('Failed to fetch knowledge base, status:', kbResponse.status);
         }
       } catch (error) {
         console.error('Error fetching knowledge base:', error);
@@ -92,6 +94,8 @@ export default async function handler(req, res) {
             existingRecordId = result.records[0].id;
             systemMessageContent += ` Conversation so far: "${conversationContext}".`;
           }
+        } else {
+          console.error('Failed to fetch conversation history, status:', historyResponse.status);
         }
       } catch (error) {
         console.error('Error fetching conversation history:', error);
