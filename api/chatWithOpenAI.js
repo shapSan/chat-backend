@@ -126,21 +126,30 @@ export default async function handler(req, res) {
         });
 
         openaiWs.on('message', async (message) => {
-          const event = JSON.parse(message);
-          console.log('Received message from OpenAI:', event); // Log received message for debugging
-          if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
-            const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
+          try {
+            const event = JSON.parse(message);
+            console.log('Received message from OpenAI:', event); // Log received message for debugging
+            if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
+              const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
-            if (aiReply) {
-              // Update Airtable with conversation
-              const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
-              await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
-              res.json({ reply: aiReply });
-            } else {
-              console.error('No text reply received from OpenAI.');
-              res.status(500).json({ error: 'No text reply received from OpenAI.' });
+              if (aiReply) {
+                // Update Airtable with conversation
+                const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
+                await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+                res.json({ reply: aiReply });
+              } else {
+                console.error('No text reply received from OpenAI.');
+                res.status(500).json({ error: 'No text reply received from OpenAI.' });
+              }
+              openaiWs.close();
+            } else if (event.type === 'error') {
+              console.error('Error event received from OpenAI:', event);
+              res.status(500).json({ error: 'Error event received from OpenAI.' });
+              openaiWs.close();
             }
-            openaiWs.close();
+          } catch (err) {
+            console.error('Error processing message from OpenAI:', err);
+            res.status(500).json({ error: 'Error processing message from OpenAI.' });
           }
         });
 
