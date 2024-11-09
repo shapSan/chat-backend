@@ -151,6 +151,10 @@ export default async function handler(req, res) {
             console.error('Error with OpenAI WebSocket:', error);
             res.status(500).json({ error: 'Failed to communicate with OpenAI' });
           });
+
+          openaiWs.on('close', (code, reason) => {
+            console.log(`WebSocket closed: ${code} - ${reason}`);
+          });
         } catch (error) {
           console.error('Error processing audio data:', error);
           res.status(500).json({ error: 'Error processing audio data.' });
