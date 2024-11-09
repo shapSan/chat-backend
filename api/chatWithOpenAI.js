@@ -127,13 +127,19 @@ export default async function handler(req, res) {
 
         openaiWs.on('message', async (message) => {
           const event = JSON.parse(message);
+          console.log('Received message from OpenAI:', event); // Log received message for debugging
           if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
             const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
-            // Update Airtable with conversation
-            const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
-            await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
-            res.json({ reply: aiReply });
+            if (aiReply) {
+              // Update Airtable with conversation
+              const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`;
+              await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
+              res.json({ reply: aiReply });
+            } else {
+              console.error('No text reply received from OpenAI.');
+              res.status(500).json({ error: 'No text reply received from OpenAI.' });
+            }
             openaiWs.close();
           }
         });
@@ -162,24 +168,34 @@ export default async function handler(req, res) {
 
 // Utility function to get text response from OpenAI
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
-  const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${openAIApiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4',
-      messages: [
-        { role: 'system', content: systemMessageContent },
-        { role: 'user', content: userMessage },
-      ],
-      max_tokens: 500,
-    }),
-  });
+  try {
+    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4',
+        messages: [
+          { role: 'system', content: systemMessageContent },
+          { role: 'user', content: userMessage },
+        ],
+        max_tokens: 500,
+      }),
+    });
 
-  const openaiData = await openaiResponse.json();
-  return openaiData.choices[0].message.content;
+    const openaiData = await openaiResponse.json();
+    if (openaiData.choices && openaiData.choices.length > 0) {
+      return openaiData.choices[0].message.content;
+    } else {
+      console.error('Unexpected response structure from OpenAI:', openaiData);
+      return 'Sorry, I could not generate a response.';
+    }
+  } catch (error) {
+    console.error('Error fetching response from OpenAI:', error);
+    return 'Sorry, there was an error generating the response.';
+  }
 }
 
 // Utility function to update conversation in Airtable
