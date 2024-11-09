@@ -49,7 +49,9 @@ export default async function handler(req, res) {
         hasUserMessage: !!userMessage,
         sessionId,
         hasAudioData: !!audioData,
-        audioDataLength: audioData ? audioData.length : 0
+        audioDataLength: audioData ? audioData.length : 0,
+        hasOpenAIKey: !!openAIApiKey,
+        hasAirtableKey: !!airtableApiKey
       });
 
       if (!sessionId) {
@@ -82,120 +84,213 @@ export default async function handler(req, res) {
       }
 
       // Handle audio data
-     if (audioData) {
-    console.log('Processing audio data...');
-    
-    try {
-        // Create WebSocket with correct endpoint and headers
-        const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
-            headers: {
-                'Authorization': `Bearer ${openAIApiKey}`,
-                'OpenAI-Beta': 'realtime=v1',
-                'Content-Type': 'application/json',
-            },
-            followRedirects: true
+      if (audioData) {
+        console.log('Processing audio data...', {
+          hasOpenAIKey: !!openAIApiKey,
+          audioDataLength: audioData.length,
+          sessionId
         });
 
-        // Handle connection error
-        ws.onerror = (error) => {
-            console.error('WebSocket Error:', error);
-            res.status(500).json({ error: 'WebSocket connection failed' });
-        };
+        // First, test the OpenAI API access
+        try {
+          const testResponse = await fetch('https://api.openai.com/v1/realtime/status', {
+            headers: {
+              'Authorization': `Bearer ${openAIApiKey}`,
+              'OpenAI-Beta': 'realtime=v1'
+            }
+          });
+          
+          if (!testResponse.ok) {
+            const errorData = await testResponse.json();
+            console.error('OpenAI API access error:', errorData);
+            return res.status(500).json({ 
+              error: 'OpenAI API access error',
+              details: errorData 
+            });
+          }
 
-        // Handle connection open
-        ws.onopen = () => {
+          // Set up WebSocket connection
+          const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
+            headers: {
+              'Authorization': `Bearer ${openAIApiKey}`,
+              'OpenAI-Beta': 'realtime=v1'
+            }
+          });
+
+          // Handle connection error
+          ws.onerror = (error) => {
+            console.error('WebSocket Error:', error);
+            return res.status(500).json({ 
+              error: 'WebSocket connection failed',
+              details: error.message 
+            });
+          };
+
+          // Handle connection open
+          ws.onopen = () => {
             console.log('WebSocket connected to OpenAI');
             
             // Send initial configuration
             ws.send(JSON.stringify({
-                type: 'session.update',
-                session: {
-                    instructions: `Previous conversation: ${conversationContext}`,
-                    turn_detection: 'server_vad'
-                }
+              type: 'session.update',
+              session: {
+                instructions: `Previous conversation: ${conversationContext}`,
+                turn_detection: 'server_vad'
+              }
             }));
 
             // Send audio data
             ws.send(JSON.stringify({
-                type: 'input_audio_buffer.append',
-                audio: audioData
+              type: 'input_audio_buffer.append',
+              audio: audioData
             }));
 
             // Request response
             ws.send(JSON.stringify({
-                type: 'response.create',
-                response: {
-                    modalities: ['text']
-                }
+              type: 'response.create',
+              response: {
+                modalities: ['text']
+              }
             }));
-        };
+          };
 
-        // Handle messages
-        ws.onmessage = async (event) => {
+          // Handle messages
+          ws.onmessage = async (event) => {
             try {
-                const data = JSON.parse(event.data);
-                console.log('Received event:', data.type);
+              const data = JSON.parse(event.data);
+              console.log('Received event:', data.type);
 
-                switch(data.type) {
-                    case 'response.text.delta':
-                        if (data.delta) {
-                            res.write(JSON.stringify({ type: 'text', data: data.delta }));
-                        }
-                        break;
+              switch(data.type) {
+                case 'response.text.delta':
+                  if (data.delta) {
+                    res.write(JSON.stringify({ type: 'text', data: data.delta }));
+                  }
+                  break;
 
-                    case 'response.done':
-                        const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${data.text || ''}`;
-                        
-                        try {
-                            if (existingRecordId) {
-                                await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
-                                    method: 'PATCH',
-                                    headers: headersAirtable,
-                                    body: JSON.stringify({
-                                        fields: { Conversation: updatedConversation }
-                                    }),
-                                });
-                            } else {
-                                await fetch(eagleViewChatUrl, {
-                                    method: 'POST',
-                                    headers: headersAirtable,
-                                    body: JSON.stringify({
-                                        fields: {
-                                            SessionID: sessionId,
-                                            Conversation: updatedConversation
-                                        }
-                                    }),
-                                });
-                            }
-                        } catch (error) {
-                            console.error('Error updating Airtable:', error);
-                        }
+                case 'response.done':
+                  const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${data.text || ''}`;
+                  
+                  try {
+                    if (existingRecordId) {
+                      await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+                        method: 'PATCH',
+                        headers: headersAirtable,
+                        body: JSON.stringify({
+                          fields: { Conversation: updatedConversation }
+                        }),
+                      });
+                    } else {
+                      await fetch(eagleViewChatUrl, {
+                        method: 'POST',
+                        headers: headersAirtable,
+                        body: JSON.stringify({
+                          fields: {
+                            SessionID: sessionId,
+                            Conversation: updatedConversation
+                          }
+                        }),
+                      });
+                    }
+                  } catch (error) {
+                    console.error('Error updating Airtable:', error);
+                  }
 
-                        res.write(JSON.stringify({ type: 'done' }));
-                        res.end();
-                        ws.close();
-                        break;
+                  res.write(JSON.stringify({ type: 'done' }));
+                  res.end();
+                  ws.close();
+                  break;
 
-                    case 'error':
-                        console.error('OpenAI API Error:', data.error);
-                        res.status(500).json({ error: data.error.message });
-                        ws.close();
-                        break;
-                }
+                case 'error':
+                  console.error('OpenAI API Error:', data.error);
+                  res.status(500).json({ error: data.error.message });
+                  ws.close();
+                  break;
+              }
             } catch (error) {
-                console.error('Error processing message:', error);
-                res.status(500).json({ error: 'Error processing response' });
-                ws.close();
+              console.error('Error processing message:', error);
+              res.status(500).json({ error: 'Error processing response' });
+              ws.close();
             }
-        };
+          };
 
-        // Handle connection close
-        ws.onclose = () => {
+          // Handle connection close
+          ws.onclose = () => {
             console.log('WebSocket closed');
-        };
+          };
+
+        } catch (error) {
+          console.error('Setup error:', error);
+          return res.status(500).json({ 
+            error: 'Setup failed',
+            details: error.message 
+          });
+        }
+
+      } else if (userMessage) {
+        // Handle text messages with regular completions API
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${openAIApiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4',
+            messages: [
+              {
+                role: 'system',
+                content: `Previous conversation: ${conversationContext}\nCurrent time: ${getCurrentTimeInPDT()}`
+              },
+              { role: 'user', content: userMessage }
+            ],
+            max_tokens: 500,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to get completion');
+        }
+
+        const completion = await response.json();
+        const aiReply = completion.choices[0].message.content;
+
+        // Update conversation in Airtable
+        const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
+        
+        if (existingRecordId) {
+          await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+            method: 'PATCH',
+            headers: headersAirtable,
+            body: JSON.stringify({
+              fields: { Conversation: updatedConversation }
+            }),
+          });
+        } else {
+          await fetch(eagleViewChatUrl, {
+            method: 'POST',
+            headers: headersAirtable,
+            body: JSON.stringify({
+              fields: {
+                SessionID: sessionId,
+                Conversation: updatedConversation
+              }
+            }),
+          });
+        }
+
+        return res.json({ reply: aiReply });
+      } else {
+        return res.status(400).json({ error: 'Missing message content' });
+      }
 
     } catch (error) {
-        console.error('Error setting up WebSocket:', error);
-        res.status(500).json({ error: 'Failed to set up WebSocket connection' });
+      console.error('Handler error:', error);
+      return res.status(500).json({
+        error: 'Internal server error',
+        details: error.message
+      });
     }
+  } else {
+    res.status(405).json({ error: 'Method not allowed' });
+  }
 }
