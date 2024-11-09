@@ -1,5 +1,3 @@
-// /api/chatWithOpenAI.js
-
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
@@ -103,13 +101,8 @@ export default async function handler(req, res) {
 
       // Handle Audio Data if provided
       if (audioData) {
-        // Log audio data length for debugging
-        console.log('Audio data length:', audioData.length);
-
         // Decode Base64 to Buffer and set up WebSocket connection
         const audioBuffer = Buffer.from(audioData, 'base64');
-        console.log('Audio buffer created, length:', audioBuffer.length);
-
         const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
 
         const openaiWs = new WebSocket(openaiWsUrl, {
@@ -134,7 +127,6 @@ export default async function handler(req, res) {
 
         openaiWs.on('message', async (message) => {
           const event = JSON.parse(message);
-          console.log('Received message from OpenAI WebSocket:', event);
           if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
             const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
