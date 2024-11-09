@@ -1,7 +1,6 @@
 // /api/chatWithOpenAI.js
 
 import dotenv from 'dotenv';
-import fetch from 'node-fetch';
 import WebSocket from 'ws';
 
 dotenv.config();
@@ -14,26 +13,11 @@ export const config = {
   },
 };
 
-const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
-
-function getCurrentTimeInPDT() {
-  const timeZone = 'America/Los_Angeles';
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    second: 'numeric',
-    timeZoneName: 'short',
-  }).format(new Date());
-}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Replace '*' with your domain in production
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
 
@@ -51,130 +35,140 @@ export default async function handler(req, res) {
         hasAudioData: !!audioData,
         audioDataLength: audioData ? audioData.length : 0,
         hasOpenAIKey: !!openAIApiKey,
-        hasAirtableKey: !!airtableApiKey
       });
 
       if (!sessionId) {
         return res.status(400).json({ error: 'Missing sessionId' });
       }
 
-      // Get conversation context from Airtable
-      const airtableBaseId = 'appTYnw2qIaBIGRbR';
-      const eagleViewChatUrl = `https://api.airtable.com/v0/${airtableBaseId}/EagleView_Chat`;
-      const headersAirtable = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${airtableApiKey}`
-      };
+      if (audioData) {
+        console.log('Processing audio data...');
 
-      let conversationContext = '';
-      let existingRecordId = null;
-
-      try {
-        const searchUrl = `${eagleViewChatUrl}?filterByFormula=SessionID="${sessionId}"`;
-        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
-        if (historyResponse.ok) {
-          const result = await historyResponse.json();
-          if (result.records.length > 0) {
-            conversationContext = result.records[0].fields.Conversation || '';
-            existingRecordId = result.records[0].id;
-          }
+        if (!openAIApiKey) {
+          return res.status(500).json({ error: 'OpenAI API key not configured' });
         }
-      } catch (error) {
-        console.error('Error fetching conversation history:', error);
-      }
 
-      // Handle audio data
-      // In your chatWithOpenAI.js, modify the WebSocket connection part:
+        // Initialize WebSocket connection to OpenAI Realtime API
+        const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
+          headers: {
+            'Authorization': `Bearer ${openAIApiKey}`,
+            'OpenAI-Beta': 'realtime=v1',
+          },
+        });
 
-if (audioData) {
-    console.log('Processing audio data...');
+        let responseSent = false;
 
-    try {
-        // Correct WebSocket URL from the documentation
-        const ws = new WebSocket('wss://api.openai.com/v1/audio/speech', {
-            headers: {
-                'Authorization': `Bearer ${openAIApiKey}`,
-                'Content-Type': 'application/json'
+        ws.on('open', () => {
+          console.log('WebSocket connected to OpenAI Realtime API');
+
+          // Initialize session with instructions
+          const sessionInitEvent = {
+            type: 'session.update',
+            session: {
+              instructions: "You are a helpful, friendly AI assistant.",
+              voice: "alloy", // Choose desired voice
+            },
+          };
+          ws.send(JSON.stringify(sessionInitEvent));
+
+          // Send user audio
+          const audioEvent = {
+            type: 'conversation.item.create',
+            item: {
+              type: 'message',
+              role: 'user',
+              content: [
+                {
+                  type: 'input_audio',
+                  audio: audioData, // Base64 encoded audio
+                },
+              ],
+            },
+          };
+          ws.send(JSON.stringify(audioEvent));
+        });
+
+        ws.on('message', (data) => {
+          const event = JSON.parse(data);
+          console.log('Received event from OpenAI:', event);
+
+          if (event.type === 'conversation.item.create' && event.item.role === 'assistant') {
+            if (event.item.content) {
+              event.item.content.forEach(async (content) => {
+                if (content.type === 'text') {
+                  // Send text response back to frontend
+                  res.write(JSON.stringify({ reply: content.text }));
+                } else if (content.type === 'audio') {
+                  // Send audio response back to frontend
+                  res.write(JSON.stringify({ audio: content.audio }));
+                }
+              });
             }
+          } else if (event.type === 'response.done') {
+            if (!responseSent) {
+              responseSent = true;
+              res.end();
+              ws.close();
+            }
+          } else if (event.type === 'error') {
+            console.error('OpenAI Realtime API Error:', event.error);
+            if (!responseSent) {
+              responseSent = true;
+              res.status(500).json({ error: 'OpenAI Realtime API Error', details: event.error });
+              ws.close();
+            }
+          }
         });
 
         ws.onerror = (error) => {
-            console.error('WebSocket Error:', error);
-            return res.status(500).json({ 
-                error: 'WebSocket connection failed',
-                details: error.message 
-            });
+          console.error('WebSocket Error:', error);
+          if (!responseSent) {
+            responseSent = true;
+            res.status(500).json({ error: 'WebSocket connection failed', details: error.message });
+          }
         };
 
-        ws.onopen = () => {
-            console.log('WebSocket connected');
-            
-            // Send audio using the correct message format
-            ws.send(JSON.stringify({
-                type: 'message',
-                message: {
-                    role: 'user',
-                    content: audioData
-                }
-            }));
-        };
+        ws.on('close', () => {
+          console.log('WebSocket connection closed');
+          if (!responseSent) {
+            responseSent = true;
+            res.end();
+          }
+        });
 
-        ws.onmessage = async (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                console.log('Received event:', data.type);
+      } else if (userMessage) {
+        // Handle text messages as per your existing implementation
+        setIsTyping(true);
+        // Example: Use OpenAI's Chat Completion API for text messages
+        const { Configuration, OpenAIApi } = require("openai");
+        const configuration = new Configuration({
+          apiKey: openAIApiKey,
+        });
+        const openai = new OpenAIApi(configuration);
 
-                if (data.type === 'message' && data.message.role === 'assistant') {
-                    // Handle assistant's response
-                    const aiResponse = data.message.content;
-                    
-                    // Update Airtable
-                    const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${aiResponse}`;
-                    
-                    try {
-                        if (existingRecordId) {
-                            await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
-                                method: 'PATCH',
-                                headers: headersAirtable,
-                                body: JSON.stringify({
-                                    fields: { Conversation: updatedConversation }
-                                }),
-                            });
-                        } else {
-                            await fetch(eagleViewChatUrl, {
-                                method: 'POST',
-                                headers: headersAirtable,
-                                body: JSON.stringify({
-                                    fields: {
-                                        SessionID: sessionId,
-                                        Conversation: updatedConversation
-                                    }
-                                }),
-                            });
-                        }
-                    } catch (error) {
-                        console.error('Error updating Airtable:', error);
-                    }
+        const completion = await openai.createChatCompletion({
+          model: "gpt-4",
+          messages: [{ role: "user", content: userMessage }],
+        });
 
-                    res.json({ reply: aiResponse });
-                    ws.close();
-                }
-            } catch (error) {
-                console.error('Error processing message:', error);
-                ws.close();
-                res.status(500).json({ error: 'Error processing response' });
-            }
-        };
+        const reply = completion.data.choices[0].message?.content;
+        if (reply) {
+          addMessage("assistant", reply, "text");
+          res.json({ reply: reply });
+        } else {
+          res.status(500).json({ error: "No reply from assistant" });
+        }
 
-        ws.onclose = () => {
-            console.log('WebSocket closed');
-        };
+        setIsTyping(false);
+      } else {
+        return res.status(400).json({ error: 'No valid input provided' });
+      }
 
     } catch (error) {
-        console.error('Setup error:', error);
-        return res.status(500).json({ 
-            error: 'Setup failed',
-            details: error.message 
-        });
+      console.error('Error:', error);
+      res.status(500).json({ error: 'Internal Server Error', details: error.message });
     }
+  } else {
+    res.status(405).json({ error: 'Method Not Allowed' });
+  }
 }
