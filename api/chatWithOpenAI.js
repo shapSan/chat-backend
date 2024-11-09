@@ -16,7 +16,7 @@ export const config = {
 const openAIApiKey = process.env.OPENAI_API_KEY;
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*'); // Replace '*' with your domain in production
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
@@ -138,8 +138,11 @@ export default async function handler(req, res) {
 
       } else if (userMessage) {
         // Handle text messages as per your existing implementation
-        setIsTyping(true);
-        // Example: Use OpenAI's Chat Completion API for text messages
+        console.log('Processing text message...');
+        if (!openAIApiKey) {
+          return res.status(500).json({ error: 'OpenAI API key not configured' });
+        }
+
         const { Configuration, OpenAIApi } = require("openai");
         const configuration = new Configuration({
           apiKey: openAIApiKey,
