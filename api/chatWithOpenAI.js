@@ -130,6 +130,7 @@ export default async function handler(req, res) {
 
           openaiWs.on('message', async (message) => {
             const event = JSON.parse(message);
+            console.log('OpenAI WebSocket message:', event);
             if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
               const aiReply = event.item.content.filter((content) => content.type === 'text').map((content) => content.text).join('');
 
@@ -163,7 +164,7 @@ export default async function handler(req, res) {
             await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId);
             return res.json({ reply: aiReply });
           } else {
-            console.error('No text reply received from OpenAI.');
+            console.error('No text reply received from OpenAI. Response data:', aiReply);
             return res.status(500).json({ error: 'No text reply received from OpenAI.' });
           }
         } catch (error) {
@@ -200,6 +201,7 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
     });
 
     const openaiData = await openaiResponse.json();
+    console.log('OpenAI API response:', openaiData);
     if (openaiData.choices && openaiData.choices.length > 0) {
       return openaiData.choices[0].message.content;
     } else {
