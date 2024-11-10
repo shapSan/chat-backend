@@ -75,7 +75,77 @@ export default async function handler(req, res) {
         console.error('Error fetching conversation history from Airtable:', error);
       }
 
-      // If there's audio data, process it using OpenAI's WebSocket API
+      // Handle text-based user messages
+      if (userMessage) {
+        console.log('Processing text message...');
+        try {
+          const openAIResponse = await fetch('https://api.openai.com/v1/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${openAIApiKey}`,
+            },
+            body: JSON.stringify({
+              model: 'text-davinci-003',
+              prompt: `${conversationContext}\nUser: ${userMessage}\nAI:`,
+              max_tokens: 150,
+              temperature: 0.7,
+            }),
+          });
+
+          if (!openAIResponse.ok) {
+            console.error('OpenAI API error:', openAIResponse.statusText);
+            return res.status(500).json({ error: 'Failed to get response from OpenAI' });
+          }
+
+          const openAIData = await openAIResponse.json();
+          const assistantReply = openAIData.choices[0]?.text.trim();
+
+          if (!assistantReply) {
+            console.error('No valid reply from OpenAI');
+            return res.status(500).json({ error: 'No valid reply from assistant' });
+          }
+
+          // Update Airtable with the new conversation context
+          const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${assistantReply}`;
+
+          try {
+            if (existingRecordId) {
+              console.log('Updating existing Airtable record...');
+              await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+                method: 'PATCH',
+                headers: headersAirtable,
+                body: JSON.stringify({
+                  fields: { Conversation: updatedConversation },
+                }),
+              });
+            } else {
+              console.log('Creating new Airtable record...');
+              await fetch(eagleViewChatUrl, {
+                method: 'POST',
+                headers: headersAirtable,
+                body: JSON.stringify({
+                  fields: {
+                    SessionID: sessionId,
+                    Conversation: updatedConversation,
+                  },
+                }),
+              });
+            }
+          } catch (airtableError) {
+            console.error('Error updating Airtable:', airtableError);
+          }
+
+          // Send the assistant's reply back to the client
+          return res.status(200).json({ reply: assistantReply });
+
+        } catch (error) {
+          console.error('Error processing text message with OpenAI:', error);
+          return res.status(500).json({ error: 'Failed to process text message' });
+        }
+      }
+
+      // Handle audio data with WebSocket
       if (audioData) {
         console.log('Processing audio data...');
 
@@ -192,14 +262,6 @@ export default async function handler(req, res) {
           console.error('Error setting up WebSocket:', error);
           res.status(500).json({ error: 'Failed to set up WebSocket connection' });
         }
-      }
-
-      // Handle text-based user messages (if needed)
-      if (userMessage) {
-        console.log('Processing text message...');
-
-        // Add your logic to process the text message here
-        // For example, you could use the OpenAI API's completion endpoint
       }
 
     } catch (error) {
