@@ -153,10 +153,123 @@ export default async function handler(req, res) {
         }
       }
 
-      // Handle audio data with WebSocket (same as before)
+      // Handle audio data with WebSocket
       if (audioData) {
         console.log('Processing audio data...');
-        // Your existing WebSocket handling logic for audio data
+
+        try {
+          const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
+            headers: {
+              Authorization: `Bearer ${openAIApiKey}`,
+              'OpenAI-Beta': 'realtime=v1',
+              'Content-Type': 'application/json',
+            },
+          });
+
+          ws.onopen = () => {
+            console.log('WebSocket connected to OpenAI');
+
+            // Send initial configuration
+            ws.send(JSON.stringify({
+              type: 'session.update',
+              session: {
+                instructions: `Previous conversation: ${conversationContext}`,
+                turn_detection: 'server_vad',
+              },
+            }));
+
+            // Send audio data
+            ws.send(JSON.stringify({
+              type: 'input_audio_buffer.append',
+              audio: audioData,
+            }));
+
+            // Request response
+            ws.send(JSON.stringify({
+              type: 'response.create',
+              response: {
+                modalities: ['text'],
+              },
+            }));
+          };
+
+          // Handle WebSocket messages
+          ws.onmessage = async (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              console.log('Received WebSocket event:', data);
+
+              switch (data.type) {
+                case 'response.text.delta':
+                  if (data.delta) {
+                    res.write(JSON.stringify({ type: 'text', data: data.delta }));
+                  }
+                  break;
+
+                case 'response.done':
+                  const updatedConversation = `${conversationContext}\nUser: [Voice Message]\nAI: ${data.text || ''}`;
+
+                  try {
+                    // Update Airtable with the new conversation context
+                    if (existingRecordId) {
+                      console.log('Updating existing Airtable record...');
+                      await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+                        method: 'PATCH',
+                        headers: headersAirtable,
+                        body: JSON.stringify({
+                          fields: { Conversation: updatedConversation },
+                        }),
+                      });
+                    } else {
+                      console.log('Creating new Airtable record...');
+                      await fetch(eagleViewChatUrl, {
+                        method: 'POST',
+                        headers: headersAirtable,
+                        body: JSON.stringify({
+                          fields: {
+                            SessionID: sessionId,
+                            Conversation: updatedConversation,
+                          },
+                        }),
+                      });
+                    }
+                  } catch (airtableError) {
+                    console.error('Error updating Airtable:', airtableError);
+                  }
+
+                  res.write(JSON.stringify({ type: 'done' }));
+                  res.end();
+                  ws.close();
+                  break;
+
+                case 'error':
+                  console.error('OpenAI API Error:', data.error);
+                  res.status(500).json({ error: data.error.message });
+                  ws.close();
+                  break;
+              }
+            } catch (error) {
+              console.error('Error processing WebSocket message:', error);
+              res.status(500).json({ error: 'Error processing response' });
+              ws.close();
+            }
+          };
+
+          // Handle WebSocket connection errors
+          ws.onerror = (error) => {
+            console.error('WebSocket Error:', error);
+            res.status(500).json({ error: 'WebSocket connection failed' });
+          };
+
+          // Handle WebSocket closure
+          ws.onclose = () => {
+            console.log('WebSocket closed');
+          };
+
+        } catch (error) {
+          console.error('Error setting up WebSocket:', error);
+          res.status(500).json({ error: 'Failed to set up WebSocket connection' });
+        }
       }
 
     } catch (error) {
