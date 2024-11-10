@@ -75,6 +75,8 @@ export default async function handler(req, res) {
             if (result.records.length > 0) {
               conversationContext = result.records[0].fields.Conversation || '';
               existingRecordId = result.records[0].id;
+            } else {
+              console.log('No existing conversation found for this session.');
             }
           } else {
             console.error('Error fetching conversation history:', historyResponse.statusText);
@@ -98,8 +100,11 @@ export default async function handler(req, res) {
             if (kbResult.records.length > 0) {
               knowledgeBaseContent = kbResult.records
                 .map(record => record.fields.Summary)
-                .filter(summary => summary)
+                .filter(summary => summary) // Ensure there's content in the summary field
                 .join('\n');
+              console.log('Knowledge base content fetched successfully.');
+            } else {
+              console.log('No knowledge base records found.');
             }
           } else {
             console.error('Error fetching knowledge base:', kbResponse.statusText);
@@ -111,13 +116,17 @@ export default async function handler(req, res) {
         // Add current time and knowledge base to context
         const currentTimePDT = getCurrentTimeInPDT();
         systemMessageContent += ` The current time in PDT is ${currentTimePDT}.`;
+
         if (knowledgeBaseContent) {
           systemMessageContent += ` Here is some additional knowledge that might be helpful:\n${knowledgeBaseContent}`;
+        } else {
+          console.warn('No knowledge base content added to the system message.');
         }
 
         if (userMessage) {
           // Handle text message using OpenAI Chat Completion API
           try {
+            console.log('Sending request to OpenAI...');
             const openaiResponse = await fetch(
               'https://api.openai.com/v1/chat/completions',
               {
