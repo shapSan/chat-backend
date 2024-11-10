@@ -12,6 +12,7 @@ export const config = {
 };
 
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
+const openAIApiKey = process.env.OPENAI_API_KEY;
 
 export default async function handler(req, res) {
   // Setting CORS headers
@@ -36,7 +37,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Missing sessionId or userMessage' });
       }
 
-      // Reintroduce Airtable call
+      // Airtable integration
       const airtableBaseId = 'appTYnw2qIaBIGRbR';
       const eagleViewChatUrl = `https://api.airtable.com/v0/${airtableBaseId}/EagleView_Chat`;
       const headersAirtable = {
@@ -75,51 +76,91 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Airtable request failed' });
       }
 
-      // Update or create a new record in Airtable
+      // OpenAI Integration for user message
+      console.log('Processing text message with OpenAI...');
+
       try {
-        const updatedConversation = `${conversationContext}\nUser: ${userMessage}`;
+        const openAIResponse = await fetch('https://api.openai.com/v1/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${openAIApiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'text-davinci-003',
+            prompt: `${conversationContext}\nUser: ${userMessage}\nAI:`,
+            max_tokens: 150,
+            temperature: 0.7,
+          }),
+        });
 
-        if (existingRecordId) {
-          console.log('Updating existing Airtable record...');
-          const updateResponse = await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
-            method: 'PATCH',
-            headers: headersAirtable,
-            body: JSON.stringify({
-              fields: { Conversation: updatedConversation },
-            }),
-          });
+        console.log('OpenAI API response status:', openAIResponse.status);
 
-          console.log('Airtable update response status:', updateResponse.status);
-          if (!updateResponse.ok) {
-            console.error('Failed to update Airtable record:', updateResponse.statusText);
-            return res.status(500).json({ error: 'Failed to update Airtable record' });
-          }
-        } else {
-          console.log('Creating new Airtable record...');
-          const createResponse = await fetch(eagleViewChatUrl, {
-            method: 'POST',
-            headers: headersAirtable,
-            body: JSON.stringify({
-              fields: {
-                SessionID: sessionId,
-                Conversation: updatedConversation,
-              },
-            }),
-          });
-
-          console.log('Airtable create response status:', createResponse.status);
-          if (!createResponse.ok) {
-            console.error('Failed to create Airtable record:', createResponse.statusText);
-            return res.status(500).json({ error: 'Failed to create Airtable record' });
-          }
+        if (!openAIResponse.ok) {
+          console.error('OpenAI API error:', openAIResponse.statusText);
+          return res.status(500).json({ error: 'Failed to get response from OpenAI' });
         }
-      } catch (airtableError) {
-        console.error('Error updating Airtable:', airtableError);
-        return res.status(500).json({ error: 'Failed to update Airtable' });
-      }
 
-      // Send a response back to confirm Airtable write success
-      return res.status(200).json({ reply: 'Airtable record created or updated successfully.' });
+        const openAIData = await openAIResponse.json();
+        console.log('OpenAI response data:', JSON.stringify(openAIData));
+
+        const assistantReply = openAIData.choices[0]?.text.trim();
+
+        if (!assistantReply) {
+          console.error('No valid reply from OpenAI');
+          return res.status(500).json({ error: 'No valid reply from assistant' });
+        }
+
+        // Update Airtable with the new conversation context
+        const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${assistantReply}`;
+
+        try {
+          if (existingRecordId) {
+            console.log('Updating existing Airtable record...');
+            const updateResponse = await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+              method: 'PATCH',
+              headers: headersAirtable,
+              body: JSON.stringify({
+                fields: { Conversation: updatedConversation },
+              }),
+            });
+
+            console.log('Airtable update response status:', updateResponse.status);
+            if (!updateResponse.ok) {
+              console.error('Failed to update Airtable record:', updateResponse.statusText);
+              return res.status(500).json({ error: 'Failed to update Airtable record' });
+            }
+          } else {
+            console.log('Creating new Airtable record...');
+            const createResponse = await fetch(eagleViewChatUrl, {
+              method: 'POST',
+              headers: headersAirtable,
+              body: JSON.stringify({
+                fields: {
+                  SessionID: sessionId,
+                  Conversation: updatedConversation,
+                },
+              }),
+            });
+
+            console.log('Airtable create response status:', createResponse.status);
+            if (!createResponse.ok) {
+              console.error('Failed to create Airtable record:', createResponse.statusText);
+              return res.status(500).json({ error: 'Failed to create Airtable record' });
+            }
+          }
+        } catch (airtableError) {
+          console.error('Error updating Airtable:', airtableError);
+          return res.status(500).json({ error: 'Failed to update Airtable' });
+        }
+
+        // Send the assistant's reply back to the client
+        return res.status(200).json({ reply: assistantReply });
+
+      } catch (error) {
+        console.error('Error processing text message with OpenAI:', error);
+        return res.status(500).json({ error: 'Failed to process text message' });
+      }
 
     } catch (error) {
       console.error('Unexpected server error:', error);
