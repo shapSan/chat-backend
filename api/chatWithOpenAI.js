@@ -2,15 +2,38 @@ require('dotenv').config();
 const fetch = require('node-fetch');
 const WebSocket = require('ws');
 
+// Airtable setup
+const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
+const AIRTABLE_BASE_ID = 'appTYnw2qIaBIGRbR';
+const AIRTABLE_TABLE_NAME = 'EagleView_Chat';
+const AIRTABLE_API_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`;
+
+function getCurrentTimeInPDT() {
+  const timeZone = 'America/Los_Angeles';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    timeZoneName: 'short',
+  }).format(new Date());
+}
+
 export default async function handler(req, res) {
   // Handle CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*'); // Change '*' to your specific domain if needed
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, X-Requested-With'
+  );
 
   if (req.method === 'OPTIONS') {
-    return res.status(200).end(); // Respond to the preflight request
+    return res.status(200).end();
   }
 
   if (req.method === 'POST') {
@@ -30,9 +53,35 @@ export default async function handler(req, res) {
         }
 
         let systemMessageContent = `You are a friendly, professional, and cheeky assistant specializing in AI & Automation.`;
+        let conversationContext = '';
+        let existingRecordId = null;
 
-        // Add the current time to the context (Optional)
-        const currentTimePDT = new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' });
+        // Fetch conversation history and knowledge base from Airtable
+        try {
+          console.log('Fetching existing conversation from Airtable...');
+          const searchUrl = `${AIRTABLE_API_URL}?filterByFormula=SessionID="${sessionId}"`;
+          const historyResponse = await fetch(searchUrl, {
+            headers: {
+              Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (historyResponse.ok) {
+            const result = await historyResponse.json();
+            if (result.records.length > 0) {
+              conversationContext = result.records[0].fields.Conversation || '';
+              existingRecordId = result.records[0].id;
+            }
+          } else {
+            console.error('Error fetching conversation history:', historyResponse.statusText);
+          }
+        } catch (error) {
+          console.error('Error fetching conversation history from Airtable:', error);
+        }
+
+        // Add current time to context
+        const currentTimePDT = getCurrentTimeInPDT();
         systemMessageContent += ` The current time in PDT is ${currentTimePDT}.`;
 
         if (userMessage) {
@@ -71,7 +120,45 @@ export default async function handler(req, res) {
 
             console.log('OpenAI reply:', aiReply);
 
-            // Send the assistant's reply back to the client
+            // Update conversation in Airtable
+            const updatedConversation = `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`;
+
+            try {
+              console.log('Updating Airtable with conversation...');
+              const airtablePayload = {
+                fields: {
+                  SessionID: sessionId,
+                  Conversation: updatedConversation,
+                },
+              };
+
+              const airtableResponse = existingRecordId
+                ? await fetch(`${AIRTABLE_API_URL}/${existingRecordId}`, {
+                    method: 'PATCH',
+                    headers: {
+                      Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(airtablePayload),
+                  })
+                : await fetch(AIRTABLE_API_URL, {
+                    method: 'POST',
+                    headers: {
+                      Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(airtablePayload),
+                  });
+
+              if (!airtableResponse.ok) {
+                console.error('Error updating Airtable:', airtableResponse.statusText);
+              } else {
+                console.log('Airtable record created or updated successfully.');
+              }
+            } catch (error) {
+              console.error('Error updating Airtable:', error);
+            }
+
             return res.status(200).json({ reply: aiReply });
           } catch (error) {
             console.error('Error in OpenAI communication:', error);
