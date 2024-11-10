@@ -34,6 +34,7 @@ export default async function handler(req, res) {
       console.log('User Message:', userMessage);
 
       if (!sessionId || !userMessage) {
+        console.error('Missing sessionId or userMessage');
         return res.status(400).json({ error: 'Missing sessionId or userMessage' });
       }
 
@@ -97,14 +98,15 @@ export default async function handler(req, res) {
         console.log('OpenAI API response status:', openAIResponse.status);
 
         if (!openAIResponse.ok) {
-          console.error('OpenAI API error:', openAIResponse.statusText);
-          return res.status(500).json({ error: 'Failed to get response from OpenAI' });
+          const openAIErrorDetails = await openAIResponse.text();
+          console.error('OpenAI API error:', openAIResponse.statusText, openAIErrorDetails);
+          return res.status(500).json({ error: 'Failed to get response from OpenAI', details: openAIErrorDetails });
         }
 
         const openAIData = await openAIResponse.json();
         console.log('OpenAI response data:', JSON.stringify(openAIData));
 
-        const assistantReply = openAIData.choices[0]?.text.trim();
+        const assistantReply = openAIData.choices?.[0]?.text?.trim();
 
         if (!assistantReply) {
           console.error('No valid reply from OpenAI');
@@ -159,12 +161,12 @@ export default async function handler(req, res) {
 
       } catch (error) {
         console.error('Error processing text message with OpenAI:', error);
-        return res.status(500).json({ error: 'Failed to process text message' });
+        return res.status(500).json({ error: 'Failed to process text message', details: error.message });
       }
 
     } catch (error) {
       console.error('Unexpected server error:', error);
-      return res.status(500).json({ error: 'Internal server error' });
+      return res.status(500).json({ error: 'Internal server error', details: error.message });
     }
   } else {
     res.setHeader('Allow', ['GET', 'POST', 'OPTIONS']);
