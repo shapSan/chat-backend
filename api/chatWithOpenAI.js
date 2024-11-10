@@ -48,6 +48,7 @@ export default async function handler(req, res) {
       let existingRecordId = null;
 
       try {
+        // Fetching the existing record from Airtable
         const searchUrl = `${eagleViewChatUrl}?filterByFormula=SessionID="${sessionId}"`;
         console.log('Fetching conversation context from Airtable:', searchUrl);
         const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
@@ -74,8 +75,51 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Airtable request failed' });
       }
 
-      // Send dummy response after Airtable call
-      return res.status(200).json({ reply: 'Airtable integration verified successfully.' });
+      // Update or create a new record in Airtable
+      try {
+        const updatedConversation = `${conversationContext}\nUser: ${userMessage}`;
+
+        if (existingRecordId) {
+          console.log('Updating existing Airtable record...');
+          const updateResponse = await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+            method: 'PATCH',
+            headers: headersAirtable,
+            body: JSON.stringify({
+              fields: { Conversation: updatedConversation },
+            }),
+          });
+
+          console.log('Airtable update response status:', updateResponse.status);
+          if (!updateResponse.ok) {
+            console.error('Failed to update Airtable record:', updateResponse.statusText);
+            return res.status(500).json({ error: 'Failed to update Airtable record' });
+          }
+        } else {
+          console.log('Creating new Airtable record...');
+          const createResponse = await fetch(eagleViewChatUrl, {
+            method: 'POST',
+            headers: headersAirtable,
+            body: JSON.stringify({
+              fields: {
+                SessionID: sessionId,
+                Conversation: updatedConversation,
+              },
+            }),
+          });
+
+          console.log('Airtable create response status:', createResponse.status);
+          if (!createResponse.ok) {
+            console.error('Failed to create Airtable record:', createResponse.statusText);
+            return res.status(500).json({ error: 'Failed to create Airtable record' });
+          }
+        }
+      } catch (airtableError) {
+        console.error('Error updating Airtable:', airtableError);
+        return res.status(500).json({ error: 'Failed to update Airtable' });
+      }
+
+      // Send a response back to confirm Airtable write success
+      return res.status(200).json({ reply: 'Airtable record created or updated successfully.' });
 
     } catch (error) {
       console.error('Unexpected server error:', error);
