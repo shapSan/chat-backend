@@ -11,6 +11,8 @@ export const config = {
   },
 };
 
+const airtableApiKey = process.env.AIRTABLE_API_KEY;
+
 export default async function handler(req, res) {
   // Setting CORS headers
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -34,8 +36,47 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Missing sessionId or userMessage' });
       }
 
-      // Make a dummy response to verify backend is functioning
-      return res.status(200).json({ reply: 'This is a dummy response to verify the backend works.' });
+      // Reintroduce Airtable call
+      const airtableBaseId = 'appTYnw2qIaBIGRbR';
+      const eagleViewChatUrl = `https://api.airtable.com/v0/${airtableBaseId}/EagleView_Chat`;
+      const headersAirtable = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${airtableApiKey}`,
+      };
+
+      let conversationContext = '';
+      let existingRecordId = null;
+
+      try {
+        const searchUrl = `${eagleViewChatUrl}?filterByFormula=SessionID="${sessionId}"`;
+        console.log('Fetching conversation context from Airtable:', searchUrl);
+        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
+
+        console.log('Airtable response status:', historyResponse.status);
+
+        if (historyResponse.ok) {
+          const result = await historyResponse.json();
+          console.log('Airtable response data:', JSON.stringify(result));
+
+          if (result.records.length > 0) {
+            conversationContext = result.records[0].fields.Conversation || '';
+            existingRecordId = result.records[0].id;
+            console.log('Retrieved conversation context:', conversationContext);
+          } else {
+            console.log('No existing conversation found for sessionId:', sessionId);
+          }
+        } else {
+          console.error('Failed to fetch Airtable conversation context:', historyResponse.statusText);
+          return res.status(500).json({ error: 'Failed to fetch conversation context from Airtable' });
+        }
+      } catch (error) {
+        console.error('Error fetching conversation history from Airtable:', error);
+        return res.status(500).json({ error: 'Airtable request failed' });
+      }
+
+      // Send dummy response after Airtable call
+      return res.status(200).json({ reply: 'Airtable integration verified successfully.' });
+
     } catch (error) {
       console.error('Unexpected server error:', error);
       return res.status(500).json({ error: 'Internal server error' });
