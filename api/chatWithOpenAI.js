@@ -5,8 +5,10 @@ const WebSocket = require('ws');
 // Airtable setup
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = 'appTYnw2qIaBIGRbR';
-const AIRTABLE_TABLE_NAME = 'EagleView_Chat';
-const AIRTABLE_API_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`;
+const AIRTABLE_CHAT_TABLE_NAME = 'EagleView_Chat';
+const AIRTABLE_KB_TABLE_NAME = 'KnowledgeBase';
+const AIRTABLE_CHAT_API_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_CHAT_TABLE_NAME}`;
+const AIRTABLE_KB_API_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_KB_TABLE_NAME}`;
 
 function getCurrentTimeInPDT() {
   const timeZone = 'America/Los_Angeles';
@@ -55,11 +57,12 @@ export default async function handler(req, res) {
         let systemMessageContent = `You are a friendly, professional, and cheeky assistant specializing in AI & Automation.`;
         let conversationContext = '';
         let existingRecordId = null;
+        let knowledgeBaseContent = '';
 
-        // Fetch conversation history and knowledge base from Airtable
+        // Fetch conversation history from Airtable
         try {
           console.log('Fetching existing conversation from Airtable...');
-          const searchUrl = `${AIRTABLE_API_URL}?filterByFormula=SessionID="${sessionId}"`;
+          const searchUrl = `${AIRTABLE_CHAT_API_URL}?filterByFormula=SessionID="${sessionId}"`;
           const historyResponse = await fetch(searchUrl, {
             headers: {
               Authorization: `Bearer ${AIRTABLE_API_KEY}`,
@@ -80,9 +83,37 @@ export default async function handler(req, res) {
           console.error('Error fetching conversation history from Airtable:', error);
         }
 
-        // Add current time to context
+        // Fetch knowledge base content from Airtable
+        try {
+          console.log('Fetching knowledge base from Airtable...');
+          const kbResponse = await fetch(AIRTABLE_KB_API_URL, {
+            headers: {
+              Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (kbResponse.ok) {
+            const kbResult = await kbResponse.json();
+            if (kbResult.records.length > 0) {
+              knowledgeBaseContent = kbResult.records
+                .map(record => record.fields.Summary)
+                .filter(summary => summary)
+                .join('\n');
+            }
+          } else {
+            console.error('Error fetching knowledge base:', kbResponse.statusText);
+          }
+        } catch (error) {
+          console.error('Error fetching knowledge base from Airtable:', error);
+        }
+
+        // Add current time and knowledge base to context
         const currentTimePDT = getCurrentTimeInPDT();
         systemMessageContent += ` The current time in PDT is ${currentTimePDT}.`;
+        if (knowledgeBaseContent) {
+          systemMessageContent += ` Here is some additional knowledge that might be helpful:\n${knowledgeBaseContent}`;
+        }
 
         if (userMessage) {
           // Handle text message using OpenAI Chat Completion API
@@ -133,7 +164,7 @@ export default async function handler(req, res) {
               };
 
               const airtableResponse = existingRecordId
-                ? await fetch(`${AIRTABLE_API_URL}/${existingRecordId}`, {
+                ? await fetch(`${AIRTABLE_CHAT_API_URL}/${existingRecordId}`, {
                     method: 'PATCH',
                     headers: {
                       Authorization: `Bearer ${AIRTABLE_API_KEY}`,
@@ -141,7 +172,7 @@ export default async function handler(req, res) {
                     },
                     body: JSON.stringify(airtablePayload),
                   })
-                : await fetch(AIRTABLE_API_URL, {
+                : await fetch(AIRTABLE_CHAT_API_URL, {
                     method: 'POST',
                     headers: {
                       Authorization: `Bearer ${AIRTABLE_API_KEY}`,
