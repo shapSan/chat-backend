@@ -248,12 +248,12 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4',
+        model: 'gpt-4o',
         messages: [
           { role: 'system', content: systemMessageContent },
           { role: 'user', content: userMessage },
         ],
-        max_tokens: 500,
+        max_tokens: 1000,
       }),
     });
     const data = await response.json();
