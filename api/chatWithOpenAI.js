@@ -65,18 +65,22 @@ function getCurrentTimeInPDT() {
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  // ✅ FIX 1: Set CORS headers early (before any conditionals)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+  if (req.method === "OPTIONS") {
+    return res.status(200).end(); // ✅ respond early for preflight
   }
 
   if (req.method === 'POST') {
     try {
       const { userMessage, sessionId, audioData, projectId } = req.body;
+
+      if (userMessage && userMessage.length > 5000) {
+  userMessage = userMessage.slice(0, 5000) + "…";
+}
 
       // Log incoming request data
       console.log('Received POST request:', { 
@@ -131,10 +135,17 @@ export default async function handler(req, res) {
         if (historyResponse.ok) {
           const result = await historyResponse.json();
           if (result.records.length > 0) {
-            conversationContext = result.records[0].fields.Conversation || '';
-            existingRecordId = result.records[0].id;
-            systemMessageContent += ` Conversation so far: "${conversationContext}".`;
-          }
+  conversationContext = result.records[0].fields.Conversation || '';
+  existingRecordId = result.records[0].id;
+
+  // ✅ FIX 2: Truncate long history to avoid OpenAI errors
+  if (conversationContext.length > 3000) {
+    conversationContext = conversationContext.slice(-3000);
+  }
+
+  systemMessageContent += ` Conversation so far: "${conversationContext}".`;
+}
+
         }
       } catch (error) {
         console.error(`Error fetching conversation history for project ${projectId}:`, error);
