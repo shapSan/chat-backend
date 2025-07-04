@@ -165,8 +165,9 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Internal server error', details: error.message });
     }
   } else {
-    res.status(405).json({ error: 'Method not allowed' });
-  }
+  res.setHeader("Allow", ["POST", "OPTIONS"])
+  return res.status(405).json({ error: 'Method Not Allowed' })
+}
 }
 
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
