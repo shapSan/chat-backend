@@ -15,6 +15,41 @@ export const config = {
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 
+// Project configuration mapping
+const PROJECT_CONFIGS = {
+  'default': {
+    baseId: 'appTYnw2qIaBIGRbR',
+    chatTable: 'EagleView_Chat',
+    knowledgeTable: 'Chat-KnowledgeBase'
+  },
+  'HB-PitchAssist': {
+    baseId: 'apphslK7rslGb7Z8K',
+    chatTable: 'Chat-Conversations',
+    knowledgeTable: 'Chat-KnowledgeBase'
+  },
+  'real-estate': {
+    baseId: 'appYYYYYYYYYYYYYY', // Replace with actual base ID
+    chatTable: 'RealEstate_Chat',
+    knowledgeTable: 'RealEstate_Knowledge'
+  },
+  'healthcare': {
+    baseId: 'appZZZZZZZZZZZZZZ', // Replace with actual base ID
+    chatTable: 'Healthcare_Chat',
+    knowledgeTable: 'Healthcare_Knowledge'
+  }
+  // Add more project configurations as needed
+};
+
+function getProjectConfig(projectId) {
+  // Return the config for the projectId, or default if not found
+  const config = PROJECT_CONFIGS[projectId] || PROJECT_CONFIGS['default'];
+  
+  // Log which config is being used (for debugging)
+  console.log(`Using project config for: ${projectId || 'default'}`);
+  
+  return config;
+}
+
 function getCurrentTimeInPDT() {
   const timeZone = 'America/Los_Angeles';
   return new Intl.DateTimeFormat('en-US', {
@@ -41,10 +76,15 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { userMessage, sessionId, audioData } = req.body;
+      const { userMessage, sessionId, audioData, projectId } = req.body;
 
       // Log incoming request data
-      console.log('Received POST request:', { userMessage, sessionId, audioDataLength: audioData ? audioData.length : 0 });
+      console.log('Received POST request:', { 
+        userMessage, 
+        sessionId, 
+        audioDataLength: audioData ? audioData.length : 0,
+        projectId 
+      });
 
       if (!sessionId) {
         return res.status(400).json({ error: 'Missing sessionId' });
@@ -53,30 +93,40 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Missing required fields', details: 'Either userMessage or audioData is required.' });
       }
 
+      // Get project-specific configuration
+      const projectConfig = getProjectConfig(projectId);
+      const { baseId, chatTable, knowledgeTable } = projectConfig;
+
+      // Construct Airtable URLs with project-specific base and tables
+      const knowledgeBaseUrl = `https://api.airtable.com/v0/${baseId}/${knowledgeTable}`;
+      const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
+      const headersAirtable = { 
+        'Content-Type': 'application/json', 
+        Authorization: `Bearer ${airtableApiKey}` 
+      };
+
       let systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
       let conversationContext = '';
       let existingRecordId = null;
 
-      const airtableBaseId = 'appTYnw2qIaBIGRbR';
-      const knowledgeBaseUrl = `https://api.airtable.com/v0/${airtableBaseId}/Chat-KnowledgeBase`;
-      const eagleViewChatUrl = `https://api.airtable.com/v0/${airtableBaseId}/EagleView_Chat`;
-      const headersAirtable = { 'Content-Type': 'application/json', Authorization: `Bearer ${airtableApiKey}` };
-
-      // Fetch knowledge base
+      // Fetch project-specific knowledge base
       try {
         const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
         if (kbResponse.ok) {
           const knowledgeBaseData = await kbResponse.json();
           const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
           systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
+          console.log(`Loaded knowledge base for project: ${projectId}`);
+        } else {
+          console.warn(`Knowledge base not found for project: ${projectId}, using default assistant behavior`);
         }
       } catch (error) {
-        console.error('Error fetching knowledge base:', error);
+        console.error(`Error fetching knowledge base for project ${projectId}:`, error);
       }
 
-      // Fetch conversation history
+      // Fetch conversation history from project-specific table
       try {
-        const searchUrl = `${eagleViewChatUrl}?filterByFormula=SessionID="${sessionId}"`;
+        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
         const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
         if (historyResponse.ok) {
           const result = await historyResponse.json();
@@ -87,11 +137,16 @@ export default async function handler(req, res) {
           }
         }
       } catch (error) {
-        console.error('Error fetching conversation history:', error);
+        console.error(`Error fetching conversation history for project ${projectId}:`, error);
       }
 
       const currentTimePDT = getCurrentTimeInPDT();
       systemMessageContent += ` Current time in PDT: ${currentTimePDT}.`;
+      
+      // Add project context to system message if available
+      if (projectId && projectId !== 'default') {
+        systemMessageContent += ` You are assisting with the ${projectId} project.`;
+      }
 
       if (audioData) {
         try {
@@ -124,7 +179,14 @@ export default async function handler(req, res) {
             if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
               const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
               if (aiReply) {
-                await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, existingRecordId);
+                await updateAirtableConversation(
+                  sessionId, 
+                  projectId, 
+                  chatUrl, 
+                  headersAirtable, 
+                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
+                  existingRecordId
+                );
                 res.json({ reply: aiReply });
               } else {
                 console.error('No valid reply received from OpenAI WebSocket.');
@@ -149,7 +211,14 @@ export default async function handler(req, res) {
           const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
           console.log('Received AI response:', aiReply);
           if (aiReply) {
-            await updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, existingRecordId);
+            await updateAirtableConversation(
+              sessionId, 
+              projectId, 
+              chatUrl, 
+              headersAirtable, 
+              `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
+              existingRecordId
+            );
             return res.json({ reply: aiReply });
           } else {
             console.error('No text reply received from OpenAI.');
@@ -165,9 +234,9 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Internal server error', details: error.message });
     }
   } else {
-  res.setHeader("Allow", ["POST", "OPTIONS"])
-  return res.status(405).json({ error: 'Method Not Allowed' })
-}
+    res.setHeader("Allow", ["POST", "OPTIONS"]);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 }
 
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
@@ -201,20 +270,32 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
   }
 }
 
-async function updateAirtableConversation(sessionId, eagleViewChatUrl, headersAirtable, updatedConversation, existingRecordId) {
+async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
   try {
+    const recordData = {
+      fields: {
+        SessionID: sessionId,
+        ProjectID: projectId || 'default',
+        Conversation: updatedConversation
+      }
+    };
+
     if (existingRecordId) {
-      await fetch(`${eagleViewChatUrl}/${existingRecordId}`, {
+      // Update existing record
+      await fetch(`${chatUrl}/${existingRecordId}`, {
         method: 'PATCH',
         headers: headersAirtable,
-        body: JSON.stringify({ fields: { Conversation: updatedConversation } }),
+        body: JSON.stringify({ fields: recordData.fields }),
       });
+      console.log(`Updated conversation for project: ${projectId}, session: ${sessionId}`);
     } else {
-      await fetch(eagleViewChatUrl, {
+      // Create new record
+      await fetch(chatUrl, {
         method: 'POST',
         headers: headersAirtable,
-        body: JSON.stringify({ fields: { SessionID: sessionId, Conversation: updatedConversation } }),
+        body: JSON.stringify(recordData),
       });
+      console.log(`Created new conversation for project: ${projectId}, session: ${sessionId}`);
     }
   } catch (error) {
     console.error('Error updating Airtable conversation:', error);
