@@ -76,18 +76,21 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { userMessage, sessionId, audioData, projectId } = req.body;
+      // ✅ FIX 2: Destructure userMessage properly and handle truncation correctly
+      let { userMessage, sessionId, audioData, projectId } = req.body;
 
+      // ✅ FIX 3: Truncate AFTER destructuring, not before
       if (userMessage && userMessage.length > 5000) {
-  userMessage = userMessage.slice(0, 5000) + "…";
-}
+        userMessage = userMessage.slice(0, 5000) + "…";
+      }
 
       // Log incoming request data
       console.log('Received POST request:', { 
-        userMessage, 
+        userMessage: userMessage ? userMessage.slice(0, 100) + '...' : null, 
         sessionId, 
         audioDataLength: audioData ? audioData.length : 0,
-        projectId 
+        projectId,
+        userMessageLength: userMessage ? userMessage.length : 0
       });
 
       if (!sessionId) {
@@ -135,17 +138,16 @@ export default async function handler(req, res) {
         if (historyResponse.ok) {
           const result = await historyResponse.json();
           if (result.records.length > 0) {
-  conversationContext = result.records[0].fields.Conversation || '';
-  existingRecordId = result.records[0].id;
+            conversationContext = result.records[0].fields.Conversation || '';
+            existingRecordId = result.records[0].id;
 
-  // ✅ FIX 2: Truncate long history to avoid OpenAI errors
-  if (conversationContext.length > 3000) {
-    conversationContext = conversationContext.slice(-3000);
-  }
+            // ✅ FIX 4: Truncate long history to avoid OpenAI errors
+            if (conversationContext.length > 3000) {
+              conversationContext = conversationContext.slice(-3000);
+            }
 
-  systemMessageContent += ` Conversation so far: "${conversationContext}".`;
-}
-
+            systemMessageContent += ` Conversation so far: "${conversationContext}".`;
+          }
         }
       } catch (error) {
         console.error(`Error fetching conversation history for project ${projectId}:`, error);
@@ -218,9 +220,12 @@ export default async function handler(req, res) {
         }
       } else if (userMessage) {
         try {
-          console.log('Sending text message to OpenAI:', { userMessage, systemMessageContent });
+          console.log('Sending text message to OpenAI:', { 
+            userMessageLength: userMessage.length, 
+            systemMessageLength: systemMessageContent.length 
+          });
           const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-          console.log('Received AI response:', aiReply);
+          console.log('Received AI response:', aiReply ? aiReply.slice(0, 100) + '...' : null);
           if (aiReply) {
             await updateAirtableConversation(
               sessionId, 
@@ -252,6 +257,16 @@ export default async function handler(req, res) {
 
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
   try {
+    // ✅ FIX 5: Add better error handling and message length validation
+    const messages = [
+      { role: 'system', content: systemMessageContent },
+      { role: 'user', content: userMessage }
+    ];
+    
+    // Calculate total tokens (rough estimate)
+    const totalLength = systemMessageContent.length + userMessage.length;
+    console.log(`Total message length: ${totalLength} characters`);
+    
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -260,13 +275,18 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
       },
       body: JSON.stringify({
         model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemMessageContent },
-          { role: 'user', content: userMessage },
-        ],
+        messages: messages,
         max_tokens: 1000,
+        temperature: 0.7 // Add temperature for consistency
       }),
     });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('OpenAI API error:', response.status, errorData);
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+    
     const data = await response.json();
     console.log('OpenAI response:', data);
     if (data.choices && data.choices.length > 0) {
@@ -283,11 +303,18 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
 
 async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
   try {
+    // ✅ FIX 6: Truncate conversation before saving to Airtable to avoid size limits
+    let conversationToSave = updatedConversation;
+    if (conversationToSave.length > 10000) {
+      // Keep only the last 10000 characters
+      conversationToSave = '...' + conversationToSave.slice(-10000);
+    }
+    
     const recordData = {
       fields: {
         SessionID: sessionId,
         ProjectID: projectId || 'default',
-        Conversation: updatedConversation
+        Conversation: conversationToSave
       }
     };
 
