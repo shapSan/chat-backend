@@ -34,7 +34,7 @@ const PROJECT_CONFIGS = {
     baseId: 'apphslK7rslGb7Z8K',
     chatTable: 'Chat-Conversations',
     knowledgeTable: 'Chat-KnowledgeBase',
-    voiceId: 'GFj1cj74yBDgwZqlLwgS', // Professional pitch voice
+    voiceId: '21m00Tcm4TlvDq8ikWAM', // Professional pitch voice
     voiceSettings: {
       stability: 0.5,
       similarity_boost: 0.75,
@@ -105,7 +105,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      // Check if this is an audio generation request
+      // Check if this is an audio generation request FIRST
       if (req.body.generateAudio) {
         // Handle audio generation
         const { prompt, projectId, sessionId } = req.body;
