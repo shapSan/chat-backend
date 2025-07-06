@@ -14,28 +14,57 @@ export const config = {
 
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
+const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 
-// Project configuration mapping
+// Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
   'default': {
     baseId: 'appTYnw2qIaBIGRbR',
     chatTable: 'EagleView_Chat',
-    knowledgeTable: 'Chat-KnowledgeBase'
+    knowledgeTable: 'Chat-KnowledgeBase',
+    voiceId: '21m00Tcm4TlvDq8ikWAM', // Default voice
+    voiceSettings: {
+      stability: 0.5,
+      similarity_boost: 0.75,
+      style: 0.5,
+      use_speaker_boost: true
+    }
   },
   'HB-PitchAssist': {
     baseId: 'apphslK7rslGb7Z8K',
     chatTable: 'Chat-Conversations',
-    knowledgeTable: 'Chat-KnowledgeBase'
+    knowledgeTable: 'Chat-KnowledgeBase',
+    voiceId: 'GFj1cj74yBDgwZqlLwgS', // Professional pitch voice
+    voiceSettings: {
+      stability: 0.5,
+      similarity_boost: 0.75,
+      style: 0.5,
+      use_speaker_boost: true
+    }
   },
   'real-estate': {
     baseId: 'appYYYYYYYYYYYYYY', // Replace with actual base ID
     chatTable: 'RealEstate_Chat',
-    knowledgeTable: 'RealEstate_Knowledge'
+    knowledgeTable: 'RealEstate_Knowledge',
+    voiceId: 'EXAVITQu4vr4xnSDxMaL', // Different voice for real estate
+    voiceSettings: {
+      stability: 0.6,
+      similarity_boost: 0.8,
+      style: 0.4,
+      use_speaker_boost: true
+    }
   },
   'healthcare': {
     baseId: 'appZZZZZZZZZZZZZZ', // Replace with actual base ID
     chatTable: 'Healthcare_Chat',
-    knowledgeTable: 'Healthcare_Knowledge'
+    knowledgeTable: 'Healthcare_Knowledge',
+    voiceId: 'MF3mGyEYCl7XYWbV9V6O', // Calm, professional voice for healthcare
+    voiceSettings: {
+      stability: 0.7,
+      similarity_boost: 0.7,
+      style: 0.3,
+      use_speaker_boost: false
+    }
   }
   // Add more project configurations as needed
 };
@@ -65,21 +94,106 @@ function getCurrentTimeInPDT() {
 }
 
 export default async function handler(req, res) {
-  // ✅ FIX 1: Set CORS headers early (before any conditionals)
+  // Set CORS headers early (before any conditionals)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") {
-    return res.status(200).end(); // ✅ respond early for preflight
+    return res.status(200).end(); // respond early for preflight
   }
 
   if (req.method === 'POST') {
     try {
-      // ✅ FIX 2: Destructure userMessage properly and handle truncation correctly
+      // Check if this is an audio generation request
+      if (req.body.generateAudio) {
+        // Handle audio generation
+        const { prompt, projectId, sessionId } = req.body;
+
+        // Validate required fields
+        if (!prompt) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'prompt is required'
+          });
+        }
+
+        // Check for ElevenLabs API key
+        if (!elevenLabsApiKey) {
+          console.error('ElevenLabs API key not configured');
+          return res.status(500).json({ 
+            error: 'Audio generation service not configured',
+            details: 'Please configure ELEVENLABS_API_KEY'
+          });
+        }
+
+        // Get project-specific configuration including voice settings
+        const projectConfig = getProjectConfig(projectId);
+        const { voiceId, voiceSettings } = projectConfig;
+
+        console.log('Generating audio for project:', projectId, 'using voice:', voiceId);
+
+        // Call ElevenLabs API with project-specific voice
+        const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+        
+        const elevenLabsResponse = await fetch(elevenLabsUrl, {
+          method: 'POST',
+          headers: {
+            'Accept': 'audio/mpeg',
+            'Content-Type': 'application/json',
+            'xi-api-key': elevenLabsApiKey
+          },
+          body: JSON.stringify({
+            text: prompt,
+            model_id: 'eleven_monolingual_v1',
+            voice_settings: voiceSettings
+          })
+        });
+
+        if (!elevenLabsResponse.ok) {
+          const errorText = await elevenLabsResponse.text();
+          console.error('ElevenLabs API error:', elevenLabsResponse.status, errorText);
+          
+          if (elevenLabsResponse.status === 401) {
+            return res.status(401).json({ 
+              error: 'Invalid API key',
+              details: 'Please check your ElevenLabs API key'
+            });
+          } else if (elevenLabsResponse.status === 429) {
+            return res.status(429).json({ 
+              error: 'Rate limit exceeded',
+              details: 'Please try again later'
+            });
+          }
+          
+          return res.status(500).json({ 
+            error: 'Failed to generate audio',
+            details: errorText
+          });
+        }
+
+        // Get audio data as buffer
+        const audioBuffer = await elevenLabsResponse.buffer();
+        
+        // Convert to base64 data URL
+        const base64Audio = audioBuffer.toString('base64');
+        const audioDataUrl = `data:audio/mpeg;base64,${base64Audio}`;
+
+        console.log('Audio generated successfully for project:', projectId, 'size:', audioBuffer.length);
+
+        // Return the audio data URL
+        return res.status(200).json({
+          success: true,
+          audioUrl: audioDataUrl,
+          voiceUsed: voiceId
+        });
+      }
+
+      // Otherwise, handle regular chat messages
+      // Destructure userMessage properly and handle truncation correctly
       let { userMessage, sessionId, audioData, projectId } = req.body;
 
-      // ✅ FIX 3: Truncate AFTER destructuring, not before
+      // Truncate AFTER destructuring, not before
       if (userMessage && userMessage.length > 5000) {
         userMessage = userMessage.slice(0, 5000) + "…";
       }
@@ -141,7 +255,7 @@ export default async function handler(req, res) {
             conversationContext = result.records[0].fields.Conversation || '';
             existingRecordId = result.records[0].id;
 
-            // ✅ FIX 4: Truncate long history to avoid OpenAI errors
+            // Truncate long history to avoid OpenAI errors
             if (conversationContext.length > 3000) {
               conversationContext = conversationContext.slice(-3000);
             }
@@ -257,7 +371,7 @@ export default async function handler(req, res) {
 
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
   try {
-    // ✅ FIX 5: Add better error handling and message length validation
+    // Add better error handling and message length validation
     const messages = [
       { role: 'system', content: systemMessageContent },
       { role: 'user', content: userMessage }
@@ -303,7 +417,7 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
 
 async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
   try {
-    // ✅ FIX 6: Truncate conversation before saving to Airtable to avoid size limits
+    // Truncate conversation before saving to Airtable to avoid size limits
     let conversationToSave = updatedConversation;
     if (conversationToSave.length > 10000) {
       // Keep only the last 10000 characters
