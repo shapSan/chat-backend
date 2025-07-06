@@ -105,8 +105,13 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
+      // Log incoming request to debug
+      console.log('Received request body:', req.body);
+      
       // Check if this is an audio generation request FIRST
-      if (req.body.generateAudio) {
+      if (req.body.generateAudio === true) {
+        console.log('Processing audio generation request');
+        
         // Handle audio generation
         const { prompt, projectId, sessionId } = req.body;
 
