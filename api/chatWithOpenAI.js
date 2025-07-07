@@ -34,10 +34,10 @@ const PROJECT_CONFIGS = {
     baseId: 'apphslK7rslGb7Z8K',
     chatTable: 'Chat-Conversations',
     knowledgeTable: 'Chat-KnowledgeBase',
-    voiceId: '21m00Tcm4TlvDq8ikWAM', // Professional pitch voice
+    voiceId: 'GFj1cj74yBDgwZqlLwgS', // Professional pitch voice
     voiceSettings: {
-      stability: 0.5,
-      similarity_boost: 0.75,
+      stability: 0.34,
+      similarity_boost: 0.8,
       style: 0.5,
       use_speaker_boost: true
     }
