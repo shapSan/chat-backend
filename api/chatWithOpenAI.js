@@ -16,10 +16,6 @@ const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 
-// In-memory cache for knowledge base with TTL
-const knowledgeBaseCache = new Map();
-const CACHE_TTL = 1000 * 60 * 60; // 1 hour
-
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
   'default': {
@@ -95,38 +91,6 @@ function getCurrentTimeInPDT() {
     second: 'numeric',
     timeZoneName: 'short',
   }).format(new Date());
-}
-
-// Cache helper for knowledge base
-async function getCachedKnowledgeBase(projectId, knowledgeBaseUrl, headersAirtable) {
-  const cacheKey = `kb-${projectId}`;
-  const cached = knowledgeBaseCache.get(cacheKey);
-  
-  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-    console.log(`Using cached knowledge base for project: ${projectId}`);
-    return cached.data;
-  }
-
-  try {
-    const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
-    if (kbResponse.ok) {
-      const knowledgeBaseData = await kbResponse.json();
-      const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
-      
-      // Cache the result
-      knowledgeBaseCache.set(cacheKey, {
-        data: knowledgeEntries,
-        timestamp: Date.now()
-      });
-      
-      console.log(`Loaded and cached knowledge base for project: ${projectId}`);
-      return knowledgeEntries;
-    }
-  } catch (error) {
-    console.error(`Error fetching knowledge base for project ${projectId}:`, error);
-  }
-  
-  return '';
 }
 
 export default async function handler(req, res) {
@@ -308,10 +272,19 @@ export default async function handler(req, res) {
       let conversationContext = '';
       let existingRecordId = null;
 
-      // Fetch project-specific knowledge base (with caching)
-      const knowledgeEntries = await getCachedKnowledgeBase(projectId, knowledgeBaseUrl, headersAirtable);
-      if (knowledgeEntries) {
-        systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
+      // Fetch project-specific knowledge base
+      try {
+        const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
+        if (kbResponse.ok) {
+          const knowledgeBaseData = await kbResponse.json();
+          const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
+          systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
+          console.log(`Loaded knowledge base for project: ${projectId}`);
+        } else {
+          console.warn(`Knowledge base not found for project: ${projectId}, using default assistant behavior`);
+        }
+      } catch (error) {
+        console.error(`Error fetching knowledge base for project ${projectId}:`, error);
       }
 
       // Fetch conversation history from project-specific table
@@ -375,7 +348,7 @@ export default async function handler(req, res) {
             if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
               const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
               if (aiReply) {
-                // Don't wait for Airtable update
+                // Make Airtable update async - don't await
                 updateAirtableConversation(
                   sessionId, 
                   projectId, 
@@ -383,7 +356,7 @@ export default async function handler(req, res) {
                   headersAirtable, 
                   `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
                   existingRecordId
-                ).catch(err => console.error('Airtable update failed:', err));
+                ).catch(err => console.error('Airtable update error:', err));
                 
                 res.json({ reply: aiReply });
               } else {
@@ -412,7 +385,7 @@ export default async function handler(req, res) {
           const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
           console.log('Received AI response:', aiReply ? aiReply.slice(0, 100) + '...' : null);
           if (aiReply) {
-            // Don't wait for Airtable update
+            // Make Airtable update async - don't await
             updateAirtableConversation(
               sessionId, 
               projectId, 
@@ -420,7 +393,7 @@ export default async function handler(req, res) {
               headersAirtable, 
               `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
               existingRecordId
-            ).catch(err => console.error('Airtable update failed:', err));
+            ).catch(err => console.error('Airtable update error:', err));
             
             return res.json({ reply: aiReply });
           } else {
