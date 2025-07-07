@@ -24,7 +24,7 @@ const PROJECT_CONFIGS = {
     knowledgeTable: 'Chat-KnowledgeBase',
     voiceId: '21m00Tcm4TlvDq8ikWAM', // Default voice
     voiceSettings: {
-      speed: 0.9,
+      speed: 1,
       stability: 0.35,
       similarity_boost: 0.8,
       style: 0.5,
