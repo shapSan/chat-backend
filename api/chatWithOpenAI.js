@@ -24,9 +24,8 @@ const PROJECT_CONFIGS = {
     knowledgeTable: 'Chat-KnowledgeBase',
     voiceId: '21m00Tcm4TlvDq8ikWAM', // Default voice
     voiceSettings: {
-      speed: 1,
-      stability: 0.35,
-      similarity_boost: 0.8,
+      stability: 0.5,
+      similarity_boost: 0.75,
       style: 0.5,
       use_speaker_boost: true
     }
@@ -35,7 +34,7 @@ const PROJECT_CONFIGS = {
     baseId: 'apphslK7rslGb7Z8K',
     chatTable: 'Chat-Conversations',
     knowledgeTable: 'Chat-KnowledgeBase',
-    voiceId: 'GFj1cj74yBDgwZqlLwgS', // Professional pitch voice
+    voiceId: '21m00Tcm4TlvDq8ikWAM', // Professional pitch voice
     voiceSettings: {
       stability: 0.5,
       similarity_boost: 0.75,
@@ -139,60 +138,97 @@ export default async function handler(req, res) {
 
         console.log('Generating audio for project:', projectId, 'using voice:', voiceId);
 
-        // Call ElevenLabs API with project-specific voice
-        const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
-        
-        const elevenLabsResponse = await fetch(elevenLabsUrl, {
-          method: 'POST',
-          headers: {
-            'Accept': 'audio/mpeg',
-            'Content-Type': 'application/json',
-            'xi-api-key': elevenLabsApiKey
-          },
-          body: JSON.stringify({
-            text: prompt,
-            model_id: 'eleven_monolingual_v1',
-            voice_settings: voiceSettings
-          })
-        });
+        try {
+            // First, let's check if the API key is valid with a simple voices endpoint call
+            console.log('Checking ElevenLabs API key validity...');
+            const voicesCheck = await fetch('https://api.elevenlabs.io/v1/voices', {
+                headers: {
+                    'xi-api-key': elevenLabsApiKey
+                }
+            });
+            
+            if (!voicesCheck.ok) {
+                console.error('ElevenLabs API key check failed:', voicesCheck.status);
+                return res.status(401).json({ 
+                    error: 'Invalid ElevenLabs API key',
+                    details: 'Please check your ELEVENLABS_API_KEY in Vercel environment variables'
+                });
+            }
+            
+            console.log('API key is valid, proceeding with audio generation...');
+            
+            // Call ElevenLabs API with project-specific voice
+            const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+            
+            console.log('Calling ElevenLabs API...');
+            const elevenLabsResponse = await fetch(elevenLabsUrl, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'audio/mpeg',
+                    'Content-Type': 'application/json',
+                    'xi-api-key': elevenLabsApiKey
+                },
+                body: JSON.stringify({
+                    text: prompt,
+                    model_id: 'eleven_monolingual_v1',
+                    voice_settings: voiceSettings
+                })
+            });
 
-        if (!elevenLabsResponse.ok) {
-          const errorText = await elevenLabsResponse.text();
-          console.error('ElevenLabs API error:', elevenLabsResponse.status, errorText);
-          
-          if (elevenLabsResponse.status === 401) {
-            return res.status(401).json({ 
-              error: 'Invalid API key',
-              details: 'Please check your ElevenLabs API key'
+            console.log('ElevenLabs response status:', elevenLabsResponse.status);
+
+            if (!elevenLabsResponse.ok) {
+                const errorText = await elevenLabsResponse.text();
+                console.error('ElevenLabs API error:', elevenLabsResponse.status, errorText);
+                
+                if (elevenLabsResponse.status === 401) {
+                    return res.status(401).json({ 
+                        error: 'Invalid API key',
+                        details: 'Please check your ElevenLabs API key'
+                    });
+                } else if (elevenLabsResponse.status === 429) {
+                    return res.status(429).json({ 
+                        error: 'Rate limit exceeded',
+                        details: 'Please try again later'
+                    });
+                } else if (elevenLabsResponse.status === 400) {
+                    return res.status(400).json({ 
+                        error: 'Invalid request to ElevenLabs',
+                        details: errorText
+                    });
+                }
+                
+                return res.status(500).json({ 
+                    error: 'Failed to generate audio',
+                    details: errorText
+                });
+            }
+
+            console.log('Getting audio buffer...');
+            // Get audio data as buffer
+            const audioBuffer = await elevenLabsResponse.buffer();
+            
+            console.log('Converting to base64...');
+            // Convert to base64 data URL
+            const base64Audio = audioBuffer.toString('base64');
+            const audioDataUrl = `data:audio/mpeg;base64,${base64Audio}`;
+
+            console.log('Audio generated successfully for project:', projectId, 'size:', audioBuffer.length);
+
+            // Return the audio data URL
+            return res.status(200).json({
+                success: true,
+                audioUrl: audioDataUrl,
+                voiceUsed: voiceId
             });
-          } else if (elevenLabsResponse.status === 429) {
-            return res.status(429).json({ 
-              error: 'Rate limit exceeded',
-              details: 'Please try again later'
+            
+        } catch (error) {
+            console.error('Error in audio generation:', error);
+            return res.status(500).json({ 
+                error: 'Failed to generate audio',
+                details: error.message 
             });
-          }
-          
-          return res.status(500).json({ 
-            error: 'Failed to generate audio',
-            details: errorText
-          });
         }
-
-        // Get audio data as buffer
-        const audioBuffer = await elevenLabsResponse.buffer();
-        
-        // Convert to base64 data URL
-        const base64Audio = audioBuffer.toString('base64');
-        const audioDataUrl = `data:audio/mpeg;base64,${base64Audio}`;
-
-        console.log('Audio generated successfully for project:', projectId, 'size:', audioBuffer.length);
-
-        // Return the audio data URL
-        return res.status(200).json({
-          success: true,
-          audioUrl: audioDataUrl,
-          voiceUsed: voiceId
-        });
       }
 
       // Otherwise, handle regular chat messages
