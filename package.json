@@ -1,19 +1,18 @@
 {
   "name": "chat-backend",
   "version": "1.0.0",
-  "description": "Chat backend service for interacting with OpenAI and Airtable.",
-  "main": "api/chatWithOpenAI.js",
+  "description": "AI Chat Backend with Airtable and OpenAI",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
-    "start": "node api/chatWithOpenAI.js"
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
   },
   "dependencies": {
     "dotenv": "^16.0.3",
-    "node-fetch": "^2.6.7",
+    "node-fetch": "^3.3.0",
     "ws": "^8.13.0"
-  },
-  "engines": {
-    "node": ">=16.0.0"
-  },
-  "author": "shaps",
-  "license": "MIT"
+  }
 }
