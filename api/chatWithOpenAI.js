@@ -93,6 +93,34 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
+// MCP Search function
+async function callMCPSearch(query, projectId, limit = 10) {
+  console.log('🚀 callMCPSearch called with:', { query, projectId, limit }); // ADD THIS
+  try {
+    const response = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/mcp-search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        projectId,
+        limit
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`MCP search failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error calling MCP search:', error);
+    return { error: error.message };
+  }
+}
+
 export default async function handler(req, res) {
   // Set CORS headers early (before any conditionals)
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -271,6 +299,44 @@ export default async function handler(req, res) {
       let systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
       let conversationContext = '';
       let existingRecordId = null;
+
+      // Check if this is a search query (MOVED HERE - around line 190)
+      const isSearchQuery = userMessage && (
+        userMessage.toLowerCase().includes('brand') ||
+        userMessage.toLowerCase().includes('match') ||
+        userMessage.toLowerCase().includes('suggest') ||
+        userMessage.toLowerCase().includes('integration') ||
+        userMessage.toLowerCase().includes('easy money') ||
+        userMessage.toLowerCase().includes('quick approval')
+      );
+
+      // ADD THESE LOGS:
+      console.log('📝 User message:', userMessage);
+      console.log('🔍 Is search query?', isSearchQuery);
+
+      // MCP Search Integration
+      if (isSearchQuery) {
+        console.log('✅ Search query detected, calling MCP...'); // ADD THIS
+        try {
+          console.log('Using MCP for smart search...');
+          const results = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 10);
+          
+          console.log('📊 MCP results:', results); // ADD THIS
+          
+          if (results && !results.error) {
+            console.log('✅ MCP returned data, formatting for GPT...'); // ADD THIS
+            // Format results for GPT
+            const formattedResults = results.results.map(r => 
+              `Brand: ${r.brand}\nType: ${r.type}\nMatch Score: ${r.score}%\nDetails: ${r.details}`
+            ).join('\n\n');
+            
+            // Add to system message
+            systemMessageContent += `\n\nSearch Results:\n${formattedResults}`;
+          }
+        } catch (error) {
+          console.error('MCP search error:', error);
+        }
+      }
 
       // Fetch project-specific knowledge base
       try {
