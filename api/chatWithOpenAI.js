@@ -338,12 +338,8 @@ export default async function handler(req, res) {
               // Format based on the type of match
               if (r.type === 'brand') {
                 return `Brand: ${r.name}\nCategory: ${r.category}\nBudget: ${r.budget}\nLast Modified: ${r.lastModified}\nSummary: ${r.campaignSummary}`;
-              } else if (r.type === 'production') {
-                return `Production: ${r.name}\nGenre: ${r.genre}\nType: ${r.contentType}\nBudget: ${r.budget}\nSummary: ${r.summary}`;
               } else if (r.type === 'meeting') {
-                return `Meeting: ${r.title}\nDate: ${r.date}\nSummary: ${r.summary}`;
-              } else if (r.type === 'email') {
-                return `Email: ${r.subject}\nFrom: ${r.from}\nDate: ${r.date}\nSummary: ${r.summary}`;
+                return `Meeting: ${r.title}\nDate: ${r.date}\nSummary: ${r.summary}${r.link ? '\nLink: ' + r.link : ''}`;
               } else {
                 return `Item: ${r.name}\nDetails: ${r.data}`;
               }
