@@ -1,19 +1,4 @@
-// Process brand data - simplified to match your exact fields
-function processBrandData(records, query) {
-  return records.map(record => {
-    const fields = record.fields;
-    return {
-      id: record.id,
-      name: fields['Brand Name'] || 'Unknown Brand',
-      category: fields['Category'] || 'Uncategorized',
-      budget: fields['Budget'] ? `${parseInt(fields['Budget']).toLocaleString()}` : 'Budget TBD',
-      lastModified: fields['Last Modified'] || 'Unknown',
-      campaignSummary: truncate(fields['Campaign Summary'] || '', 100),
-      relevance: calculateRelevance(fields, query),
-      type: 'brand'
-    };
-  }).sort((a, b) => b.relevance - a.relevance);
-}// api/mcp-search.js - MCP as a Vercel serverless function
+// api/mcp-search.js - MCP as a Vercel serverless function
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 
@@ -21,7 +6,7 @@ dotenv.config();
 
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 
-// Your ACTUAL table configurations
+// Your ACTUAL table configurations - ONLY Brands and Meeting Steam
 const PROJECT_CONFIGS = {
   'HB-PitchAssist': {
     baseId: 'apphslK7rslGb7Z8K',
@@ -75,17 +60,20 @@ export default async function handler(req, res) {
 
     console.log(`MCP Search: "${query}" for project ${projectId}`);
 
-    // For now, just search the knowledge base since we know it exists
+    // Determine search type - simplified to only brands and meetings
+    const searchType = determineSearchType(query);
     const config = PROJECT_CONFIGS[projectId] || PROJECT_CONFIGS['HB-PitchAssist'];
-    
-    // Override to use the table we KNOW exists
-    const searchConfig = {
-      table: 'Chat-KnowledgeBase',  // Use the table that's actually working
-      view: null,
-      fields: ['Summary', 'Tags', 'Category']  // Adjust these based on your actual fields
-    };
-    
-    console.log('Using fallback to Chat-KnowledgeBase table');
+    const searchConfig = config.searchMappings[searchType];
+
+    if (!searchConfig) {
+      console.log('No matching search config for type:', searchType);
+      return res.status(200).json({
+        matches: [],
+        total: 0,
+        searchType,
+        error: 'No matching data type found'
+      });
+    }
 
     // Build Airtable URL
     let url = `https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)}`;
@@ -147,18 +135,18 @@ export default async function handler(req, res) {
       console.log('First record fields:', data.records[0].fields);
     }
 
-    // Process results as generic knowledge base entries
-    const processed = data.records.map(record => {
-      const fields = record.fields;
-      return {
-        id: record.id,
-        name: fields['Summary'] ? fields['Summary'].substring(0, 50) + '...' : 'Knowledge Entry',
-        summary: fields['Summary'] || 'No summary',
-        category: fields['Category'] || fields['Tags'] || 'General',
-        relevance: calculateRelevance(fields, query),
-        type: 'knowledge'
-      };
-    }).sort((a, b) => b.relevance - a.relevance);
+    // Process results - only brands and meetings
+    let processed;
+    switch (searchType) {
+      case 'meetings':
+        processed = processMeetingData(data.records, query);
+        break;
+      case 'brands':
+        processed = processBrandData(data.records, query);
+        break;
+      default:
+        processed = processBrandData(data.records, query); // Default to brands
+    }
 
     return res.status(200).json({
       matches: processed.slice(0, limit),
@@ -207,22 +195,6 @@ function processMeetingData(records, query) {
   }).sort((a, b) => b.relevance - a.relevance);
 }
 
-// Process email data
-function processEmailData(records, query) {
-  return records.map(record => {
-    const fields = record.fields;
-    return {
-      id: record.id,
-      subject: fields['Subject'] || 'No subject',
-      from: fields['From'] || 'Unknown sender',
-      date: fields['Date'] || 'No date',
-      summary: truncate(fields['Summary'] || 'No summary', 150),
-      relevance: calculateRelevance(fields, query),
-      type: 'email'
-    };
-  }).sort((a, b) => b.relevance - a.relevance);
-}
-
 // Process brand data - simplified to match your exact fields
 function processBrandData(records, query) {
   return records.map(record => {
@@ -231,7 +203,7 @@ function processBrandData(records, query) {
       id: record.id,
       name: fields['Brand Name'] || 'Unknown Brand',
       category: fields['Category'] || 'Uncategorized',
-      budget: fields['Budget'] ? `${parseInt(fields['Budget']).toLocaleString()}` : 'Budget TBD',
+      budget: fields['Budget'] ? `$${parseInt(fields['Budget']).toLocaleString()}` : 'Budget TBD',
       lastModified: fields['Last Modified'] || 'Unknown',
       campaignSummary: truncate(fields['Campaign Summary'] || '', 100),
       relevance: calculateRelevance(fields, query),
@@ -240,41 +212,7 @@ function processBrandData(records, query) {
   }).sort((a, b) => b.relevance - a.relevance);
 }
 
-// Process production data
-function processProductionData(records, query) {
-  return records.map(record => {
-    const fields = record.fields;
-    return {
-      id: record.id,
-      name: fields['Production'] || 'Unnamed Production',
-      genre: fields['Genre'] || 'Not specified',
-      contentType: fields['Content Type'] || 'Unknown',
-      budget: fields['Budget'] ? `$${parseInt(fields['Budget']).toLocaleString()}` : 'Budget TBD',
-      hasScript: fields['Script Attachment'] ? true : false,
-      hasSlate: fields['Slate Attachment'] ? true : false,
-      summary: truncate(fields['Project Summary'] || 'No summary', 150),
-      relevance: calculateRelevance(fields, query),
-      type: 'production'
-    };
-  }).sort((a, b) => b.relevance - a.relevance);
-}
-
-// Generic processor
-function genericProcessData(records, query) {
-  return records.map(record => {
-    const fields = record.fields;
-    const firstField = Object.keys(fields)[0];
-    return {
-      id: record.id,
-      name: fields[firstField] || 'Unknown',
-      data: Object.entries(fields).slice(0, 3).map(([k, v]) => `${k}: ${truncate(String(v), 50)}`).join(', '),
-      relevance: calculateRelevance(fields, query),
-      type: 'generic'
-    };
-  }).sort((a, b) => b.relevance - a.relevance);
-}
-
-// Calculate relevance with smart scoring
+// Calculate relevance with smart scoring - simplified for brands and meetings
 function calculateRelevance(fields, query) {
   const queryWords = query.toLowerCase().split(' ');
   let score = 0;
@@ -294,6 +232,7 @@ function calculateRelevance(fields, query) {
   // Boost for specific criteria
   const queryLower = query.toLowerCase();
   
+  // Brand-specific scoring
   if (fields['Brand Name']) {
     if (fields['Last Modified']) {
       const lastModified = new Date(fields['Last Modified']);
@@ -309,19 +248,15 @@ function calculateRelevance(fields, query) {
     if (queryLower.includes('horror') && fields['Category']?.toLowerCase().includes('horror')) {
       score += 50;
     }
-    if (queryLower.includes('easy money') && fields['ApprovalTime'] < 7) {
-      score += 40;
-    }
   }
   
-  if (fields['Production']) {
-    if (queryLower.includes('horror') && fields['Genre']?.toLowerCase().includes('horror')) {
-      score += 50;
-    }
-    if (fields['Last Modified']) {
-      const lastModified = new Date(fields['Last Modified']);
-      const daysSince = (Date.now() - lastModified) / (1000 * 60 * 60 * 24);
-      if (daysSince < 14) score += 30;
+  // Meeting-specific scoring
+  if (fields['Title']) {
+    if (fields['Date']) {
+      const meetingDate = new Date(fields['Date']);
+      const daysSince = (Date.now() - meetingDate) / (1000 * 60 * 60 * 24);
+      if (daysSince < 7) score += 30;
+      if (daysSince < 30) score += 20;
     }
   }
   
