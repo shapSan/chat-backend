@@ -1,6 +1,6 @@
 // api/mcp-search.js - MCP as a Vercel serverless function
-const fetch = require('node-fetch');
-const dotenv = require('dotenv');
+import fetch from 'node-fetch';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
@@ -25,7 +25,7 @@ const PROJECT_CONFIGS = {
   }
 };
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   console.log('🎯 MCP Search endpoint hit!');
   console.log('📦 Request body:', req.body);
   
@@ -263,10 +263,8 @@ function calculateRelevance(fields, query) {
   return score;
 }
 
-// Utility function - Fixed to handle non-string values
+// Utility function
 function truncate(text, maxLength = 200) {
-  // Convert to string first, handle null/undefined
-  const str = text ? String(text) : '';
-  if (str.length <= maxLength) return str;
-  return str.substring(0, maxLength).trim() + '...';
+  if (!text || text.length <= maxLength) return text;
+  return text.substring(0, maxLength).trim() + '...';
 }
