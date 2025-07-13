@@ -195,17 +195,30 @@ function processMeetingData(records, query) {
   }).sort((a, b) => b.relevance - a.relevance);
 }
 
-// Process brand data - simplified to match your exact fields
+// Process brand data - handling proper field types
 function processBrandData(records, query) {
   return records.map(record => {
     const fields = record.fields;
+    
+    // Handle Budget field - it's a number field in Airtable
+    let budgetDisplay = 'Budget TBD';
+    if (fields['Budget'] !== undefined && fields['Budget'] !== null) {
+      budgetDisplay = `$${fields['Budget'].toLocaleString()}`;
+    }
+    
+    // Handle Category field - it's a multiselect (array)
+    let categoryDisplay = 'Uncategorized';
+    if (fields['Category'] && Array.isArray(fields['Category'])) {
+      categoryDisplay = fields['Category'].join(', ');
+    }
+    
     return {
       id: record.id,
-      name: fields['Brand Name'] || 'Unknown Brand',
-      category: fields['Category'] || 'Uncategorized',
-      budget: fields['Budget'] ? `$${parseInt(fields['Budget']).toLocaleString()}` : 'Budget TBD',
-      lastModified: fields['Last Modified'] || 'Unknown',
-      campaignSummary: truncate(fields['Campaign Summary'] || '', 100),
+      name: fields['Brand Name'] || 'Unknown Brand',  // Single line text
+      category: categoryDisplay,  // Multiselect -> joined string
+      budget: budgetDisplay,  // Number -> formatted string
+      lastModified: fields['Last Modified'] || 'Unknown',  // Date field
+      campaignSummary: truncate(fields['Campaign Summary'] || '', 100),  // Long text
       relevance: calculateRelevance(fields, query),
       type: 'brand'
     };
@@ -217,8 +230,20 @@ function calculateRelevance(fields, query) {
   const queryWords = query.toLowerCase().split(' ');
   let score = 0;
   
-  const searchableText = Object.values(fields)
-    .filter(v => v && typeof v === 'string')
+  // Calculate relevance with smart scoring - simplified for brands and meetings
+  const searchableText = Object.entries(fields)
+    .filter(([key, value]) => value !== null && value !== undefined)
+    .map(([key, value]) => {
+      // Handle different field types
+      if (Array.isArray(value)) {
+        return value.join(' '); // Multiselect fields
+      } else if (typeof value === 'number') {
+        return value.toString(); // Number fields
+      } else if (typeof value === 'string') {
+        return value; // String fields
+      }
+      return ''; // Other types
+    })
     .join(' ')
     .toLowerCase();
   
@@ -241,12 +266,14 @@ function calculateRelevance(fields, query) {
       if (daysSince < 7) score += 30;
     }
     
-    if (fields['Budget'] && parseInt(fields['Budget']) > 100000) {
+    if (fields['Budget'] && fields['Budget'] > 100000) {
       score += 25;
     }
     
-    if (queryLower.includes('horror') && fields['Category']?.toLowerCase().includes('horror')) {
-      score += 50;
+    if (queryLower.includes('horror') && fields['Category'] && Array.isArray(fields['Category'])) {
+      if (fields['Category'].some(cat => cat.toLowerCase().includes('horror'))) {
+        score += 50;
+      }
     }
   }
   
@@ -263,8 +290,10 @@ function calculateRelevance(fields, query) {
   return score;
 }
 
-// Utility function
+// Utility function - Fixed to handle non-string values
 function truncate(text, maxLength = 200) {
-  if (!text || text.length <= maxLength) return text;
-  return text.substring(0, maxLength).trim() + '...';
+  // Convert to string first, handle null/undefined
+  const str = text ? String(text) : '';
+  if (str.length <= maxLength) return str;
+  return str.substring(0, maxLength).trim() + '...';
 }
