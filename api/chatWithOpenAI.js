@@ -93,39 +93,116 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-// MCP Search function
+// MCP Search function - Direct implementation without HTTP call
 async function callMCPSearch(query, projectId, limit = 10) {
-  console.log('🚀 callMCPSearch called with:', { query, projectId, limit }); // ADD THIS
+  console.log('🚀 callMCPSearch called with:', { query, projectId, limit });
   try {
-    // Fix: Construct absolute URL properly
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3000';
+    // Determine search type
+    const searchType = query.toLowerCase().includes('meeting') || 
+                      query.toLowerCase().includes('call') || 
+                      query.toLowerCase().includes('discussion') 
+                      ? 'meetings' : 'brands';
     
-    const mcpUrl = `${baseUrl}/api/mcp-search`;
-    console.log('🔗 Calling MCP at:', mcpUrl); // Debug log
+    // Configuration
+    const config = {
+      baseId: 'apphslK7rslGb7Z8K',
+      searchMappings: {
+        'meetings': {
+          table: 'Meeting Steam',
+          view: 'ALL Meetings',
+          fields: ['Title', 'Date', 'Summary', 'Link']
+        },
+        'brands': {
+          table: 'Brands',
+          view: null,
+          fields: ['Brand Name', 'Last Modified', 'Category', 'Budget', 'Campaign Summary']
+        }
+      }
+    };
     
-    const response = await fetch(mcpUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        query,
-        projectId,
-        limit
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`MCP search failed: ${response.status}`);
+    const searchConfig = config.searchMappings[searchType];
+    
+    // Build Airtable URL
+    let url = `https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)}`;
+    const params = [`maxRecords=${limit}`];
+    
+    if (searchConfig.view) {
+      params.push(`view=${encodeURIComponent(searchConfig.view)}`);
     }
-
+    
+    searchConfig.fields.forEach(field => {
+      params.push(`fields[]=${encodeURIComponent(field)}`);
+    });
+    
+    url += '?' + params.join('&');
+    
+    // Fetch from Airtable
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${airtableApiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Airtable API error: ${response.status}`);
+    }
+    
     const data = await response.json();
-    return data;
+    
+    // Process results based on type
+    let processed;
+    if (searchType === 'meetings') {
+      processed = data.records.map(record => {
+        const fields = record.fields;
+        return {
+          id: record.id,
+          title: fields['Title'] || 'Untitled Meeting',
+          date: fields['Date'] || 'No date',
+          summary: fields['Summary'] ? fields['Summary'].substring(0, 150) + '...' : 'No summary',
+          link: fields['Link'] || null,
+          relevance: 50,
+          type: 'meeting'
+        };
+      });
+    } else {
+      processed = data.records.map(record => {
+        const fields = record.fields;
+        
+        let budgetDisplay = 'Budget TBD';
+        if (fields['Budget'] !== undefined && fields['Budget'] !== null) {
+          budgetDisplay = `$${fields['Budget'].toLocaleString()}`;
+        }
+        
+        let categoryDisplay = 'Uncategorized';
+        if (fields['Category'] && Array.isArray(fields['Category'])) {
+          categoryDisplay = fields['Category'].join(', ');
+        }
+        
+        return {
+          id: record.id,
+          name: fields['Brand Name'] || 'Unknown Brand',
+          category: categoryDisplay,
+          budget: budgetDisplay,
+          lastModified: fields['Last Modified'] || 'Unknown',
+          campaignSummary: fields['Campaign Summary'] ? 
+            fields['Campaign Summary'].substring(0, 100) + '...' : '',
+          relevance: 50,
+          type: 'brand'
+        };
+      });
+    }
+    
+    return {
+      matches: processed.slice(0, limit),
+      total: processed.length,
+      searchType,
+      tableUsed: searchConfig.table
+    };
+    
   } catch (error) {
-    console.error('Error calling MCP search:', error);
-    return { error: error.message };
+    console.error('Error in MCP search:', error);
+    return { error: error.message, matches: [], total: 0 };
   }
 }
 
