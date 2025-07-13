@@ -1,7 +1,6 @@
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
-import mcpSearchHandler from './mcp-search.js'; // Direct import
 
 dotenv.config();
 
@@ -94,31 +93,36 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-// MCP Search function - Direct call
+// MCP Search function
 async function callMCPSearch(query, projectId, limit = 10) {
-  console.log('🚀 callMCPSearch called with:', { query, projectId, limit });
+  console.log('🚀 callMCPSearch called with:', { query, projectId, limit }); // ADD THIS
   try {
-    // Create mock request and response objects
-    const mockReq = {
+    // Fix: Construct absolute URL properly
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}` 
+      : 'http://localhost:3000';
+    
+    const mcpUrl = `${baseUrl}/api/mcp-search`;
+    console.log('🔗 Calling MCP at:', mcpUrl); // Debug log
+    
+    const response = await fetch(mcpUrl, {
       method: 'POST',
-      body: {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
         query,
         projectId,
         limit
-      }
-    };
-    
-    const mockRes = {
-      status: (code) => ({
-        json: (data) => data,
-        end: () => {}
-      }),
-      setHeader: () => {}
-    };
-    
-    // Call the handler directly
-    const result = await mcpSearchHandler(mockReq, mockRes);
-    return result;
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`MCP search failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data;
   } catch (error) {
     console.error('Error calling MCP search:', error);
     return { error: error.message };
