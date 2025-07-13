@@ -315,7 +315,11 @@ export default async function handler(req, res) {
         userMessage.toLowerCase().includes('suggest') ||
         userMessage.toLowerCase().includes('integration') ||
         userMessage.toLowerCase().includes('easy money') ||
-        userMessage.toLowerCase().includes('quick approval')
+        userMessage.toLowerCase().includes('quick approval') ||
+        userMessage.toLowerCase().includes('show me') ||
+        userMessage.toLowerCase().includes('list') ||
+        userMessage.toLowerCase().includes('find') ||
+        userMessage.toLowerCase().includes('search')
       );
 
       // ADD THESE LOGS:
