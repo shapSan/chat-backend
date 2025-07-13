@@ -325,10 +325,21 @@ export default async function handler(req, res) {
           
           if (results && !results.error) {
             console.log('✅ MCP returned data, formatting for GPT...'); // ADD THIS
-            // Format results for GPT
-            const formattedResults = results.results.map(r => 
-              `Brand: ${r.brand}\nType: ${r.type}\nMatch Score: ${r.score}%\nDetails: ${r.details}`
-            ).join('\n\n');
+            // Format results for GPT - Updated to use 'matches' instead of 'results'
+            const formattedResults = results.matches.map(r => {
+              // Format based on the type of match
+              if (r.type === 'brand') {
+                return `Brand: ${r.name}\nCategory: ${r.category}\nBudget: ${r.budget}\nLast Modified: ${r.lastModified}\nSummary: ${r.campaignSummary}`;
+              } else if (r.type === 'production') {
+                return `Production: ${r.name}\nGenre: ${r.genre}\nType: ${r.contentType}\nBudget: ${r.budget}\nSummary: ${r.summary}`;
+              } else if (r.type === 'meeting') {
+                return `Meeting: ${r.title}\nDate: ${r.date}\nSummary: ${r.summary}`;
+              } else if (r.type === 'email') {
+                return `Email: ${r.subject}\nFrom: ${r.from}\nDate: ${r.date}\nSummary: ${r.summary}`;
+              } else {
+                return `Item: ${r.name}\nDetails: ${r.data}`;
+              }
+            }).join('\n\n');
             
             // Add to system message
             systemMessageContent += `\n\nSearch Results:\n${formattedResults}`;
