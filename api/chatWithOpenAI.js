@@ -93,116 +93,39 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-// MCP Search function - Direct implementation without HTTP call
+// MCP Search function
 async function callMCPSearch(query, projectId, limit = 10) {
-  console.log('🚀 callMCPSearch called with:', { query, projectId, limit });
+  console.log('🚀 callMCPSearch called with:', { query, projectId, limit }); // ADD THIS
   try {
-    // Determine search type
-    const searchType = query.toLowerCase().includes('meeting') || 
-                      query.toLowerCase().includes('call') || 
-                      query.toLowerCase().includes('discussion') 
-                      ? 'meetings' : 'brands';
+    // Fix: Construct absolute URL properly
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}` 
+      : 'http://localhost:3000';
     
-    // Configuration
-    const config = {
-      baseId: 'apphslK7rslGb7Z8K',
-      searchMappings: {
-        'meetings': {
-          table: 'Meeting Steam',
-          view: 'ALL Meetings',
-          fields: ['Title', 'Date', 'Summary', 'Link']
-        },
-        'brands': {
-          table: 'Brands',
-          view: null,
-          fields: ['Brand Name', 'Last Modified', 'Category', 'Budget', 'Campaign Summary']
-        }
-      }
-    };
+    const mcpUrl = `${baseUrl}/api/mcp-search`;
+    console.log('🔗 Calling MCP at:', mcpUrl); // Debug log
     
-    const searchConfig = config.searchMappings[searchType];
-    
-    // Build Airtable URL
-    let url = `https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)}`;
-    const params = [`maxRecords=${limit}`];
-    
-    if (searchConfig.view) {
-      params.push(`view=${encodeURIComponent(searchConfig.view)}`);
-    }
-    
-    searchConfig.fields.forEach(field => {
-      params.push(`fields[]=${encodeURIComponent(field)}`);
-    });
-    
-    url += '?' + params.join('&');
-    
-    // Fetch from Airtable
-    const response = await fetch(url, {
+    const response = await fetch(mcpUrl, {
+      method: 'POST',
       headers: {
-        'Authorization': `Bearer ${airtableApiKey}`,
-        'Content-Type': 'application/json'
-      }
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        projectId,
+        limit
+      })
     });
-    
+
     if (!response.ok) {
-      throw new Error(`Airtable API error: ${response.status}`);
+      throw new Error(`MCP search failed: ${response.status}`);
     }
-    
+
     const data = await response.json();
-    
-    // Process results based on type
-    let processed;
-    if (searchType === 'meetings') {
-      processed = data.records.map(record => {
-        const fields = record.fields;
-        return {
-          id: record.id,
-          title: fields['Title'] || 'Untitled Meeting',
-          date: fields['Date'] || 'No date',
-          summary: fields['Summary'] ? fields['Summary'].substring(0, 150) + '...' : 'No summary',
-          link: fields['Link'] || null,
-          relevance: 50,
-          type: 'meeting'
-        };
-      });
-    } else {
-      processed = data.records.map(record => {
-        const fields = record.fields;
-        
-        let budgetDisplay = 'Budget TBD';
-        if (fields['Budget'] !== undefined && fields['Budget'] !== null) {
-          budgetDisplay = `$${fields['Budget'].toLocaleString()}`;
-        }
-        
-        let categoryDisplay = 'Uncategorized';
-        if (fields['Category'] && Array.isArray(fields['Category'])) {
-          categoryDisplay = fields['Category'].join(', ');
-        }
-        
-        return {
-          id: record.id,
-          name: fields['Brand Name'] || 'Unknown Brand',
-          category: categoryDisplay,
-          budget: budgetDisplay,
-          lastModified: fields['Last Modified'] || 'Unknown',
-          campaignSummary: fields['Campaign Summary'] ? 
-            fields['Campaign Summary'].substring(0, 100) + '...' : '',
-          relevance: 50,
-          type: 'brand'
-        };
-      });
-    }
-    
-    return {
-      matches: processed.slice(0, limit),
-      total: processed.length,
-      searchType,
-      tableUsed: searchConfig.table
-    };
-    
+    return data;
   } catch (error) {
-    console.error('Error in MCP search:', error);
-    return { error: error.message, matches: [], total: 0 };
+    console.error('Error calling MCP search:', error);
+    return { error: error.message };
   }
 }
 
@@ -403,32 +326,342 @@ export default async function handler(req, res) {
       console.log('📝 User message:', userMessage);
       console.log('🔍 Is search query?', isSearchQuery);
 
-      // MCP Search Integration
+      // MCP Search Integration - Enhanced for intelligent context
       if (isSearchQuery) {
         console.log('✅ Search query detected, calling MCP...'); // ADD THIS
         try {
           console.log('Using MCP for smart search...');
-          const results = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 10);
           
-          console.log('📊 MCP results:', results); // ADD THIS
+          // First, search for brands
+          const brandResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 10);
           
-          if (results && !results.error) {
-            console.log('✅ MCP returned data, formatting for GPT...'); // ADD THIS
-            // Format results for GPT - Updated to use 'matches' instead of 'results'
-            const formattedResults = results.matches.map(r => {
-              // Format based on the type of match
-              if (r.type === 'brand') {
-                return `Brand: ${r.name}\nCategory: ${r.category}\nBudget: ${r.budget}\nLast Modified: ${r.lastModified}\nSummary: ${r.campaignSummary}`;
-              } else if (r.type === 'meeting') {
-                return `Meeting: ${r.title}\nDate: ${r.date}\nSummary: ${r.summary}${r.link ? '\nLink: ' + r.link : ''}`;
-              } else {
-                return `Item: ${r.name}\nDetails: ${r.data}`;
-              }
-            }).join('\n\n');
-            
-            // Add to system message
-            systemMessageContent += `\n\nSearch Results:\n${formattedResults}`;
+          // Also search for relevant meetings if the query mentions projects or discussions
+          let meetingResults = null;
+          if (userMessage.toLowerCase().includes('project') || 
+              userMessage.toLowerCase().includes('pending') ||
+              userMessage.toLowerCase().includes('discussed')) {
+            meetingResults = await callMCPSearch('meeting discussion ' + userMessage, projectId || 'HB-PitchAssist', 5);
           }
+          
+          console.log('📊 Brand results:', brandResults);
+          console.log('📊 Meeting results:', meetingResults);
+          
+          // Build intelligent context from results
+          let mcpContext = '\n\n🎯 PRIORITY CONTEXT FROM YOUR BUSINESS DATA:\n\n';
+          
+          // Add brand information with business intelligence
+          if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
+            mcpContext += '**ACTIVE BRANDS IN YOUR PIPELINE:**\n';
+            
+            brandResults.matches.forEach(brand => {
+              const lastModDate = new Date(brand.lastModified);
+              const daysSinceModified = Math.floor((Date.now() - lastModDate) / (1000 * 60 * 60 * 24));
+              
+              mcpContext += `\n🔥 ${brand.name}`;
+              
+              // Add urgency indicators
+              if (daysSinceModified < 7) {
+                mcpContext += ' [HOT - Updated this week!]';
+              } else if (daysSinceModified < 30) {
+                mcpContext += ' [WARM - Recent activity]';
+              }
+              
+              mcpContext += `\n   • Category: ${brand.category}\n   • Budget: ${brand.budget}`;
+              
+              if (brand.campaignSummary) {
+                mcpContext += `\n   • Current Focus: ${brand.campaignSummary}`;
+              }
+              
+              // Smart insights based on budget
+              const budgetNum = parseInt(brand.budget.replace(/[^0-9]/g, ''));
+              if (budgetNum >= 5000000) {
+                mcpContext += '\n   • 💰 HIGH-VALUE OPPORTUNITY - Prioritize for major integrations';
+              } else if (budgetNum >= 1000000) {
+                mcpContext += '\n   • 💎 SOLID BUDGET - Good for featured placements';
+              }
+              
+              mcpContext += '\n';
+            });
+          }
+          
+          // Add meeting context for business intelligence
+          if (meetingResults && !meetingResults.error && meetingResults.matches.length > 0) {
+            mcpContext += '\n**RECENT DISCUSSIONS & PENDING DEALS:**\n';
+            
+            meetingResults.matches.forEach(meeting => {
+              const meetingDate = new Date(meeting.date);
+              const daysSinceMeeting = Math.floor((Date.now() - meetingDate) / (1000 * 60 * 60 * 24));
+              
+              // Only include recent and relevant meetings
+              if (daysSinceMeeting < 30 && 
+                  (meeting.summary.toLowerCase().includes('brand') || 
+                   meeting.summary.toLowerCase().includes('integration') ||
+                   meeting.summary.toLowerCase().includes('partnership'))) {
+                
+                mcpContext += `\n📅 ${meeting.title} (${meeting.date})`;
+                
+                if (daysSinceMeeting < 7) {
+                  mcpContext += ' [THIS WEEK]';
+                }
+                
+                // Extract key insights from summary
+                const summaryLower = meeting.summary.toLowerCase();
+                if (summaryLower.includes('approved') || summaryLower.includes('green light')) {
+                  mcpContext += '\n   ✅ APPROVED/GREEN LIT';
+                }
+                if (summaryLower.includes('pending') || summaryLower.includes('waiting')) {
+                  mcpContext += '\n   ⏳ PENDING DECISION';
+                }
+                if (summaryLower.includes('budget') || summaryLower.includes('
+
+      // Fetch project-specific knowledge base
+      try {
+        const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
+        if (kbResponse.ok) {
+          const knowledgeBaseData = await kbResponse.json();
+          const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
+          systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
+          console.log(`Loaded knowledge base for project: ${projectId}`);
+        } else {
+          console.warn(`Knowledge base not found for project: ${projectId}, using default assistant behavior`);
+        }
+      } catch (error) {
+        console.error(`Error fetching knowledge base for project ${projectId}:`, error);
+      }
+
+      // Fetch conversation history from project-specific table
+      try {
+        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
+        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
+        if (historyResponse.ok) {
+          const result = await historyResponse.json();
+          if (result.records.length > 0) {
+            conversationContext = result.records[0].fields.Conversation || '';
+            existingRecordId = result.records[0].id;
+
+            // Truncate long history to avoid OpenAI errors
+            if (conversationContext.length > 3000) {
+              conversationContext = conversationContext.slice(-3000);
+            }
+
+            systemMessageContent += ` Conversation so far: "${conversationContext}".`;
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching conversation history for project ${projectId}:`, error);
+      }
+
+      const currentTimePDT = getCurrentTimeInPDT();
+      systemMessageContent += ` Current time in PDT: ${currentTimePDT}.`;
+      
+      // Add project context to system message if available
+      if (projectId && projectId !== 'default') {
+        systemMessageContent += ` You are assisting with the ${projectId} project.`;
+      }
+
+      if (audioData) {
+        try {
+          const audioBuffer = Buffer.from(audioData, 'base64');
+          const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
+
+          const openaiWs = new WebSocket(openaiWsUrl, {
+            headers: {
+              Authorization: `Bearer ${openAIApiKey}`,
+              'OpenAI-Beta': 'realtime=v1',
+            },
+          });
+
+          openaiWs.on('open', () => {
+            console.log('Connected to OpenAI Realtime API');
+            openaiWs.send(JSON.stringify({
+              type: 'session.update',
+              session: { instructions: systemMessageContent },
+            }));
+            openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioBuffer.toString('base64') }));
+            openaiWs.send(JSON.stringify({
+              type: 'response.create',
+              response: { modalities: ['text'], instructions: 'Please respond to the user.' },
+            }));
+          });
+
+          openaiWs.on('message', async (message) => {
+            const event = JSON.parse(message);
+            console.log('OpenAI WebSocket message:', event);
+            if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
+              const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
+              if (aiReply) {
+                // Make Airtable update async - don't await
+                updateAirtableConversation(
+                  sessionId, 
+                  projectId, 
+                  chatUrl, 
+                  headersAirtable, 
+                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
+                  existingRecordId
+                ).catch(err => console.error('Airtable update error:', err));
+                
+                res.json({ reply: aiReply });
+              } else {
+                console.error('No valid reply received from OpenAI WebSocket.');
+                res.status(500).json({ error: 'No valid reply received from OpenAI.' });
+              }
+              openaiWs.close();
+            }
+          });
+
+          openaiWs.on('error', (error) => {
+            console.error('OpenAI WebSocket error:', error);
+            res.status(500).json({ error: 'Failed to communicate with OpenAI' });
+          });
+          
+        } catch (error) {
+          console.error('Error processing audio data:', error);
+          res.status(500).json({ error: 'Error processing audio data.', details: error.message });
+        }
+      } else if (userMessage) {
+        try {
+          console.log('Sending text message to OpenAI:', { 
+            userMessageLength: userMessage.length, 
+            systemMessageLength: systemMessageContent.length 
+          });
+          const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+          console.log('Received AI response:', aiReply ? aiReply.slice(0, 100) + '...' : null);
+          if (aiReply) {
+            // Make Airtable update async - don't await
+            updateAirtableConversation(
+              sessionId, 
+              projectId, 
+              chatUrl, 
+              headersAirtable, 
+              `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
+              existingRecordId
+            ).catch(err => console.error('Airtable update error:', err));
+            
+            return res.json({ reply: aiReply });
+          } else {
+            console.error('No text reply received from OpenAI.');
+            return res.status(500).json({ error: 'No text reply received from OpenAI.' });
+          }
+        } catch (error) {
+          console.error('Error fetching text response from OpenAI:', error);
+          return res.status(500).json({ error: 'Error fetching text response from OpenAI.', details: error.message });
+        }
+      }
+    } catch (error) {
+      console.error('Error in handler:', error);
+      return res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+  } else {
+    res.setHeader("Allow", ["POST", "OPTIONS"]);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+}
+
+async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
+  try {
+    // Add better error handling and message length validation
+    const messages = [
+      { role: 'system', content: systemMessageContent },
+      { role: 'user', content: userMessage }
+    ];
+    
+    // Calculate total tokens (rough estimate)
+    const totalLength = systemMessageContent.length + userMessage.length;
+    console.log(`Total message length: ${totalLength} characters`);
+    
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: messages,
+        max_tokens: 1000,
+        temperature: 0.7 // Add temperature for consistency
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('OpenAI API error:', response.status, errorData);
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('OpenAI response:', data);
+    if (data.choices && data.choices.length > 0) {
+      return data.choices[0].message.content;
+    } else {
+      console.error('No valid choices in OpenAI response.');
+      return null;
+    }
+  } catch (error) {
+    console.error('Error in getTextResponseFromOpenAI:', error);
+    throw error;
+  }
+}
+
+async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
+  try {
+    // Truncate conversation before saving to Airtable to avoid size limits
+    let conversationToSave = updatedConversation;
+    if (conversationToSave.length > 10000) {
+      // Keep only the last 10000 characters
+      conversationToSave = '...' + conversationToSave.slice(-10000);
+    }
+    
+    const recordData = {
+      fields: {
+        SessionID: sessionId,
+        ProjectID: projectId || 'default',
+        Conversation: conversationToSave
+      }
+    };
+
+    if (existingRecordId) {
+      // Update existing record
+      await fetch(`${chatUrl}/${existingRecordId}`, {
+        method: 'PATCH',
+        headers: headersAirtable,
+        body: JSON.stringify({ fields: recordData.fields }),
+      });
+      console.log(`Updated conversation for project: ${projectId}, session: ${sessionId}`);
+    } else {
+      // Create new record
+      await fetch(chatUrl, {
+        method: 'POST',
+        headers: headersAirtable,
+        body: JSON.stringify(recordData),
+      });
+      console.log(`Created new conversation for project: ${projectId}, session: ${sessionId}`);
+    }
+  } catch (error) {
+    console.error('Error updating Airtable conversation:', error);
+  }
+})) {
+                  mcpContext += '\n   💵 BUDGET DISCUSSED';
+                }
+                
+                mcpContext += `\n   • Key Points: ${meeting.summary}\n`;
+              }
+            });
+          }
+          
+          // Add strategic instructions
+          mcpContext += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
+          mcpContext += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
+          mcpContext += '2. Consider pending deals from meetings when suggesting integrations\n';
+          mcpContext += '3. Match high-budget brands with hero/featured integrations\n';
+          mcpContext += '4. If a brand was recently discussed in meetings, reference that context\n';
+          mcpContext += '5. Flag any brands that are close to closing (based on meeting summaries)\n';
+          
+          // Add to system message BEFORE the knowledge base
+          systemMessageContent = systemMessageContent.replace(
+            'You are a helpful assistant specialized in AI & Automation.',
+            'You are a helpful assistant specialized in AI & Automation.' + mcpContext
+          );
         } catch (error) {
           console.error('MCP search error:', error);
         }
