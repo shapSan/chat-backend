@@ -574,6 +574,8 @@ export default async function handler(req, res) {
           return res.status(400).json({ 
             error: 'Missing required fields',
             details: 'prompt is required'
+          }
+          
           // Add strategic instructions
           mcpContext += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
           mcpContext += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
