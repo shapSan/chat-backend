@@ -505,11 +505,11 @@ export default async function handler(req, res) {
           }
           
           // Build context from results
-          mcpContext = '\n\n🎯 LIVE DATA FROM YOUR AIRTABLE:\n\n';
+          mcpContext = '\n\n**PRIORITY CONTEXT FROM YOUR BUSINESS DATA:**\n\n';
           
           // Process brand results
           if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
-            mcpContext += '**BRANDS IN YOUR PIPELINE:**\n\n';
+            mcpContext += '**ACTIVE BRANDS IN YOUR PIPELINE:**\n\n';
             
             const brandsByStatus = {
               hot: [],
@@ -533,14 +533,14 @@ export default async function handler(req, res) {
               else if (brand.budgetNum >= 500000 && brand.budgetNum < 1000000) brandsByStatus.quickWins.push(brand);
               
               // Format brand entry
-              mcpContext += `• **${brand.name}**`;
+              mcpContext += `**${brand.name}**`;
               
               // Add status indicators
               if (daysSince < 7) mcpContext += ' 🔥 [HOT - Active this week]';
               else if (daysSince < 30) mcpContext += ' 🟡 [WARM - Recent activity]';
               
-              mcpContext += `\n  - Category: ${brand.category}`;
-              mcpContext += `\n  - Budget: ${brand.budget}`;
+              mcpContext += `\n- Category: ${brand.category}`;
+              mcpContext += `\n- Budget: ${brand.budget}`;
               
               if (brand.budgetNum >= 5000000) {
                 mcpContext += ' 💎 [HIGH VALUE]';
@@ -548,8 +548,9 @@ export default async function handler(req, res) {
                 mcpContext += ' ⚡ [QUICK WIN POTENTIAL]';
               }
               
-              if (brand.campaignSummary && brand.campaignSummary.length > 10) {
-                mcpContext += `\n  - Focus: ${brand.campaignSummary}`;
+              if (brand.fullCampaignSummary && brand.fullCampaignSummary.length > 10) {
+                // Use FULL campaign summary, not truncated
+                mcpContext += `\n- Current Focus: ${brand.fullCampaignSummary.trim()}`;
               }
               
               mcpContext += '\n\n';
@@ -557,13 +558,16 @@ export default async function handler(req, res) {
             
             // Add thinking summary with actual names
             if (brandsByStatus.hot.length > 0) {
-              mcpThinking.push(`HOT brands (${brandsByStatus.hot.length}): ${brandsByStatus.hot.slice(0, 3).map(b => b.name).join(', ')}`);
+              const hotBrandNames = brandsByStatus.hot.map(b => b.name);
+              mcpThinking.push(`HOT brands (${brandsByStatus.hot.length}): ${hotBrandNames.join(', ')}`);
             }
             if (brandsByStatus.highValue.length > 0) {
-              mcpThinking.push(`High-value brands ($5M+): ${brandsByStatus.highValue.slice(0, 3).map(b => b.name).join(', ')}`);
+              const highValueNames = brandsByStatus.highValue.map(b => b.name);
+              mcpThinking.push(`High-value brands ($5M+): ${highValueNames.join(', ')}`);
             }
             if (brandsByStatus.quickWins.length > 0) {
-              mcpThinking.push(`Quick win opportunities: ${brandsByStatus.quickWins.slice(0, 3).map(b => b.name).join(', ')}`);
+              const quickWinNames = brandsByStatus.quickWins.map(b => b.name);
+              mcpThinking.push(`Quick win opportunities: ${quickWinNames.join(', ')}`);
             }
           }
           
@@ -598,21 +602,57 @@ export default async function handler(req, res) {
               }
               
               // Format meeting entry
-              mcpContext += `• **${meeting.title}** (${meeting.date})\n`;
+              mcpContext += `**${meeting.title}** (${meeting.date})\n`;
               
               if (mentionedBrands.length > 0) {
-                mcpContext += `  - Brands discussed: ${mentionedBrands.join(', ')}\n`;
+                mcpContext += `- Brands discussed: ${mentionedBrands.join(', ')}\n`;
               }
               
-              // Extract key points from summary
-              if (summaryLower.includes('loves') || summaryLower.includes('excited')) {
-                mcpContext += '  - ✅ Positive reception\n';
+              // Extract specific quotes and details from summary
+              const summaryLower = meeting.fullSummary.toLowerCase();
+              const fullSummary = meeting.fullSummary;
+              
+              // Look for specific details to quote
+              if (summaryLower.includes('wants')) {
+                const wantsMatch = fullSummary.match(/wants?\s+([^.]+)/i);
+                if (wantsMatch) {
+                  mcpContext += `- Specific request: "${wantsMatch[0]}"\n`;
+                }
               }
-              if (summaryLower.includes('concern') || summaryLower.includes('worried')) {
-                mcpContext += '  - ⚠️ Has concerns to address\n';
+              
+              if (summaryLower.includes('loves')) {
+                const lovesMatch = fullSummary.match(/loves?\s+([^.]+)/i);
+                if (lovesMatch) {
+                  mcpContext += `- Positive feedback: "${lovesMatch[0]}"\n`;
+                }
               }
-              if (summaryLower.includes('deadline') || summaryLower.includes('by')) {
-                mcpContext += '  - ⏰ Time-sensitive\n';
+              
+              if (summaryLower.includes('concerned') || summaryLower.includes('worried')) {
+                const concernMatch = fullSummary.match(/(?:concerned|worried)\s+about\s+([^.]+)/i);
+                if (concernMatch) {
+                  mcpContext += `- Concern: "${concernMatch[0]}"\n`;
+                }
+              }
+              
+              if (summaryLower.includes('deadline') || summaryLower.includes('by friday') || summaryLower.includes('by monday')) {
+                const deadlineMatch = fullSummary.match(/(?:by|deadline|approval.*by)\s+([^.]+)/i);
+                if (deadlineMatch) {
+                  mcpContext += `- ⏰ Timing: "${deadlineMatch[0]}"\n`;
+                }
+              }
+              
+              if (summaryLower.includes('flying in') || summaryLower.includes('meeting with')) {
+                const meetingMatch = fullSummary.match(/(?:flying in|meeting with)\s+([^.]+)/i);
+                if (meetingMatch) {
+                  mcpContext += `- 📅 Upcoming: "${meetingMatch[0]}"\n`;
+                }
+              }
+              
+              if (summaryLower.includes('pulled out') || summaryLower.includes('budget available')) {
+                const budgetMatch = fullSummary.match(/\$[\d,]+(?:M|K)?\s+(?:budget)?\s*(?:now)?\s*available/i);
+                if (budgetMatch) {
+                  mcpContext += `- 💰 Opportunity: "${budgetMatch[0]}"\n`;
+                }
               }
               
               mcpContext += '\n';
@@ -647,8 +687,7 @@ export default async function handler(req, res) {
             mcpContext += '- Look for brands with relevant campaign themes\n';
           }
           
-          // Update system message with MCP context
-          systemMessageContent += mcpContext;
+          // DON'T update system message yet - we'll structure it properly
           
         } catch (error) {
           console.error('❌ MCP search error:', error);
@@ -656,13 +695,15 @@ export default async function handler(req, res) {
         }
       }
 
-      // Fetch knowledge base
+      // Fetch knowledge base - PRESERVE FORMATTING
+      let knowledgeBaseInstructions = '';
       try {
         const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
         if (kbResponse.ok) {
           const knowledgeBaseData = await kbResponse.json();
           const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
-          systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
+          knowledgeBaseInstructions = knowledgeEntries;
+          // Don't add to system message yet - we'll structure it properly later
         }
       } catch (error) {
         console.error(`Error fetching knowledge base:`, error);
@@ -690,8 +731,28 @@ export default async function handler(req, res) {
       }
 
       const currentTimePDT = getCurrentTimeInPDT();
-      systemMessageContent += ` Current time in PDT: ${currentTimePDT}.`;
       
+      // RESTRUCTURE THE SYSTEM MESSAGE PROPERLY
+      // 1. Start with base identity
+      systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
+      
+      // 2. Add knowledge base instructions WITH PROPER FORMATTING
+      if (knowledgeBaseInstructions) {
+        systemMessageContent = knowledgeBaseInstructions; // Replace entirely with KB instructions
+      }
+      
+      // 3. Add MCP context if we have it
+      if (mcpContext) {
+        systemMessageContent += mcpContext;
+      }
+      
+      // 4. Add conversation history
+      if (conversationContext) {
+        systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+      }
+      
+      // 5. Add metadata
+      systemMessageContent += `\n\nCurrent time in PDT: ${currentTimePDT}.`;
       if (projectId && projectId !== 'default') {
         systemMessageContent += ` You are assisting with the ${projectId} project.`;
       }
