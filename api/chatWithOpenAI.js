@@ -93,7 +93,7 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-// MCP Search function - Direct implementation without HTTP call
+// Enhanced MCP Search function with meeting details extraction
 async function callMCPSearch(query, projectId, limit = 10) {
   console.log('🚀 callMCPSearch called with:', { query, projectId, limit });
   try {
@@ -150,17 +150,24 @@ async function callMCPSearch(query, projectId, limit = 10) {
     
     const data = await response.json();
     
-    // Process results based on type
+    // Process results based on type with enhanced extraction
     let processed;
     if (searchType === 'meetings') {
       processed = data.records.map(record => {
         const fields = record.fields;
+        const summary = fields['Summary'] || '';
+        
+        // Extract insights from meeting data
+        const insights = extractMeetingInsights(summary);
+        
         return {
           id: record.id,
           title: fields['Title'] || 'Untitled Meeting',
           date: fields['Date'] || 'No date',
-          summary: fields['Summary'] ? fields['Summary'].substring(0, 150) + '...' : 'No summary',
+          summary: summary.substring(0, 150) + '...',
+          fullSummary: summary,
           link: fields['Link'] || null,
+          insights: insights,
           relevance: 50,
           type: 'meeting'
         };
@@ -170,7 +177,9 @@ async function callMCPSearch(query, projectId, limit = 10) {
         const fields = record.fields;
         
         let budgetDisplay = 'Budget TBD';
+        let budgetNum = 0;
         if (fields['Budget'] !== undefined && fields['Budget'] !== null) {
+          budgetNum = fields['Budget'];
           budgetDisplay = `$${fields['Budget'].toLocaleString()}`;
         }
         
@@ -179,16 +188,23 @@ async function callMCPSearch(query, projectId, limit = 10) {
           categoryDisplay = fields['Category'].join(', ');
         }
         
+        // Extract insights from brand data
+        const campaignSummary = fields['Campaign Summary'] || '';
+        const brandInsights = extractBrandInsights('', campaignSummary);
+        
         return {
           id: record.id,
           name: fields['Brand Name'] || 'Unknown Brand',
           category: categoryDisplay,
           budget: budgetDisplay,
+          budgetNum: budgetNum,
           lastModified: fields['Last Modified'] || 'Unknown',
-          campaignSummary: fields['Campaign Summary'] ? 
-            fields['Campaign Summary'].substring(0, 100) + '...' : '',
+          campaignSummary: campaignSummary.substring(0, 100) + '...',
+          fullCampaignSummary: campaignSummary,
+          insights: brandInsights,
           relevance: 50,
-          type: 'brand'
+          type: 'brand',
+          meetingReferences: [] // Initialize for later use
         };
       });
     }
@@ -206,11 +222,321 @@ async function callMCPSearch(query, projectId, limit = 10) {
   }
 }
 
+// Extract insights from meeting summaries
+function extractMeetingInsights(text) {
+  const insights = {
+    concerns: [],
+    requests: [],
+    opportunities: [],
+    deadlines: [],
+    quotes: []
+  };
+  
+  const textLower = text.toLowerCase();
+  
+  // Extract concerns
+  const concernPatterns = [
+    /concerned about (.+?)(?:\.|,|;|$)/gi,
+    /worried about (.+?)(?:\.|,|;|$)/gi,
+    /hesitant about (.+?)(?:\.|,|;|$)/gi,
+    /concern:?\s*(.+?)(?:\.|,|;|$)/gi
+  ];
+  
+  concernPatterns.forEach(pattern => {
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      insights.concerns.push(match[1].trim());
+    }
+  });
+  
+  // Extract specific requests
+  const requestPatterns = [
+    /wants? (.+?)(?:\.|,|;|$)/gi,
+    /looking for (.+?)(?:\.|,|;|$)/gi,
+    /needs? (.+?)(?:\.|,|;|$)/gi,
+    /requested (.+?)(?:\.|,|;|$)/gi,
+    /specifically asked for (.+?)(?:\.|,|;|$)/gi
+  ];
+  
+  requestPatterns.forEach(pattern => {
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      insights.requests.push(match[1].trim());
+    }
+  });
+  
+  // Extract deadlines
+  const deadlinePatterns = [
+    /by (monday|tuesday|wednesday|thursday|friday|next week|end of month|end of week|tomorrow)/gi,
+    /deadline[:\s]+([^.,;]+)/gi,
+    /approval needed by ([^.,;]+)/gi,
+    /decision by ([^.,;]+)/gi,
+    /flying in ([^.,;]+)/gi
+  ];
+  
+  deadlinePatterns.forEach(pattern => {
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      insights.deadlines.push(match[1].trim());
+    }
+  });
+  
+  // Extract direct quotes (in quotes)
+  const quotePattern = /"([^"]+)"/g;
+  const quotes = text.matchAll(quotePattern);
+  for (const match of quotes) {
+    insights.quotes.push(match[1]);
+  }
+  
+  // Extract opportunities
+  if (textLower.includes('pulled out') || textLower.includes('cancelled') || textLower.includes('withdrew')) {
+    const pulloutMatch = text.match(/(\w+)\s+(?:pulled out|cancelled|withdrew)/i);
+    if (pulloutMatch) {
+      insights.opportunities.push(`${pulloutMatch[1]} pulled out - budget may be available`);
+    }
+  }
+  if (textLower.includes('flying in') || textLower.includes('visiting') || textLower.includes('in town')) {
+    insights.opportunities.push('In-person meeting opportunity');
+  }
+  if (textLower.includes('loves') || textLower.includes('excited about')) {
+    const lovesMatch = text.match(/(?:loves?|excited about)\s+(.+?)(?:\.|,|;|$)/i);
+    if (lovesMatch) {
+      insights.opportunities.push(`Strong interest in: ${lovesMatch[1]}`);
+    }
+  }
+  
+  return insights;
+}
+
+// Extract insights from brand notes
+function extractBrandInsights(notes, campaignSummary) {
+  const insights = {
+    preferences: [],
+    restrictions: [],
+    pastSuccess: [],
+    timing: [],
+    keyConcerns: []
+  };
+  
+  const combined = `${notes} ${campaignSummary}`.toLowerCase();
+  const fullText = `${notes} ${campaignSummary}`;
+  
+  // Extract preferences
+  const prefPatterns = [
+    /prefers?\s+(.+?)(?:\.|,|;|$)/gi,
+    /likes?\s+(.+?)(?:\.|,|;|$)/gi,
+    /favor\s+(.+?)(?:\.|,|;|$)/gi,
+    /interested in\s+(.+?)(?:\.|,|;|$)/gi
+  ];
+  
+  prefPatterns.forEach(pattern => {
+    const matches = fullText.matchAll(pattern);
+    for (const match of matches) {
+      insights.preferences.push(match[1].trim());
+    }
+  });
+  
+  // Extract restrictions
+  if (combined.includes('no alcohol')) insights.restrictions.push('No alcohol scenes');
+  if (combined.includes('no violence')) insights.restrictions.push('No violence');
+  if (combined.includes('no smoking')) insights.restrictions.push('No smoking');
+  if (combined.includes('family friendly')) insights.restrictions.push('Must be family friendly');
+  if (combined.includes('no competitors')) insights.restrictions.push('No competitor brands');
+  
+  // Extract timing
+  const timingPatterns = [
+    /(q[1-4]\s*\d{4})/gi,
+    /launch(?:ing)?\s+(.+?)(?:\.|,|;|$)/gi,
+    /campaign\s+(?:starts?|begins?)\s+(.+?)(?:\.|,|;|$)/gi
+  ];
+  
+  timingPatterns.forEach(pattern => {
+    const matches = fullText.matchAll(pattern);
+    for (const match of matches) {
+      insights.timing.push(match[1].trim());
+    }
+  });
+  
+  // Extract key concerns from notes
+  if (combined.includes('concern') || combined.includes('worried')) {
+    const concernMatch = fullText.match(/(?:concern|worried)\s+(?:about\s+)?(.+?)(?:\.|,|;|$)/i);
+    if (concernMatch) {
+      insights.keyConcerns.push(concernMatch[1].trim());
+    }
+  }
+  
+  return insights;
+}
+
+// Smart context builder with priority system
+function buildSmartContext(brandResults, meetingResults, userMessage, mcpThinking) {
+  let context = '\n\n🎯 PRIORITY CONTEXT FROM YOUR BUSINESS DATA:\n\n';
+  
+  // Priority 1: HOT brands (always include)
+  const hotBrands = brandResults.matches.filter(b => {
+    const days = Math.floor((Date.now() - new Date(b.lastModified)) / (1000 * 60 * 60 * 24));
+    return days < 7;
+  });
+  
+  // Priority 2: Brands with high budgets
+  const highValueBrands = brandResults.matches.filter(b => b.budgetNum >= 5000000);
+  
+  // Priority 3: Brands mentioned in recent meetings
+  const brandsInMeetings = brandResults.matches.filter(b => b.meetingReferences && b.meetingReferences.length > 0);
+  
+  // Build context based on priorities
+  if (hotBrands.length > 0) {
+    context += '**🔥 HOT BRANDS (Updated This Week):**\n';
+    hotBrands.forEach(brand => {
+      context += formatBrandEntry(brand, 'hot');
+    });
+    mcpThinking.push(`${hotBrands.length} HOT brands: ${hotBrands.map(b => b.name).join(', ')}`);
+  }
+  
+  if (highValueBrands.length > 0 && context.length < 3000) {
+    context += '\n**💰 HIGH-VALUE OPPORTUNITIES:**\n';
+    const uniqueHighValue = highValueBrands.filter(b => !hotBrands.includes(b));
+    uniqueHighValue.forEach(brand => {
+      if (context.length < 3500) {
+        context += formatBrandEntry(brand, 'highvalue');
+      }
+    });
+    mcpThinking.push(`${highValueBrands.length} high-value opportunities ($5M+)`);
+  }
+  
+  // Only add other brands if we have space
+  const remainingBrands = brandResults.matches.filter(b => 
+    !hotBrands.includes(b) && !highValueBrands.includes(b)
+  );
+  
+  if (remainingBrands.length > 0 && context.length < 3000) {
+    context += '\n**OTHER ACTIVE BRANDS:**\n';
+    remainingBrands.slice(0, 3).forEach(brand => {
+      context += formatBrandEntry(brand, 'standard');
+    });
+  }
+  
+  // Add only the most relevant meetings
+  if (meetingResults && meetingResults.matches && context.length < 3500) {
+    const relevantMeetings = meetingResults.matches
+      .filter(m => m.insights && (m.insights.deadlines.length > 0 || m.insights.opportunities.length > 0))
+      .slice(0, 3);
+    
+    if (relevantMeetings.length > 0) {
+      context += '\n**URGENT MEETINGS & OPPORTUNITIES:**\n';
+      relevantMeetings.forEach(meeting => {
+        context += formatMeetingEntry(meeting, brandResults.matches);
+      });
+      
+      // Add insights about meetings
+      const deadlines = relevantMeetings.flatMap(m => m.insights.deadlines);
+      if (deadlines.length > 0) {
+        mcpThinking.push(`Urgent deadlines: ${deadlines.join(', ')}`);
+      }
+    }
+  }
+  
+  // Add strategic instructions
+  context += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
+  context += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
+  context += '2. Match high-budget brands with hero/featured integrations\n';
+  context += '3. Reference specific meeting context when brands were discussed\n';
+  context += '4. Connect creative solutions to stated brand concerns\n';
+  context += '5. Highlight timing opportunities and deadlines\n';
+  
+  return context;
+}
+
+function formatBrandEntry(brand, priority) {
+  let entry = `\n🔥 ${brand.name}`;
+  
+  // Add status indicator
+  const daysSinceModified = Math.floor((Date.now() - new Date(brand.lastModified)) / (1000 * 60 * 60 * 24));
+  if (daysSinceModified < 7) {
+    entry += ' [HOT - Updated this week!]';
+  } else if (daysSinceModified < 30) {
+    entry += ' [WARM - Recent activity]';
+  }
+  
+  // Include essential info based on priority
+  if (priority === 'hot' || priority === 'highvalue') {
+    entry += `\n   • Budget: ${brand.budget}`;
+    entry += `\n   • Category: ${brand.category}`;
+    
+    if (brand.campaignSummary) {
+      entry += `\n   • Current Focus: ${brand.campaignSummary}`;
+    }
+    
+    if (brand.insights) {
+      if (brand.insights.keyConcerns && brand.insights.keyConcerns.length > 0) {
+        entry += `\n   • 🎯 Key Concern: ${brand.insights.keyConcerns[0]}`;
+      }
+      if (brand.insights.restrictions && brand.insights.restrictions.length > 0) {
+        entry += `\n   • ⚠️ Restrictions: ${brand.insights.restrictions.join(', ')}`;
+      }
+      if (brand.insights.timing && brand.insights.timing.length > 0) {
+        entry += `\n   • 📅 Timing: ${brand.insights.timing.join(', ')}`;
+      }
+    }
+    
+    if (brand.meetingReferences && brand.meetingReferences.length > 0) {
+      entry += `\n   • 📅 Meeting History:`;
+      brand.meetingReferences.forEach(ref => {
+        entry += `\n      - Discussed in "${ref.meetingTitle}" (${ref.meetingDate})`;
+      });
+    }
+    
+    // Add value indicator
+    if (brand.budgetNum >= 5000000) {
+      entry += '\n   • 💰 HIGH-VALUE OPPORTUNITY - Prioritize for major integrations';
+    } else if (brand.budgetNum >= 1000000) {
+      entry += '\n   • 💎 SOLID BUDGET - Good for featured placements';
+    }
+  } else {
+    // Minimal info for standard brands
+    entry += ` - ${brand.category} - ${brand.budget}`;
+  }
+  
+  entry += '\n';
+  return entry;
+}
+
+function formatMeetingEntry(meeting, allBrands) {
+  let entry = `\n📅 ${meeting.title} (${meeting.date})`;
+  
+  const daysSinceMeeting = Math.floor((Date.now() - new Date(meeting.date)) / (1000 * 60 * 60 * 24));
+  if (daysSinceMeeting < 7) {
+    entry += ' [THIS WEEK]';
+  }
+  
+  if (meeting.insights) {
+    if (meeting.insights.concerns.length > 0) {
+      entry += `\n   • ⚠️ Concerns: ${meeting.insights.concerns.join(', ')}`;
+    }
+    if (meeting.insights.requests.length > 0) {
+      entry += `\n   • 📋 Requests: ${meeting.insights.requests.join(', ')}`;
+    }
+    if (meeting.insights.deadlines.length > 0) {
+      entry += `\n   • ⏰ Deadlines: ${meeting.insights.deadlines.join(', ')}`;
+    }
+    if (meeting.insights.quotes.length > 0) {
+      entry += `\n   • 💬 Direct quotes: "${meeting.insights.quotes.join('", "')}"`;
+    }
+    if (meeting.insights.opportunities.length > 0) {
+      entry += `\n   • 🎯 Opportunities: ${meeting.insights.opportunities.join(', ')}`;
+    }
+  }
+  
+  entry += '\n';
+  return entry;
+}
+
 export default async function handler(req, res) {
   // Set CORS headers early (before any conditionals)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end(); // respond early for preflight
@@ -384,53 +710,132 @@ export default async function handler(req, res) {
       let systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
       let conversationContext = '';
       let existingRecordId = null;
+      let mcpThinking = []; // Store thinking process for frontend
 
-      // Check if this is a search query (MOVED HERE - around line 190)
+      // Fetch conversation history first to help determine if MCP is needed
+      try {
+        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
+        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
+        if (historyResponse.ok) {
+          const result = await historyResponse.json();
+          if (result.records.length > 0) {
+            conversationContext = result.records[0].fields.Conversation || '';
+            existingRecordId = result.records[0].id;
+
+            // Truncate long history to avoid OpenAI errors
+            if (conversationContext.length > 3000) {
+              conversationContext = conversationContext.slice(-3000);
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching conversation history for project ${projectId}:`, error);
+      }
+
+      // Smart search detection using semantic understanding
       const isSearchQuery = userMessage && (
-        userMessage.toLowerCase().includes('brand') ||
-        userMessage.toLowerCase().includes('match') ||
+        // Direct project mentions
+        userMessage.toLowerCase().includes('project') ||
+        userMessage.toLowerCase().includes('production') ||
+        userMessage.toLowerCase().includes('show') ||
+        userMessage.toLowerCase().includes('film') ||
+        userMessage.toLowerCase().includes('series') ||
+        // Any request for suggestions/recommendations
         userMessage.toLowerCase().includes('suggest') ||
-        userMessage.toLowerCase().includes('integration') ||
-        userMessage.toLowerCase().includes('easy money') ||
-        userMessage.toLowerCase().includes('quick approval') ||
-        userMessage.toLowerCase().includes('show me') ||
-        userMessage.toLowerCase().includes('list') ||
+        userMessage.toLowerCase().includes('recommend') ||
         userMessage.toLowerCase().includes('find') ||
-        userMessage.toLowerCase().includes('search')
+        userMessage.toLowerCase().includes('what about') ||
+        userMessage.toLowerCase().includes('how about') ||
+        // Or just analyze if it seems like they're asking for brand suggestions
+        /\b(brand|partner|sponsor|integration|placement)\b/i.test(userMessage)
       );
 
-      // ADD THESE LOGS:
-      console.log('📝 User message:', userMessage);
-      console.log('🔍 Is search query?', isSearchQuery);
+      // Even smarter: if the user message mentions any specific industry/category
+      const industryKeywords = ['automotive', 'tech', 'fashion', 'beverage', 'food', 'retail', 'entertainment', 'beauty', 'sports', 'travel'];
+      const mentionsIndustry = industryKeywords.some(keyword => 
+        userMessage.toLowerCase().includes(keyword)
+      );
 
-      // MCP Search Integration
-      if (isSearchQuery) {
-        console.log('✅ Search query detected, calling MCP...'); // ADD THIS
+      // Final decision
+      const shouldSearchMCP = isSearchQuery || mentionsIndustry || 
+        // If conversation already has brand suggestions, continue using MCP
+        (conversationContext && conversationContext.includes('Brand integration suggestions'));
+
+      console.log('📝 User message:', userMessage);
+      console.log('🔍 Should search MCP?', shouldSearchMCP);
+
+      // MCP Search Integration - Enhanced for intelligent context
+      if (shouldSearchMCP) {
+        console.log('✅ Search query detected, calling MCP...');
         try {
           console.log('Using MCP for smart search...');
-          const results = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 10);
           
-          console.log('📊 MCP results:', results); // ADD THIS
+          // First, search for brands
+          const brandResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 10);
           
-          if (results && !results.error) {
-            console.log('✅ MCP returned data, formatting for GPT...'); // ADD THIS
-            // Format results for GPT - Updated to use 'matches' instead of 'results'
-            const formattedResults = results.matches.map(r => {
-              // Format based on the type of match
-              if (r.type === 'brand') {
-                return `Brand: ${r.name}\nCategory: ${r.category}\nBudget: ${r.budget}\nLast Modified: ${r.lastModified}\nSummary: ${r.campaignSummary}`;
-              } else if (r.type === 'meeting') {
-                return `Meeting: ${r.title}\nDate: ${r.date}\nSummary: ${r.summary}${r.link ? '\nLink: ' + r.link : ''}`;
-              } else {
-                return `Item: ${r.name}\nDetails: ${r.data}`;
-              }
-            }).join('\n\n');
+          // Smart meeting search based on context
+          let meetingResults = null;
+          if (brandResults && brandResults.matches && brandResults.matches.length > 0) {
+            // Build a smart search query based on found brands
+            const brandNames = brandResults.matches.slice(0, 3).map(b => b.name).join(' ');
+            const categoryNames = [...new Set(brandResults.matches.map(b => b.category))].join(' ');
             
-            // Add to system message
-            systemMessageContent += `\n\nSearch Results:\n${formattedResults}`;
+            // Search for meetings that might be relevant to these specific brands/categories
+            const smartMeetingQuery = `${brandNames} ${categoryNames} integration discussion`;
+            meetingResults = await callMCPSearch(smartMeetingQuery, projectId || 'HB-PitchAssist', 5);
+          } else if (userMessage.toLowerCase().includes('meeting') || 
+                     userMessage.toLowerCase().includes('discussed')) {
+            // User explicitly asking about meetings
+            meetingResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 5);
           }
+          
+          console.log('📊 Brand results:', brandResults);
+          console.log('📊 Meeting results:', meetingResults);
+          
+          // Cross-reference brands with meetings
+          if (brandResults && !brandResults.error && brandResults.matches.length > 0 &&
+              meetingResults && !meetingResults.error && meetingResults.matches.length > 0) {
+            
+            brandResults.matches.forEach(brand => {
+              meetingResults.matches.forEach(meeting => {
+                // Check if brand is mentioned in meeting - be precise
+                const brandName = brand.name.toLowerCase();
+                const regex = new RegExp(`\\b${brandName}\\b`, 'i');
+                
+                if (regex.test(meeting.fullSummary)) {
+                  if (!brand.meetingReferences) brand.meetingReferences = [];
+                  brand.meetingReferences.push({
+                    meetingTitle: meeting.title,
+                    meetingDate: meeting.date,
+                    context: meeting.insights
+                  });
+                  
+                  // Add to thinking
+                  mcpThinking.push(`${brand.name} discussed in "${meeting.title}" on ${meeting.date}`);
+                }
+              });
+            });
+          }
+          
+          // Build intelligent context from results
+          let mcpContext = '';
+          if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
+            mcpContext = buildSmartContext(brandResults, meetingResults, userMessage, mcpThinking);
+          } else {
+            mcpThinking.push('No brands found in pipeline');
+          }
+          
+          // Add to system message
+          if (mcpContext) {
+            systemMessageContent = systemMessageContent.replace(
+              'You are a helpful assistant specialized in AI & Automation.',
+              'You are a helpful assistant specialized in AI & Automation.' + mcpContext
+            );
+          }
+          
         } catch (error) {
           console.error('MCP search error:', error);
+          mcpThinking.push('MCP search encountered an error');
         }
       }
 
@@ -449,26 +854,9 @@ export default async function handler(req, res) {
         console.error(`Error fetching knowledge base for project ${projectId}:`, error);
       }
 
-      // Fetch conversation history from project-specific table
-      try {
-        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
-        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
-        if (historyResponse.ok) {
-          const result = await historyResponse.json();
-          if (result.records.length > 0) {
-            conversationContext = result.records[0].fields.Conversation || '';
-            existingRecordId = result.records[0].id;
-
-            // Truncate long history to avoid OpenAI errors
-            if (conversationContext.length > 3000) {
-              conversationContext = conversationContext.slice(-3000);
-            }
-
-            systemMessageContent += ` Conversation so far: "${conversationContext}".`;
-          }
-        }
-      } catch (error) {
-        console.error(`Error fetching conversation history for project ${projectId}:`, error);
+      // Add conversation context to system message
+      if (conversationContext) {
+        systemMessageContent += ` Conversation so far: "${conversationContext}".`;
       }
 
       const currentTimePDT = getCurrentTimeInPDT();
@@ -520,7 +908,11 @@ export default async function handler(req, res) {
                   existingRecordId
                 ).catch(err => console.error('Airtable update error:', err));
                 
-                res.json({ reply: aiReply });
+                res.json({ 
+                  reply: aiReply,
+                  mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
+                  usedMCP: shouldSearchMCP
+                });
               } else {
                 console.error('No valid reply received from OpenAI WebSocket.');
                 res.status(500).json({ error: 'No valid reply received from OpenAI.' });
@@ -557,7 +949,11 @@ export default async function handler(req, res) {
               existingRecordId
             ).catch(err => console.error('Airtable update error:', err));
             
-            return res.json({ reply: aiReply });
+            return res.json({ 
+              reply: aiReply,
+              mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
+              usedMCP: shouldSearchMCP
+            });
           } else {
             console.error('No text reply received from OpenAI.');
             return res.status(500).json({ error: 'No text reply received from OpenAI.' });
