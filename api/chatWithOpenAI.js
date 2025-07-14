@@ -797,7 +797,7 @@ export default async function handler(req, res) {
       console.log('🔍 Should search MCP?', shouldSearchMCP);
 
       // MCP Search Integration - Enhanced for intelligent context
-      if (isSearchQuery) {
+      if (shouldSearchMCP) {
         console.log('✅ Search query detected, calling MCP...');
         try {
           console.log('Using MCP for smart search...');
