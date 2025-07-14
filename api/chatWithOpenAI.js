@@ -181,7 +181,7 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
   }
 }
 
-// Stage 2: OpenAI narrowing function - ENHANCED
+// Stage 2: OpenAI narrowing function
 async function narrowWithOpenAI(brands, meetings, userMessage) {
   try {
     console.log(`🧮 Stage 2: Narrowing ${brands.length} brands with OpenAI...`);
@@ -261,7 +261,7 @@ ${brands.slice(0, 50).map(b =>
   }
 }
 
-// Stage 3: Claude-powered search handler - ENHANCED WITH MEETING LINKS
+// Stage 3: Claude-powered search handler for intelligent brand matching
 async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
   console.log('🤖 Starting 3-stage intelligent brand-project matching...');
   
@@ -293,9 +293,6 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     // Stage 3: Deep analysis with Claude
     console.log('🧠 Stage 3: Claude deep analysis on top candidates...');
     
-    // Store meeting data for link references
-    const meetingLinks = {};
-    
     // Start with the knowledge base instructions from Airtable - this is the primary prompt
     let systemPrompt = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
     
@@ -319,56 +316,22 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       console.log(`📊 Sending ${brandInfo.length} top brands to Claude for deep analysis`);
     }
     
-    // ENHANCED: Add meeting context WITH brand mentions and prepare link data
-    if (meetingData && meetingData.records && meetingData.records.length > 0 && topBrands) {
-      systemPrompt += "**RECENT MEETINGS & BRAND MENTIONS:**\n```json\n";
-      
-      // Create a map of brand names for quick lookup
-      const topBrandNames = new Set(topBrands.map(b => b.fields['Brand Name']?.toLowerCase()).filter(Boolean));
-      
+    if (meetingData && meetingData.records && meetingData.records.length > 0) {
+      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n```json\n";
       const meetingInfo = meetingData.records
-        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10)
-        .slice(0, 20)
-        .map(r => {
-          const summary = r.fields['Summary'] || '';
-          const title = r.fields['Title'] || 'Untitled';
-          const link = r.fields['Link'] || null;
-          
-          // Store meeting link for later reference
-          if (link) {
-            meetingLinks[title] = link;
-          }
-          
-          // Find which top brands are mentioned in this meeting
-          const mentionedBrands = [];
-          topBrands.forEach(brandRecord => {
-            const brandName = brandRecord.fields['Brand Name'];
-            if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
-              mentionedBrands.push(brandName);
-            }
-          });
-          
-          return {
-            meeting: title,
-            date: r.fields['Date'] || 'No date',
-            key_points: summary,
-            brands_mentioned: mentionedBrands.length > 0 ? mentionedBrands : undefined,
-            has_link: !!link // Let Claude know a link exists
-          };
-        })
-        .filter(m => m.key_points); // Only include meetings with content
+        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10) // Only meaningful meetings
+        .slice(0, 10) // Reduce from 20 to 10
+        .map(r => ({
+          meeting: r.fields['Title'] || 'Untitled',
+          date: r.fields['Date'] || 'No date',
+          key_points: (r.fields['Summary'] || '').slice(0, 200) // Limit summary length
+        }));
       
       systemPrompt += JSON.stringify(meetingInfo, null, 2);
       systemPrompt += "\n```\n\n";
       
-      // Add instruction about meeting references
-      systemPrompt += "\n**When referencing meetings in your response, always use the exact meeting title as it appears in the data above. Format meeting references as [[Meeting Title]] so they can be properly linked.**\n";
-      
       console.log(`📅 Sending ${meetingInfo.length} relevant meetings to Claude`);
     }
-    
-    // ENHANCED: Add explicit instruction to use high-scoring brands
-    systemPrompt += "\n**IMPORTANT**: Prioritize brands with relevance scores above 70. The scores indicate how well each brand fits this specific production based on genre, budget, and campaign focus.\n";
     
     console.log('📤 Calling Claude API with focused data...');
     
@@ -381,8 +344,8 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022', // Most capable and cost-effective
-        max_tokens: 2000,
+        model: 'claude-3-haiku-20240307', // Faster, cheaper, less likely to timeout
+        max_tokens: 1500, // Reduced from 2000
         temperature: 0.7,
         system: systemPrompt,
         messages: [
@@ -412,22 +375,22 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     if (data.content && data.content.length > 0) {
       const reply = data.content[0].text;
       
-      // ENHANCED MCP Thinking to match actual data
+      // Extract meaningful thinking steps based on actual data
       const mcpThinking = [];
       
       // Add pipeline insights FIRST
       mcpThinking.push(`Filtered ${brandData.total} brands → ${topBrands.length} top candidates`);
       
-      // Show actual top brands from scoring (FIXED to show top 5)
-      if (topBrands.length > 0) {
-        const topFive = topBrands
-          .slice(0, 5)
+      // Show actual top brands from scoring
+      if (topBrands.length > 0 && scores) {
+        const topThree = topBrands
+          .slice(0, 3)
           .map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`)
           .filter(Boolean);
-        mcpThinking.push(`Highest relevance: ${topFive.join(', ')}`);
+        mcpThinking.push(`Highest relevance: ${topThree.join(', ')}`);
       }
       
-      // Analyze actual brand data
+      // Analyze actual brand data from what Claude is seeing
       if (topBrands && topBrands.length > 0) {
         const hotBrands = [];
         const highValueBrands = [];
@@ -449,7 +412,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
           
           // Track high-value opportunities
           if (fields['Budget'] >= 5000000) {
-            highValueBrands.push(`${brandName}`);
+            highValueBrands.push(brandName);
           }
           
           // Track categories
@@ -462,7 +425,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
           }
         });
         
-        // Add actual insights
+        // Add actual insights to thinking based on the narrowed data
         if (hotBrands.length > 0) {
           mcpThinking.push(`HOT brands (active this week): ${hotBrands.join(', ')}`);
         }
@@ -474,34 +437,43 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
         }
       }
       
-      // Add meeting context
-      if (meetingData && meetingData.records) {
-        const brandsWithMeetings = [];
+      // Analyze meeting insights for the brands Claude is actually analyzing
+      if (meetingData && meetingData.records && topBrands) {
+        const brandsInMeetings = new Set();
+        const opportunities = [];
         
-        // Only check for top brands in meetings
-        topBrands.forEach(brandRecord => {
-          const brandName = brandRecord.fields['Brand Name'];
-          if (brandName) {
-            const hasMeeting = meetingData.records.some(r => {
-              const summary = r.fields['Summary'] || '';
-              return summary.toLowerCase().includes(brandName.toLowerCase());
-            });
-            if (hasMeeting) {
-              brandsWithMeetings.push(brandName);
+        meetingData.records.forEach(record => {
+          const summary = record.fields['Summary'] || '';
+          const title = record.fields['Title'] || '';
+          
+          // Only look for mentions of the top brands that Claude is analyzing
+          topBrands.forEach(brandRecord => {
+            const brandName = brandRecord.fields['Brand Name'];
+            if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
+              brandsInMeetings.add(brandName);
             }
+          });
+          
+          // Find opportunities
+          if (summary.toLowerCase().includes('pulled out') || 
+              summary.toLowerCase().includes('budget available') ||
+              summary.toLowerCase().includes('looking for')) {
+            opportunities.push(title);
           }
         });
         
-        if (brandsWithMeetings.length > 0) {
-          mcpThinking.push(`Brands with recent meetings: ${brandsWithMeetings.join(', ')}`);
+        if (brandsInMeetings.size > 0) {
+          mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
+        }
+        if (opportunities.length > 0) {
+          mcpThinking.push(`Meeting opportunities: ${opportunities.slice(0, 3).join(', ')}`);
         }
       }
       
       return {
         reply,
         mcpThinking,
-        usedMCP: true,
-        meetingLinks // Pass the meeting links to the frontend
+        usedMCP: true
       };
     }
     
@@ -733,23 +705,21 @@ export default async function handler(req, res) {
             console.log('OpenAI WebSocket message:', event);
             if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
               const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
-             if (aiReply) {
-  updateAirtableConversation(
-    sessionId, 
-    projectId, 
-    chatUrl, 
-    headersAirtable, 
-    `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
-    existingRecordId
-  ).catch(err => console.error('Airtable update error:', err));
-  
-  return res.json({ 
-    reply: aiReply,
-    mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-    usedMCP: usedMCP,
-    meetingLinks: claudeResult?.meetingLinks || {} // Include meeting links if available
-  });
-}
+              if (aiReply) {
+                updateAirtableConversation(
+                  sessionId, 
+                  projectId, 
+                  chatUrl, 
+                  headersAirtable, 
+                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
+                  existingRecordId
+                ).catch(err => console.error('Airtable update error:', err));
+                
+                res.json({ 
+                  reply: aiReply,
+                  mcpThinking: null,
+                  usedMCP: false
+                });
               } else {
                 res.status(500).json({ error: 'No valid reply received from OpenAI.' });
               }
