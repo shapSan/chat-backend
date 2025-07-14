@@ -818,7 +818,7 @@ export default async function handler(req, res) {
               meetingResults.matches.forEach(meeting => {
                 // Check if brand is mentioned in meeting - be precise
                 const brandName = brand.name ? brand.name.toLowerCase() : '';
-                if (!brandName) continue;
+                if (!brandName) return; // Skip this brand
                 const regex = new RegExp(`\\b${brandName}\\b`, 'i');
                 
                 if (regex.test(meeting.fullSummary)) {
