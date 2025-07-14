@@ -574,7 +574,16 @@ export default async function handler(req, res) {
           return res.status(400).json({ 
             error: 'Missing required fields',
             details: 'prompt is required'
-          });
+          // Add strategic instructions
+          mcpContext += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
+          mcpContext += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
+          mcpContext += '2. Consider pending deals from meetings when suggesting integrations\n';
+          mcpContext += '3. Match high-budget brands with hero/featured integrations\n';
+          mcpContext += '4. If a brand was recently discussed in meetings, reference that context\n';
+          mcpContext += '5. Flag any brands that are close to closing (based on meeting summaries)\n';
+          
+          // Store thinking for UI
+          mcpThinking = thinkingProcess;);
         }
 
         // Check for ElevenLabs API key
@@ -747,7 +756,7 @@ export default async function handler(req, res) {
         console.error(`Error fetching conversation history for project ${projectId}:`, error);
       }
 
-      // Smart search detection using semantic understanding
+      // Check if this is a search query using semantic understanding
       const isSearchQuery = userMessage && (
         // Direct project mentions
         userMessage.toLowerCase().includes('project') ||
@@ -762,7 +771,13 @@ export default async function handler(req, res) {
         userMessage.toLowerCase().includes('what about') ||
         userMessage.toLowerCase().includes('how about') ||
         // Or just analyze if it seems like they're asking for brand suggestions
-        /\b(brand|partner|sponsor|integration|placement)\b/i.test(userMessage)
+        /\b(brand|partner|sponsor|integration|placement)\b/i.test(userMessage) ||
+        // Common patterns from your suggestion buttons
+        userMessage.toLowerCase().includes('for this project') ||
+        userMessage.toLowerCase().includes('easy money') ||
+        userMessage.toLowerCase().includes('wildcard') ||
+        userMessage.toLowerCase().includes('audience match') ||
+        userMessage.toLowerCase().includes('hot new brands')
       );
 
       // Even smarter: if the user message mentions any specific industry/category
@@ -780,68 +795,107 @@ export default async function handler(req, res) {
       console.log('🔍 Should search MCP?', shouldSearchMCP);
 
       // MCP Search Integration - Enhanced for intelligent context
-      if (shouldSearchMCP) {
+      if (isSearchQuery) {
         console.log('✅ Search query detected, calling MCP...');
         try {
           console.log('Using MCP for smart search...');
           
-          // First, search for brands
-          const brandResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 10);
+          // Track thinking process for UI
+          let thinkingProcess = [];
           
-          // Smart meeting search based on context
+          // First, search for brands - LIMIT TO 5 to avoid timeout
+          const brandResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 5);
+          
+          if (brandResults && brandResults.matches) {
+            thinkingProcess.push(`Searched pipeline: found ${brandResults.matches.length} brands`);
+          }
+          
+          // Skip meeting search if no brands found to save time
           let meetingResults = null;
-          if (brandResults && brandResults.matches && brandResults.matches.length > 0) {
-            // Build a smart search query based on found brands
-            const brandNames = brandResults.matches.slice(0, 3).map(b => b.name).join(' ');
-            const categoryNames = [...new Set(brandResults.matches
-              .map(b => b.category)
-              .filter(cat => cat && cat !== 'Uncategorized'))
-            ].join(' ');
-            
-            // Search for meetings that might be relevant to these specific brands/categories
-            const smartMeetingQuery = `${brandNames} ${categoryNames} integration discussion`;
-            meetingResults = await callMCPSearch(smartMeetingQuery, projectId || 'HB-PitchAssist', 5);
-          } else if (userMessage.toLowerCase().includes('meeting') || 
-                     userMessage.toLowerCase().includes('discussed')) {
-            // User explicitly asking about meetings
-            meetingResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 5);
+          if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
+            // Only search for meetings if explicitly requested
+            if (userMessage.toLowerCase().includes('meeting') || 
+                userMessage.toLowerCase().includes('discussed')) {
+              meetingResults = await callMCPSearch('meeting discussion', projectId || 'HB-PitchAssist', 3);
+              if (meetingResults && meetingResults.matches) {
+                thinkingProcess.push(`Found ${meetingResults.matches.length} relevant meetings`);
+              }
+            }
           }
           
           console.log('📊 Brand results:', brandResults);
           console.log('📊 Meeting results:', meetingResults);
           
-          // Cross-reference brands with meetings
-          if (brandResults && !brandResults.error && brandResults.matches.length > 0 &&
-              meetingResults && !meetingResults.error && meetingResults.matches.length > 0) {
+          // Build intelligent context from results
+          let mcpContext = '\n\n🎯 PRIORITY CONTEXT FROM YOUR BUSINESS DATA:\n\n';
+          
+          // Add brand information with business intelligence
+          if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
+            mcpContext += '**ACTIVE BRANDS IN YOUR PIPELINE:**\n';
+            thinkingProcess.push(`Found ${brandResults.matches.length} brands in pipeline`);
+            
+            let hotBrands = [];
+            let warmBrands = [];
+            let highValueBrands = [];
             
             brandResults.matches.forEach(brand => {
-              meetingResults.matches.forEach(meeting => {
-                // Check if brand is mentioned in meeting - be precise
-                const brandName = brand.name ? brand.name.toLowerCase() : '';
-                if (!brandName) return; // Skip this brand
-                const regex = new RegExp(`\\b${brandName}\\b`, 'i');
+              if (!brand || !brand.lastModified) return;
+              
+              try {
+                const lastModDate = new Date(brand.lastModified);
+                const daysSinceModified = Math.floor((Date.now() - lastModDate) / (1000 * 60 * 60 * 24));
                 
-                if (regex.test(meeting.fullSummary)) {
-                  if (!brand.meetingReferences) brand.meetingReferences = [];
-                  brand.meetingReferences.push({
-                    meetingTitle: meeting.title,
-                    meetingDate: meeting.date,
-                    context: meeting.insights
-                  });
-                  
-                  // Add to thinking
-                  mcpThinking.push(`${brand.name} discussed in "${meeting.title}" on ${meeting.date}`);
+                mcpContext += `\n🔥 ${brand.name}`;
+                
+                // Add urgency indicators
+                if (daysSinceModified < 7) {
+                  mcpContext += ' [HOT - Updated this week!]';
+                  hotBrands.push(brand.name);
+                } else if (daysSinceModified < 30) {
+                  mcpContext += ' [WARM - Recent activity]';
+                  warmBrands.push(brand.name);
                 }
-              });
+                
+                mcpContext += `\n   • Category: ${brand.category || 'Uncategorized'}\n   • Budget: ${brand.budget || 'TBD'}`;
+                
+                if (brand.campaignSummary) {
+                  mcpContext += `\n   • Current Focus: ${brand.campaignSummary}`;
+                }
+                
+                // Smart insights based on budget
+                if (brand.budget && brand.budget !== 'Budget TBD') {
+                  const budgetNum = parseInt(brand.budget.replace(/[^0-9]/g, '')) || 0;
+                  if (budgetNum >= 5000000) {
+                    mcpContext += '\n   • 💰 HIGH-VALUE OPPORTUNITY - Prioritize for major integrations';
+                    highValueBrands.push(brand.name);
+                  } else if (budgetNum >= 1000000) {
+                    mcpContext += '\n   • 💎 SOLID BUDGET - Good for featured placements';
+                  }
+                }
+                
+                mcpContext += '\n';
+              } catch (e) {
+                console.error('Error processing brand:', e);
+              }
             });
-          }
-          
-          // Build intelligent context from results
-          let mcpContext = '';
-          if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
-            mcpContext = buildSmartContext(brandResults, meetingResults, userMessage, mcpThinking);
-          } else {
-            mcpThinking.push('No brands found in pipeline');
+            
+            // Add all insights to thinking process
+            if (hotBrands.length > 0) {
+              thinkingProcess.push(`${hotBrands.length} HOT brands: ${hotBrands.join(', ')}`);
+            }
+            if (warmBrands.length > 0) {
+              thinkingProcess.push(`${warmBrands.length} WARM brands: ${warmBrands.join(', ')}`);
+            }
+            if (highValueBrands.length > 0) {
+              thinkingProcess.push(`${highValueBrands.length} high-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
+            }
+            
+            // Add category insights
+            const categories = [...new Set(brandResults.matches.map(b => b.category).filter(c => c && c !== 'Uncategorized'))];
+            if (categories.length > 0) {
+              thinkingProcess.push(`Categories found: ${categories.join(', ')}`);
+            }
+          } pipeline');
           }
           
           // Add to system message
