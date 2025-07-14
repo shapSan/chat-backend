@@ -848,8 +848,8 @@ export default async function handler(req, res) {
             }
           }
           
-          console.log('📊 Brand results:', brandResults);
-          console.log('📊 Meeting results:', meetingResults);
+          console.log('📊 Brand results:', brandResults ? brandResults.matches.length : 0);
+          console.log('📊 Meeting results:', meetingResults ? (meetingResults.matches ? meetingResults.matches.length : 0) : 0);
           
           // Build intelligent context from results
           let mcpContext = '\n\n🎯 PRIORITY CONTEXT FROM YOUR BUSINESS DATA:\n\n';
