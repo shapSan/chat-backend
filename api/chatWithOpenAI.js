@@ -374,8 +374,13 @@ function buildSmartContext(brandResults, meetingResults, userMessage, mcpThinkin
   
   // Priority 1: HOT brands (always include)
   const hotBrands = brandResults.matches.filter(b => {
-    const days = Math.floor((Date.now() - new Date(b.lastModified)) / (1000 * 60 * 60 * 24));
-    return days < 7;
+    if (!b.lastModified || b.lastModified === 'Unknown') return false;
+    try {
+      const days = Math.floor((Date.now() - new Date(b.lastModified)) / (1000 * 60 * 60 * 24));
+      return days < 7;
+    } catch (e) {
+      return false;
+    }
   });
   
   // Priority 2: Brands with high budgets
@@ -451,10 +456,18 @@ function formatBrandEntry(brand, priority) {
   let entry = `\n🔥 ${brand.name}`;
   
   // Add status indicator
-  const daysSinceModified = Math.floor((Date.now() - new Date(brand.lastModified)) / (1000 * 60 * 60 * 24));
-  if (daysSinceModified < 7) {
+  let daysSinceModified = null;
+  if (brand.lastModified && brand.lastModified !== 'Unknown') {
+    try {
+      daysSinceModified = Math.floor((Date.now() - new Date(brand.lastModified)) / (1000 * 60 * 60 * 24));
+    } catch (e) {
+      daysSinceModified = null;
+    }
+  }
+  
+  if (daysSinceModified !== null && daysSinceModified < 7) {
     entry += ' [HOT - Updated this week!]';
-  } else if (daysSinceModified < 30) {
+  } else if (daysSinceModified !== null && daysSinceModified < 30) {
     entry += ' [WARM - Recent activity]';
   }
   
@@ -504,8 +517,8 @@ function formatBrandEntry(brand, priority) {
 function formatMeetingEntry(meeting, allBrands) {
   let entry = `\n📅 ${meeting.title} (${meeting.date})`;
   
-  const daysSinceMeeting = Math.floor((Date.now() - new Date(meeting.date)) / (1000 * 60 * 60 * 24));
-  if (daysSinceMeeting < 7) {
+  const daysSinceMeeting = meeting.date ? Math.floor((Date.now() - new Date(meeting.date)) / (1000 * 60 * 60 * 24)) : null;
+  if (daysSinceMeeting !== null && daysSinceMeeting < 7) {
     entry += ' [THIS WEEK]';
   }
   
@@ -778,7 +791,10 @@ export default async function handler(req, res) {
           if (brandResults && brandResults.matches && brandResults.matches.length > 0) {
             // Build a smart search query based on found brands
             const brandNames = brandResults.matches.slice(0, 3).map(b => b.name).join(' ');
-            const categoryNames = [...new Set(brandResults.matches.map(b => b.category))].join(' ');
+            const categoryNames = [...new Set(brandResults.matches
+              .map(b => b.category)
+              .filter(cat => cat && cat !== 'Uncategorized'))
+            ].join(' ');
             
             // Search for meetings that might be relevant to these specific brands/categories
             const smartMeetingQuery = `${brandNames} ${categoryNames} integration discussion`;
@@ -799,7 +815,8 @@ export default async function handler(req, res) {
             brandResults.matches.forEach(brand => {
               meetingResults.matches.forEach(meeting => {
                 // Check if brand is mentioned in meeting - be precise
-                const brandName = brand.name.toLowerCase();
+                const brandName = brand.name ? brand.name.toLowerCase() : '';
+                if (!brandName) continue;
                 const regex = new RegExp(`\\b${brandName}\\b`, 'i');
                 
                 if (regex.test(meeting.fullSummary)) {
