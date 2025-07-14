@@ -181,7 +181,7 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
   }
 }
 
-// Stage 2: OpenAI narrowing function
+// Stage 2: OpenAI narrowing function - ENHANCED
 async function narrowWithOpenAI(brands, meetings, userMessage) {
   try {
     console.log(`🧮 Stage 2: Narrowing ${brands.length} brands with OpenAI...`);
@@ -261,7 +261,7 @@ ${brands.slice(0, 50).map(b =>
   }
 }
 
-// Stage 3: Claude-powered search handler for intelligent brand matching
+// Stage 3: Claude-powered search handler - ENHANCED
 async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
   console.log('🤖 Starting 3-stage intelligent brand-project matching...');
   
@@ -316,22 +316,46 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       console.log(`📊 Sending ${brandInfo.length} top brands to Claude for deep analysis`);
     }
     
-    if (meetingData && meetingData.records && meetingData.records.length > 0) {
-      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n```json\n";
+    // ENHANCED: Add meeting context WITH brand mentions
+    if (meetingData && meetingData.records && meetingData.records.length > 0 && topBrands) {
+      systemPrompt += "**RECENT MEETINGS & BRAND MENTIONS:**\n```json\n";
+      
+      // Create a map of brand names for quick lookup
+      const topBrandNames = new Set(topBrands.map(b => b.fields['Brand Name']?.toLowerCase()).filter(Boolean));
+      
       const meetingInfo = meetingData.records
-        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10) // Only meaningful meetings
-        .slice(0, 20) // Limit to most recent 20
-        .map(r => ({
-          meeting: r.fields['Title'] || 'Untitled',
-          date: r.fields['Date'] || 'No date',
-          key_points: r.fields['Summary'] || 'No summary'
-        }));
+        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10)
+        .slice(0, 20)
+        .map(r => {
+          const summary = r.fields['Summary'] || '';
+          const title = r.fields['Title'] || 'Untitled';
+          
+          // Find which top brands are mentioned in this meeting
+          const mentionedBrands = [];
+          topBrands.forEach(brandRecord => {
+            const brandName = brandRecord.fields['Brand Name'];
+            if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
+              mentionedBrands.push(brandName);
+            }
+          });
+          
+          return {
+            meeting: title,
+            date: r.fields['Date'] || 'No date',
+            key_points: summary,
+            brands_mentioned: mentionedBrands.length > 0 ? mentionedBrands : undefined
+          };
+        })
+        .filter(m => m.key_points); // Only include meetings with content
       
       systemPrompt += JSON.stringify(meetingInfo, null, 2);
       systemPrompt += "\n```\n\n";
       
       console.log(`📅 Sending ${meetingInfo.length} relevant meetings to Claude`);
     }
+    
+    // ENHANCED: Add explicit instruction to use high-scoring brands
+    systemPrompt += "\n**IMPORTANT**: Prioritize brands with relevance scores above 70. The scores indicate how well each brand fits this specific production based on genre, budget, and campaign focus.\n";
     
     console.log('📤 Calling Claude API with focused data...');
     
@@ -375,22 +399,22 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     if (data.content && data.content.length > 0) {
       const reply = data.content[0].text;
       
-      // Extract meaningful thinking steps based on actual data
+      // ENHANCED MCP Thinking to match actual data
       const mcpThinking = [];
       
       // Add pipeline insights FIRST
       mcpThinking.push(`Filtered ${brandData.total} brands → ${topBrands.length} top candidates`);
       
-      // Show actual top brands from scoring
-      if (topBrands.length > 0 && scores) {
-        const topThree = topBrands
-          .slice(0, 3)
+      // Show actual top brands from scoring (FIXED to show top 5)
+      if (topBrands.length > 0) {
+        const topFive = topBrands
+          .slice(0, 5)
           .map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`)
           .filter(Boolean);
-        mcpThinking.push(`Highest relevance: ${topThree.join(', ')}`);
+        mcpThinking.push(`Highest relevance: ${topFive.join(', ')}`);
       }
       
-      // Analyze actual brand data from what Claude is seeing
+      // Analyze actual brand data
       if (topBrands && topBrands.length > 0) {
         const hotBrands = [];
         const highValueBrands = [];
@@ -412,7 +436,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
           
           // Track high-value opportunities
           if (fields['Budget'] >= 5000000) {
-            highValueBrands.push(brandName);
+            highValueBrands.push(`${brandName}`);
           }
           
           // Track categories
@@ -425,7 +449,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
           }
         });
         
-        // Add actual insights to thinking based on the narrowed data
+        // Add actual insights
         if (hotBrands.length > 0) {
           mcpThinking.push(`HOT brands (active this week): ${hotBrands.join(', ')}`);
         }
@@ -437,36 +461,26 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
         }
       }
       
-      // Analyze meeting insights for the brands Claude is actually analyzing
-      if (meetingData && meetingData.records && topBrands) {
-        const brandsInMeetings = new Set();
-        const opportunities = [];
+      // Add meeting context
+      if (meetingData && meetingData.records) {
+        const brandsWithMeetings = [];
         
-        meetingData.records.forEach(record => {
-          const summary = record.fields['Summary'] || '';
-          const title = record.fields['Title'] || '';
-          
-          // Only look for mentions of the top brands that Claude is analyzing
-          topBrands.forEach(brandRecord => {
-            const brandName = brandRecord.fields['Brand Name'];
-            if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
-              brandsInMeetings.add(brandName);
+        // Only check for top brands in meetings
+        topBrands.forEach(brandRecord => {
+          const brandName = brandRecord.fields['Brand Name'];
+          if (brandName) {
+            const hasMeeting = meetingData.records.some(r => {
+              const summary = r.fields['Summary'] || '';
+              return summary.toLowerCase().includes(brandName.toLowerCase());
+            });
+            if (hasMeeting) {
+              brandsWithMeetings.push(brandName);
             }
-          });
-          
-          // Find opportunities
-          if (summary.toLowerCase().includes('pulled out') || 
-              summary.toLowerCase().includes('budget available') ||
-              summary.toLowerCase().includes('looking for')) {
-            opportunities.push(title);
           }
         });
         
-        if (brandsInMeetings.size > 0) {
-          mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
-        }
-        if (opportunities.length > 0) {
-          mcpThinking.push(`Meeting opportunities: ${opportunities.slice(0, 3).join(', ')}`);
+        if (brandsWithMeetings.length > 0) {
+          mcpThinking.push(`Brands with recent meetings: ${brandsWithMeetings.join(', ')}`);
         }
       }
       
