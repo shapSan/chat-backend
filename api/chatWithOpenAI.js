@@ -203,8 +203,7 @@ async function callMCPSearch(query, projectId, limit = 10) {
           fullCampaignSummary: campaignSummary,
           insights: brandInsights,
           relevance: 50,
-          type: 'brand',
-          meetingReferences: [] // Initialize for later use
+          type: 'brand'
         };
       });
     }
@@ -368,193 +367,16 @@ function extractBrandInsights(notes, campaignSummary) {
   return insights;
 }
 
-// Smart context builder with priority system
-function buildSmartContext(brandResults, meetingResults, userMessage, mcpThinking) {
-  let context = '\n\n🎯 PRIORITY CONTEXT FROM YOUR BUSINESS DATA:\n\n';
-  
-  // Priority 1: HOT brands (always include)
-  const hotBrands = brandResults.matches.filter(b => {
-    if (!b.lastModified || b.lastModified === 'Unknown') return false;
-    try {
-      const days = Math.floor((Date.now() - new Date(b.lastModified)) / (1000 * 60 * 60 * 24));
-      return days < 7;
-    } catch (e) {
-      return false;
-    }
-  });
-  
-  // Priority 2: Brands with high budgets
-  const highValueBrands = brandResults.matches.filter(b => b.budgetNum >= 5000000);
-  
-  // Priority 3: Brands mentioned in recent meetings
-  const brandsInMeetings = brandResults.matches.filter(b => b.meetingReferences && b.meetingReferences.length > 0);
-  
-  // Build context based on priorities
-  if (hotBrands.length > 0) {
-    context += '**🔥 HOT BRANDS (Updated This Week):**\n';
-    hotBrands.forEach(brand => {
-      context += formatBrandEntry(brand, 'hot');
-    });
-    mcpThinking.push(`${hotBrands.length} HOT brands: ${hotBrands.map(b => b.name).join(', ')}`);
-  }
-  
-  if (highValueBrands.length > 0 && context.length < 3000) {
-    context += '\n**💰 HIGH-VALUE OPPORTUNITIES:**\n';
-    const uniqueHighValue = highValueBrands.filter(b => !hotBrands.includes(b));
-    uniqueHighValue.forEach(brand => {
-      if (context.length < 3500) {
-        context += formatBrandEntry(brand, 'highvalue');
-      }
-    });
-    mcpThinking.push(`${highValueBrands.length} high-value opportunities ($5M+)`);
-  }
-  
-  // Only add other brands if we have space
-  const remainingBrands = brandResults.matches.filter(b => 
-    !hotBrands.includes(b) && !highValueBrands.includes(b)
-  );
-  
-  if (remainingBrands.length > 0 && context.length < 3000) {
-    context += '\n**OTHER ACTIVE BRANDS:**\n';
-    remainingBrands.slice(0, 3).forEach(brand => {
-      context += formatBrandEntry(brand, 'standard');
-    });
-  }
-  
-  // Add only the most relevant meetings
-  if (meetingResults && meetingResults.matches && context.length < 3500) {
-    const relevantMeetings = meetingResults.matches
-      .filter(m => m.insights && (m.insights.deadlines.length > 0 || m.insights.opportunities.length > 0))
-      .slice(0, 3);
-    
-    if (relevantMeetings.length > 0) {
-      context += '\n**URGENT MEETINGS & OPPORTUNITIES:**\n';
-      relevantMeetings.forEach(meeting => {
-        context += formatMeetingEntry(meeting, brandResults.matches);
-      });
-      
-      // Add insights about meetings
-      const deadlines = relevantMeetings.flatMap(m => m.insights.deadlines);
-      if (deadlines.length > 0) {
-        mcpThinking.push(`Urgent deadlines: ${deadlines.join(', ')}`);
-      }
-    }
-  }
-  
-  // Add strategic instructions
-  context += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
-  context += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
-  context += '2. Match high-budget brands with hero/featured integrations\n';
-  context += '3. Reference specific meeting context when brands were discussed\n';
-  context += '4. Connect creative solutions to stated brand concerns\n';
-  context += '5. Highlight timing opportunities and deadlines\n';
-  
-  return context;
-}
-
-function formatBrandEntry(brand, priority) {
-  let entry = `\n🔥 ${brand.name}`;
-  
-  // Add status indicator
-  let daysSinceModified = null;
-  if (brand.lastModified && brand.lastModified !== 'Unknown') {
-    try {
-      daysSinceModified = Math.floor((Date.now() - new Date(brand.lastModified)) / (1000 * 60 * 60 * 24));
-    } catch (e) {
-      daysSinceModified = null;
-    }
-  }
-  
-  if (daysSinceModified !== null && daysSinceModified < 7) {
-    entry += ' [HOT - Updated this week!]';
-  } else if (daysSinceModified !== null && daysSinceModified < 30) {
-    entry += ' [WARM - Recent activity]';
-  }
-  
-  // Include essential info based on priority
-  if (priority === 'hot' || priority === 'highvalue') {
-    entry += `\n   • Budget: ${brand.budget}`;
-    entry += `\n   • Category: ${brand.category}`;
-    
-    if (brand.campaignSummary) {
-      entry += `\n   • Current Focus: ${brand.campaignSummary}`;
-    }
-    
-    if (brand.insights) {
-      if (brand.insights.keyConcerns && brand.insights.keyConcerns.length > 0) {
-        entry += `\n   • 🎯 Key Concern: ${brand.insights.keyConcerns[0]}`;
-      }
-      if (brand.insights.restrictions && brand.insights.restrictions.length > 0) {
-        entry += `\n   • ⚠️ Restrictions: ${brand.insights.restrictions.join(', ')}`;
-      }
-      if (brand.insights.timing && brand.insights.timing.length > 0) {
-        entry += `\n   • 📅 Timing: ${brand.insights.timing.join(', ')}`;
-      }
-    }
-    
-    if (brand.meetingReferences && brand.meetingReferences.length > 0) {
-      entry += `\n   • 📅 Meeting History:`;
-      brand.meetingReferences.forEach(ref => {
-        entry += `\n      - Discussed in "${ref.meetingTitle}" (${ref.meetingDate})`;
-      });
-    }
-    
-    // Add value indicator
-    if (brand.budgetNum >= 5000000) {
-      entry += '\n   • 💰 HIGH-VALUE OPPORTUNITY - Prioritize for major integrations';
-    } else if (brand.budgetNum >= 1000000) {
-      entry += '\n   • 💎 SOLID BUDGET - Good for featured placements';
-    }
-  } else {
-    // Minimal info for standard brands
-    entry += ` - ${brand.category} - ${brand.budget}`;
-  }
-  
-  entry += '\n';
-  return entry;
-}
-
-function formatMeetingEntry(meeting, allBrands) {
-  let entry = `\n📅 ${meeting.title} (${meeting.date})`;
-  
-  const daysSinceMeeting = meeting.date ? Math.floor((Date.now() - new Date(meeting.date)) / (1000 * 60 * 60 * 24)) : null;
-  if (daysSinceMeeting !== null && daysSinceMeeting < 7) {
-    entry += ' [THIS WEEK]';
-  }
-  
-  if (meeting.insights) {
-    if (meeting.insights.concerns.length > 0) {
-      entry += `\n   • ⚠️ Concerns: ${meeting.insights.concerns.join(', ')}`;
-    }
-    if (meeting.insights.requests.length > 0) {
-      entry += `\n   • 📋 Requests: ${meeting.insights.requests.join(', ')}`;
-    }
-    if (meeting.insights.deadlines.length > 0) {
-      entry += `\n   • ⏰ Deadlines: ${meeting.insights.deadlines.join(', ')}`;
-    }
-    if (meeting.insights.quotes.length > 0) {
-      entry += `\n   • 💬 Direct quotes: "${meeting.insights.quotes.join('", "')}"`;
-    }
-    if (meeting.insights.opportunities.length > 0) {
-      entry += `\n   • 🎯 Opportunities: ${meeting.insights.opportunities.join(', ')}`;
-    }
-  }
-  
-  entry += '\n';
-  return entry;
-}
-
 export default async function handler(req, res) {
-  // Set CORS headers for all requests
+  // Set CORS headers early (before any conditionals)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Max-Age", "86400");
 
-  // Handle preflight OPTIONS request
   if (req.method === "OPTIONS") {
-    return res.status(200).end();
+    return res.status(200).end(); // respond early for preflight
   }
 
   if (req.method === 'POST') {
@@ -574,40 +396,6 @@ export default async function handler(req, res) {
           return res.status(400).json({ 
             error: 'Missing required fields',
             details: 'prompt is required'
-          }
-          
-          // Add meeting context if available
-          if (meetingResults && !meetingResults.error && meetingResults.matches.length > 0) {
-            mcpContext += '\n**RECENT MEETINGS:**\n';
-            
-            meetingResults.matches.slice(0, 3).forEach(meeting => {
-              mcpContext += `\n📅 ${meeting.title} (${meeting.date})`;
-              if (meeting.summary) {
-                mcpContext += `\n   • ${meeting.summary}`;
-              }
-              mcpContext += '\n';
-            });
-            
-            thinkingProcess.push(`Analyzed ${meetingResults.matches.length} recent meetings`);
-          }
-          
-          // Add strategic instructions
-          mcpContext += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
-          mcpContext += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
-          mcpContext += '2. Consider pending deals from meetings when suggesting integrations\n';
-          mcpContext += '3. Match high-budget brands with hero/featured integrations\n';
-          mcpContext += '4. If a brand was recently discussed in meetings, reference that context\n';
-          mcpContext += '5. Flag any brands that are close to closing (based on meeting summaries)\n';
-          
-          // Store thinking for UI
-          mcpThinking = thinkingProcess;
-          
-          // Add to system message
-          if (mcpContext) {
-            systemMessageContent = systemMessageContent.replace(
-              'You are a helpful assistant specialized in AI & Automation.',
-              'You are a helpful assistant specialized in AI & Automation.' + mcpContext
-            );
           });
         }
 
@@ -761,95 +549,77 @@ export default async function handler(req, res) {
       let existingRecordId = null;
       let mcpThinking = []; // Store thinking process for frontend
 
-      // Fetch conversation history first to help determine if MCP is needed
-      try {
-        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
-        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
-        if (historyResponse.ok) {
-          const result = await historyResponse.json();
-          if (result.records.length > 0) {
-            conversationContext = result.records[0].fields.Conversation || '';
-            existingRecordId = result.records[0].id;
-
-            // Truncate long history to avoid OpenAI errors
-            if (conversationContext.length > 3000) {
-              conversationContext = conversationContext.slice(-3000);
-            }
-          }
-        }
-      } catch (error) {
-        console.error(`Error fetching conversation history for project ${projectId}:`, error);
-      }
-
-      // Check if this is a search query using semantic understanding
+      // Check if this is a search query - make it smarter
       const isSearchQuery = userMessage && (
-        // Direct project mentions
-        userMessage.toLowerCase().includes('project') ||
-        userMessage.toLowerCase().includes('production') ||
-        userMessage.toLowerCase().includes('show') ||
-        userMessage.toLowerCase().includes('film') ||
-        userMessage.toLowerCase().includes('series') ||
-        // Any request for suggestions/recommendations
+        userMessage.toLowerCase().includes('brand') ||
+        userMessage.toLowerCase().includes('match') ||
         userMessage.toLowerCase().includes('suggest') ||
-        userMessage.toLowerCase().includes('recommend') ||
-        userMessage.toLowerCase().includes('find') ||
-        userMessage.toLowerCase().includes('what about') ||
-        userMessage.toLowerCase().includes('how about') ||
-        // Or just analyze if it seems like they're asking for brand suggestions
-        /\b(brand|partner|sponsor|integration|placement)\b/i.test(userMessage) ||
-        // Common patterns from your suggestion buttons
-        userMessage.toLowerCase().includes('for this project') ||
+        userMessage.toLowerCase().includes('integration') ||
         userMessage.toLowerCase().includes('easy money') ||
+        userMessage.toLowerCase().includes('quick approval') ||
+        userMessage.toLowerCase().includes('show me') ||
+        userMessage.toLowerCase().includes('list') ||
+        userMessage.toLowerCase().includes('find') ||
+        userMessage.toLowerCase().includes('search') ||
+        userMessage.toLowerCase().includes('for this project') ||
         userMessage.toLowerCase().includes('wildcard') ||
         userMessage.toLowerCase().includes('audience match') ||
         userMessage.toLowerCase().includes('hot new brands')
       );
 
-      // Even smarter: if the user message mentions any specific industry/category
-      const industryKeywords = ['automotive', 'tech', 'fashion', 'beverage', 'food', 'retail', 'entertainment', 'beauty', 'sports', 'travel'];
-      const mentionsIndustry = industryKeywords.some(keyword => 
-        userMessage.toLowerCase().includes(keyword)
-      );
-
-      // Final decision
-      const shouldSearchMCP = isSearchQuery || mentionsIndustry || 
-        // If conversation already has brand suggestions, continue using MCP
-        (conversationContext && conversationContext.includes('Brand integration suggestions'));
-
+      // ADD THESE LOGS:
       console.log('📝 User message:', userMessage);
-      console.log('🔍 Should search MCP?', shouldSearchMCP);
+      console.log('🔍 Is search query?', isSearchQuery);
 
       // MCP Search Integration - Enhanced for intelligent context
-      if (shouldSearchMCP) {
+      if (isSearchQuery) {
         console.log('✅ Search query detected, calling MCP...');
         try {
           console.log('Using MCP for smart search...');
           
-          // Track thinking process for UI
-          let thinkingProcess = [];
+          // First, extract project/production details from the message
+          let projectContext = {
+            genre: null,
+            themes: [],
+            budget: null,
+            keywords: []
+          };
           
-          // First, search for brands - LIMIT TO 5 to avoid timeout
-          const brandResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 5);
+          // Extract genre/type
+          if (userMessage.toLowerCase().includes('horror')) projectContext.genre = 'horror';
+          else if (userMessage.toLowerCase().includes('comedy')) projectContext.genre = 'comedy';
+          else if (userMessage.toLowerCase().includes('action')) projectContext.genre = 'action';
+          else if (userMessage.toLowerCase().includes('drama')) projectContext.genre = 'drama';
+          else if (userMessage.toLowerCase().includes('romance')) projectContext.genre = 'romance';
+          else if (userMessage.toLowerCase().includes('thriller')) projectContext.genre = 'thriller';
+          else if (userMessage.toLowerCase().includes('family')) projectContext.genre = 'family';
           
-          if (brandResults && brandResults.matches) {
-            thinkingProcess.push(`Searched pipeline: found ${brandResults.matches.length} brands`);
+          // Extract themes and keywords
+          const themeWords = ['family', 'adventure', 'tech', 'luxury', 'sports', 'food', 'travel', 'fashion', 'music', 'gaming', 'beauty', 'health', 'fitness'];
+          projectContext.themes = themeWords.filter(theme => userMessage.toLowerCase().includes(theme));
+          
+          // Add thinking about project understanding
+          if (projectContext.genre) {
+            mcpThinking.push(`Detected ${projectContext.genre} project`);
+          }
+          if (projectContext.themes.length > 0) {
+            mcpThinking.push(`Project themes: ${projectContext.themes.join(', ')}`);
           }
           
-          // Skip meeting search if no brands found to save time
+          // First, search for brands
+          const brandResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 10);
+          
+          // Also search for relevant meetings if the query mentions projects or discussions
           let meetingResults = null;
-          if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
-            // Only search for meetings if explicitly requested
-            if (userMessage.toLowerCase().includes('meeting') || 
-                userMessage.toLowerCase().includes('discussed')) {
-              meetingResults = await callMCPSearch('meeting discussion', projectId || 'HB-PitchAssist', 3);
-              if (meetingResults && meetingResults.matches) {
-                thinkingProcess.push(`Found ${meetingResults.matches.length} relevant meetings`);
-              }
-            }
+          if (userMessage.toLowerCase().includes('project') || 
+              userMessage.toLowerCase().includes('pending') ||
+              userMessage.toLowerCase().includes('discussed') ||
+              userMessage.toLowerCase().includes('meeting')) {
+            meetingResults = await callMCPSearch('meeting discussion brand integration', projectId || 'HB-PitchAssist', 10);
           }
           
-          console.log('📊 Brand results:', brandResults ? brandResults.matches.length : 0);
-          console.log('📊 Meeting results:', meetingResults ? (meetingResults.matches ? meetingResults.matches.length : 0) : 0);
+          console.log('📊 Brand results:', brandResults ? brandResults.total : 0);
+          console.log('📊 Meeting results:', meetingResults ? meetingResults.total : 0);
           
           // Build intelligent context from results
           let mcpContext = '\n\n🎯 PRIORITY CONTEXT FROM YOUR BUSINESS DATA:\n\n';
@@ -857,14 +627,14 @@ export default async function handler(req, res) {
           // Add brand information with business intelligence
           if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
             mcpContext += '**ACTIVE BRANDS IN YOUR PIPELINE:**\n';
-            thinkingProcess.push(`Found ${brandResults.matches.length} brands in pipeline`);
+            mcpThinking.push(`Found ${brandResults.matches.length} brands in pipeline`);
             
             let hotBrands = [];
             let warmBrands = [];
             let highValueBrands = [];
             
             brandResults.matches.forEach(brand => {
-              if (!brand || !brand.lastModified) return;
+              if (!brand || !brand.lastModified || brand.lastModified === 'Unknown') return;
               
               try {
                 const lastModDate = new Date(brand.lastModified);
@@ -881,57 +651,190 @@ export default async function handler(req, res) {
                   warmBrands.push(brand.name);
                 }
                 
-                mcpContext += `\n   • Category: ${brand.category || 'Uncategorized'}\n   • Budget: ${brand.budget || 'TBD'}`;
+                mcpContext += `\n   • Category: ${brand.category}\n   • Budget: ${brand.budget}`;
                 
                 if (brand.campaignSummary) {
                   mcpContext += `\n   • Current Focus: ${brand.campaignSummary}`;
                 }
                 
-                // Smart insights based on budget
-                if (brand.budget && brand.budget !== 'Budget TBD') {
-                  const budgetNum = parseInt(brand.budget.replace(/[^0-9]/g, '')) || 0;
-                  if (budgetNum >= 5000000) {
-                    mcpContext += '\n   • 💰 HIGH-VALUE OPPORTUNITY - Prioritize for major integrations';
-                    highValueBrands.push(brand.name);
-                  } else if (budgetNum >= 1000000) {
-                    mcpContext += '\n   • 💎 SOLID BUDGET - Good for featured placements';
+                // Add insights from brand data
+                if (brand.insights) {
+                  if (brand.insights.preferences.length > 0) {
+                    mcpContext += `\n   • Preferences: ${brand.insights.preferences.join(', ')}`;
                   }
+                  if (brand.insights.restrictions.length > 0) {
+                    mcpContext += `\n   • ⚠️ Restrictions: ${brand.insights.restrictions.join(', ')}`;
+                  }
+                  if (brand.insights.timing.length > 0) {
+                    mcpContext += `\n   • 📅 Timing: ${brand.insights.timing.join(', ')}`;
+                  }
+                  if (brand.insights.keyConcerns.length > 0) {
+                    mcpContext += `\n   • 🎯 Key Concerns: ${brand.insights.keyConcerns.join(', ')}`;
+                  }
+                }
+                
+                // Smart insights based on budget
+                if (brand.budgetNum >= 5000000) {
+                  mcpContext += '\n   • 💰 HIGH-VALUE OPPORTUNITY - Prioritize for major integrations';
+                  highValueBrands.push(brand.name);
+                } else if (brand.budgetNum >= 1000000) {
+                  mcpContext += '\n   • 💎 SOLID BUDGET - Good for featured placements';
                 }
                 
                 mcpContext += '\n';
               } catch (e) {
-                console.error('Error processing brand:', e);
+                console.error('Error processing brand:', brand.name, e);
               }
             });
             
-            // Add all insights to thinking process
+            // Add insights to thinking process with actual brand names
             if (hotBrands.length > 0) {
-              thinkingProcess.push(`${hotBrands.length} HOT brands: ${hotBrands.join(', ')}`);
+              mcpThinking.push(`${hotBrands.length} HOT brands: ${hotBrands.join(', ')}`);
             }
             if (warmBrands.length > 0) {
-              thinkingProcess.push(`${warmBrands.length} WARM brands: ${warmBrands.join(', ')}`);
+              mcpThinking.push(`${warmBrands.length} WARM brands: ${warmBrands.join(', ')}`);
             }
             if (highValueBrands.length > 0) {
-              thinkingProcess.push(`${highValueBrands.length} high-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
-            }
-            
-            // Add category insights
-            const categories = [...new Set(brandResults.matches.map(b => b.category).filter(c => c && c !== 'Uncategorized'))];
-            if (categories.length > 0) {
-              thinkingProcess.push(`Categories found: ${categories.join(', ')}`);
+              mcpThinking.push(`${highValueBrands.length} high-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
             }
           }
-          } pipeline');
+          
+          // Add meeting context for business intelligence
+          if (meetingResults && !meetingResults.error && meetingResults.matches.length > 0) {
+            mcpContext += '\n**RECENT DISCUSSIONS & PENDING DEALS:**\n';
+            
+            let pendingDeals = [];
+            let approvedDeals = [];
+            let urgentDeadlines = [];
+            let keyOpportunities = [];
+            let brandsDiscussedInMeetings = new Map(); // Track which brands were discussed in which meetings
+            
+            meetingResults.matches.forEach(meeting => {
+              const meetingDate = new Date(meeting.date);
+              const daysSinceMeeting = Math.floor((Date.now() - meetingDate) / (1000 * 60 * 60 * 24));
+              
+              // Only include recent and relevant meetings
+              if (daysSinceMeeting < 30) {
+                // Check if any brands are mentioned in this meeting's SUMMARY (not title)
+                const meetingTextLower = meeting.fullSummary.toLowerCase();
+                let mentionedBrands = [];
+                
+                // Only look for exact brand name matches in the summary
+                if (brandResults && brandResults.matches) {
+                  brandResults.matches.forEach(brand => {
+                    if (brand.name && meetingTextLower.includes(brand.name.toLowerCase())) {
+                      mentionedBrands.push(brand.name);
+                      // Track this for thinking
+                      if (!brandsDiscussedInMeetings.has(brand.name)) {
+                        brandsDiscussedInMeetings.set(brand.name, []);
+                      }
+                      brandsDiscussedInMeetings.get(brand.name).push({
+                        meetingTitle: meeting.title,
+                        meetingDate: meeting.date
+                      });
+                    }
+                  });
+                }
+                
+                // Only include meetings that are truly relevant
+                if (meeting.insights || mentionedBrands.length > 0 || 
+                    meetingTextLower.includes('brand') || 
+                    meetingTextLower.includes('integration')) {
+                  
+                  mcpContext += `\n📅 ${meeting.title} (${meeting.date})`;
+                  
+                  if (daysSinceMeeting < 7) {
+                    mcpContext += ' [THIS WEEK]';
+                  }
+                  
+                  // Add insights from meeting
+                  if (meeting.insights) {
+                    if (meeting.insights.concerns.length > 0) {
+                      mcpContext += `\n   • ⚠️ Concerns: ${meeting.insights.concerns.join(', ')}`;
+                    }
+                    if (meeting.insights.requests.length > 0) {
+                      mcpContext += `\n   • 📋 Requests: ${meeting.insights.requests.join(', ')}`;
+                    }
+                    if (meeting.insights.deadlines.length > 0) {
+                      mcpContext += `\n   • ⏰ Deadlines: ${meeting.insights.deadlines.join(', ')}`;
+                      urgentDeadlines.push(...meeting.insights.deadlines);
+                    }
+                    if (meeting.insights.quotes.length > 0) {
+                      mcpContext += `\n   • 💬 Direct quotes: "${meeting.insights.quotes.join('", "')}"`;
+                    }
+                    if (meeting.insights.opportunities.length > 0) {
+                      mcpContext += `\n   • 🎯 Opportunities: ${meeting.insights.opportunities.join(', ')}`;
+                      keyOpportunities.push(...meeting.insights.opportunities);
+                    }
+                  }
+                  
+                  // Track pending deals
+                  if (meetingTextLower.includes('pending') || meetingTextLower.includes('waiting')) {
+                    pendingDeals.push(meeting.title);
+                  }
+                  if (meetingTextLower.includes('approved') || meetingTextLower.includes('green light')) {
+                    approvedDeals.push(meeting.title);
+                  }
+                  
+                  // Add mentioned brands WITH CLARIFICATION
+                  if (mentionedBrands.length > 0) {
+                    mcpContext += `\n   • 🏷️ Brands mentioned in summary: ${mentionedBrands.join(', ')}`;
+                  }
+                  
+                  mcpContext += '\n';
+                }
+              }
+            });
+            
+            // Add meeting insights to thinking with proper attribution
+            brandsDiscussedInMeetings.forEach((meetings, brandName) => {
+              meetings.forEach(meeting => {
+                mcpThinking.push(`${brandName} mentioned in "${meeting.meetingTitle}" summary`);
+              });
+            });
+            
+            if (pendingDeals.length > 0) {
+              mcpThinking.push(`${pendingDeals.length} pending deals from meetings`);
+            }
+            if (approvedDeals.length > 0) {
+              mcpThinking.push(`${approvedDeals.length} deals already approved`);
+            }
+            if (urgentDeadlines.length > 0) {
+              mcpThinking.push(`Urgent deadlines: ${urgentDeadlines.join(', ')}`);
+            }
+            if (keyOpportunities.length > 0) {
+              mcpThinking.push(`Key opportunities: ${keyOpportunities.join(', ')}`);
+            }
+          }
+          
+          // Add strategic instructions with project context
+          mcpContext += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
+          mcpContext += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
+          mcpContext += '2. Consider pending deals from meetings when suggesting integrations\n';
+          mcpContext += '3. Match high-budget brands with hero/featured integrations\n';
+          mcpContext += '4. If a brand was mentioned in a meeting SUMMARY (not just the title), reference that context\n';
+          mcpContext += '5. Flag any brands that are close to closing (based on meeting summaries)\n';
+          mcpContext += '6. Quote specific requests or concerns from meetings when relevant\n';
+          mcpContext += '7. Highlight timing opportunities (people flying in, approvals pending)\n';
+          mcpContext += '8. Connect creative solutions to stated brand concerns\n';
+          mcpContext += '9. Surface hidden opportunities (e.g., budget available from cancelled deals)\n';
+          
+          // Add project-specific guidance if we detected genre/themes
+          if (projectContext.genre || projectContext.themes.length > 0) {
+            mcpContext += '\n**PROJECT-SPECIFIC MATCHING:**\n';
+            if (projectContext.genre) {
+              mcpContext += `- This is a ${projectContext.genre} project - match brands accordingly\n`;
+            }
+            if (projectContext.themes.length > 0) {
+              mcpContext += `- Key themes: ${projectContext.themes.join(', ')} - prioritize relevant brands\n`;
+            }
           }
           
           // Add to system message
-          if (mcpContext) {
-            systemMessageContent = systemMessageContent.replace(
-              'You are a helpful assistant specialized in AI & Automation.',
-              'You are a helpful assistant specialized in AI & Automation.' + mcpContext
-            );
-          }
-          
+          systemMessageContent = systemMessageContent.replace(
+            'You are a helpful assistant specialized in AI & Automation.',
+            'You are a helpful assistant specialized in AI & Automation.' + mcpContext
+          );
         } catch (error) {
           console.error('MCP search error:', error);
           mcpThinking.push('MCP search encountered an error');
@@ -953,9 +856,26 @@ export default async function handler(req, res) {
         console.error(`Error fetching knowledge base for project ${projectId}:`, error);
       }
 
-      // Add conversation context to system message
-      if (conversationContext) {
-        systemMessageContent += ` Conversation so far: "${conversationContext}".`;
+      // Fetch conversation history from project-specific table
+      try {
+        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
+        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
+        if (historyResponse.ok) {
+          const result = await historyResponse.json();
+          if (result.records.length > 0) {
+            conversationContext = result.records[0].fields.Conversation || '';
+            existingRecordId = result.records[0].id;
+
+            // Truncate long history to avoid OpenAI errors
+            if (conversationContext.length > 3000) {
+              conversationContext = conversationContext.slice(-3000);
+            }
+
+            systemMessageContent += ` Conversation so far: "${conversationContext}".`;
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching conversation history for project ${projectId}:`, error);
       }
 
       const currentTimePDT = getCurrentTimeInPDT();
@@ -1010,7 +930,7 @@ export default async function handler(req, res) {
                 res.json({ 
                   reply: aiReply,
                   mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-                  usedMCP: shouldSearchMCP
+                  usedMCP: isSearchQuery
                 });
               } else {
                 console.error('No valid reply received from OpenAI WebSocket.');
@@ -1051,7 +971,7 @@ export default async function handler(req, res) {
             return res.json({ 
               reply: aiReply,
               mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-              usedMCP: shouldSearchMCP
+              usedMCP: isSearchQuery
             });
           } else {
             console.error('No text reply received from OpenAI.');
