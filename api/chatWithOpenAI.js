@@ -114,15 +114,15 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 10)
     }
     
     const config = {
-      baseId: 'apphslK7rslGb7Z8K',
+      baseId: 'apphslK7rslGb7Z8K', // Your actual base ID
       searchMappings: {
         'meetings': {
-          table: 'Meeting Steam',
+          table: 'Meeting Steam', // Your actual table name
           view: 'ALL Meetings',
           fields: ['Title', 'Date', 'Summary', 'Link']
         },
         'brands': {
-          table: 'Brands',
+          table: 'Brands', // Your actual table name
           view: null,
           fields: ['Brand Name', 'Last Modified', 'Category', 'Budget', 'Campaign Summary']
         }
@@ -132,12 +132,12 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 10)
     const searchConfig = config.searchMappings[searchType];
     if (!searchConfig) {
       console.error('Invalid search type:', searchType);
-      return { error: 'Invalid search type', matches: [], total: 0 };
+      return { error: 'Invalid search type', records: [], total: 0 };
     }
     
     // Build Airtable URL
     let url = `https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)}`;
-    const params = [`maxRecords=100`]; // Get more records to filter properly
+    const params = [`maxRecords=100`]; // Get all records
     
     if (searchConfig.view) {
       params.push(`view=${encodeURIComponent(searchConfig.view)}`);
@@ -149,6 +149,8 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 10)
     
     url += '?' + params.join('&');
     
+    console.log('📡 Fetching from Airtable URL:', url);
+    
     // Fetch from Airtable
     const response = await fetch(url, {
       headers: {
@@ -159,12 +161,17 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 10)
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Airtable API error:', response.status, errorText);
-      throw new Error(`Airtable API error: ${response.status}`);
+      console.error('❌ Airtable API error:', response.status, errorText);
+      throw new Error(`Airtable API error: ${response.status} - ${errorText}`);
     }
     
     const data = await response.json();
-    console.log(`✅ Got ${data.records.length} records from ${searchType}`);
+    console.log(`✅ Got ${data.records.length} records from ${searchType} table`);
+    
+    // Log sample data for debugging
+    if (data.records.length > 0) {
+      console.log('📊 Sample record:', JSON.stringify(data.records[0], null, 2));
+    }
     
     // Return raw data for Claude to process
     return {
@@ -190,8 +197,18 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
   
   try {
     // Always search both brands AND meetings for comprehensive insights
+    console.log('📊 Searching for brands...');
     const brandData = await searchAirtable(userMessage, projectId, 'brands', 100);
+    
+    console.log('📅 Searching for meetings...');
     const meetingData = await searchAirtable(userMessage, projectId, 'meetings', 50);
+    
+    // Check if we got actual data
+    if ((!brandData.records || brandData.records.length === 0) && 
+        (!meetingData.records || meetingData.records.length === 0)) {
+      console.error('❌ No data returned from Airtable!');
+      return null;
+    }
     
     // Start with the knowledge base instructions from Airtable - this is the primary prompt
     let systemPrompt = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
@@ -200,26 +217,36 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     systemPrompt += "\n\n**PRIORITY CONTEXT FROM YOUR BUSINESS DATA:**\n\n";
     
     if (brandData && brandData.records && brandData.records.length > 0) {
-      systemPrompt += "**ACTIVE BRANDS IN YOUR PIPELINE:**\n";
-      systemPrompt += JSON.stringify(brandData.records.map(r => ({
-        brand: r.fields['Brand Name'],
-        budget: r.fields['Budget'],
-        category: r.fields['Category'],
-        campaign_focus: r.fields['Campaign Summary'],
-        last_activity: r.fields['Last Modified']
-      })), null, 2);
-      systemPrompt += "\n\n";
+      systemPrompt += "**ACTIVE BRANDS IN YOUR PIPELINE:**\n```json\n";
+      const brandInfo = brandData.records.map(r => ({
+        brand: r.fields['Brand Name'] || 'Unknown',
+        budget: r.fields['Budget'] || 0,
+        category: r.fields['Category'] || 'Uncategorized',
+        campaign_focus: r.fields['Campaign Summary'] || 'No campaign info',
+        last_activity: r.fields['Last Modified'] || 'Unknown'
+      })).filter(b => b.brand !== 'Unknown'); // Filter out empty records
+      
+      systemPrompt += JSON.stringify(brandInfo, null, 2);
+      systemPrompt += "\n```\n\n";
+      
+      console.log(`📊 Sending ${brandInfo.length} brands to Claude`);
     }
     
     if (meetingData && meetingData.records && meetingData.records.length > 0) {
-      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n";
-      systemPrompt += JSON.stringify(meetingData.records.map(r => ({
-        meeting: r.fields['Title'],
-        date: r.fields['Date'],
-        key_points: r.fields['Summary']
-      })), null, 2);
-      systemPrompt += "\n\n";
+      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n```json\n";
+      const meetingInfo = meetingData.records.map(r => ({
+        meeting: r.fields['Title'] || 'Untitled',
+        date: r.fields['Date'] || 'No date',
+        key_points: r.fields['Summary'] || 'No summary'
+      })).filter(m => m.key_points !== 'No summary'); // Filter out empty meetings
+      
+      systemPrompt += JSON.stringify(meetingInfo, null, 2);
+      systemPrompt += "\n```\n\n";
+      
+      console.log(`📅 Sending ${meetingInfo.length} meetings to Claude`);
     }
+    
+    console.log('📤 Calling Claude API with real data...');
     
     // Call Claude API
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -245,7 +272,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     
     if (!response.ok) {
       const errorData = await response.text();
-      console.error('Claude API error:', response.status, errorData);
+      console.error('❌ Claude API error:', response.status, errorData);
       
       if (response.status === 429) {
         console.warn('Claude API rate limited, falling back to OpenAI');
@@ -256,6 +283,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     }
     
     const data = await response.json();
+    console.log('✅ Claude API response received');
     
     if (data.content && data.content.length > 0) {
       const reply = data.content[0].text;
@@ -353,7 +381,8 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     return null;
     
   } catch (error) {
-    console.error('Error in Claude search:', error);
+    console.error('❌ Error in Claude search:', error);
+    console.error('Error details:', error.stack);
     return null;
   }
 }
