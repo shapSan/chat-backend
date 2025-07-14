@@ -15,6 +15,7 @@ export const config = {
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
+const anthropicApiKey = process.env.ANTHROPIC_API_KEY; // Add this to your Vercel env vars
 
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
@@ -93,9 +94,9 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-// FIXED MCP Search function - more consistent and useful
-async function callMCPSearch(query, projectId, searchType = 'auto', limit = 10) {
-  console.log('🔍 MCP Search called:', { query, projectId, searchType, limit });
+// Enhanced search function that returns structured data for Claude
+async function searchAirtable(query, projectId, searchType = 'auto', limit = 10) {
+  console.log('🔍 Searching Airtable:', { query, projectId, searchType, limit });
   
   try {
     // Auto-detect search type if not specified
@@ -136,7 +137,7 @@ async function callMCPSearch(query, projectId, searchType = 'auto', limit = 10) 
     
     // Build Airtable URL
     let url = `https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)}`;
-    const params = [`maxRecords=${Math.min(limit * 2, 100)}`]; // Get more to filter
+    const params = [`maxRecords=100`]; // Get more records to filter properly
     
     if (searchConfig.view) {
       params.push(`view=${encodeURIComponent(searchConfig.view)}`);
@@ -147,8 +148,6 @@ async function callMCPSearch(query, projectId, searchType = 'auto', limit = 10) 
     });
     
     url += '?' + params.join('&');
-    
-    console.log('📡 Fetching from Airtable:', url);
     
     // Fetch from Airtable
     const response = await fetch(url, {
@@ -167,171 +166,196 @@ async function callMCPSearch(query, projectId, searchType = 'auto', limit = 10) 
     const data = await response.json();
     console.log(`✅ Got ${data.records.length} records from ${searchType}`);
     
-    // Process and filter results
-    let processed = [];
-    
-    if (searchType === 'meetings') {
-      processed = data.records
-        .filter(record => {
-          const fields = record.fields;
-          // Only include meetings with summaries
-          return fields['Summary'] && fields['Summary'].length > 10;
-        })
-        .map(record => {
-          const fields = record.fields;
-          const summary = fields['Summary'] || '';
-          
-          // Calculate relevance score
-          let relevance = 0;
-          const queryWords = query.toLowerCase().split(' ').filter(w => w.length > 2);
-          const summaryLower = summary.toLowerCase();
-          const titleLower = (fields['Title'] || '').toLowerCase();
-          
-          queryWords.forEach(word => {
-            if (summaryLower.includes(word)) relevance += 10;
-            if (titleLower.includes(word)) relevance += 5;
-          });
-          
-          // Boost recent meetings
-          if (fields['Date']) {
-            const meetingDate = new Date(fields['Date']);
-            const daysSince = Math.floor((Date.now() - meetingDate) / (1000 * 60 * 60 * 24));
-            if (daysSince < 7) relevance += 20;
-            else if (daysSince < 30) relevance += 10;
-          }
-          
-          return {
-            id: record.id,
-            title: fields['Title'] || 'Untitled Meeting',
-            date: fields['Date'] || 'No date',
-            summary: summary.substring(0, 200) + '...',
-            fullSummary: summary,
-            link: fields['Link'] || null,
-            relevance: relevance,
-            type: 'meeting'
-          };
-        })
-        .filter(item => item.relevance > 0) // Only include relevant results
-        .sort((a, b) => b.relevance - a.relevance);
-    } else {
-      // Brands processing
-      processed = data.records
-        .filter(record => {
-          const fields = record.fields;
-          // Only include brands with names
-          return fields['Brand Name'] && fields['Brand Name'].length > 0;
-        })
-        .map(record => {
-          const fields = record.fields;
-          
-          // Calculate relevance
-          let relevance = 0;
-          const queryWords = query.toLowerCase().split(' ').filter(w => w.length > 2);
-          const brandNameLower = (fields['Brand Name'] || '').toLowerCase();
-          const campaignLower = (fields['Campaign Summary'] || '').toLowerCase();
-          const categoryLower = (fields['Category'] || []).join(' ').toLowerCase();
-          
-          queryWords.forEach(word => {
-            if (brandNameLower.includes(word)) relevance += 20;
-            if (campaignLower.includes(word)) relevance += 10;
-            if (categoryLower.includes(word)) relevance += 5;
-          });
-          
-          // Boost by budget
-          const budget = fields['Budget'] || 0;
-          if (budget >= 5000000) relevance += 15;
-          else if (budget >= 1000000) relevance += 10;
-          else if (budget >= 500000) relevance += 5;
-          
-          // Boost recent activity
-          if (fields['Last Modified']) {
-            const lastMod = new Date(fields['Last Modified']);
-            const daysSince = Math.floor((Date.now() - lastMod) / (1000 * 60 * 60 * 24));
-            if (daysSince < 7) relevance += 15;
-            else if (daysSince < 30) relevance += 10;
-          }
-          
-          return {
-            id: record.id,
-            name: fields['Brand Name'],
-            category: Array.isArray(fields['Category']) ? fields['Category'].join(', ') : 'Uncategorized',
-            budget: fields['Budget'] ? `$${fields['Budget'].toLocaleString()}` : 'Budget TBD',
-            budgetNum: fields['Budget'] || 0,
-            lastModified: fields['Last Modified'] || 'Unknown',
-            campaignSummary: (fields['Campaign Summary'] || '').substring(0, 150) + '...',
-            fullCampaignSummary: fields['Campaign Summary'] || '',
-            relevance: relevance,
-            type: 'brand'
-          };
-        })
-        .sort((a, b) => b.relevance - a.relevance);
-    }
-    
-    console.log(`🎯 Returning top ${limit} results out of ${processed.length} relevant items`);
-    
+    // Return raw data for Claude to process
     return {
-      matches: processed.slice(0, limit),
-      total: processed.length,
       searchType,
-      tableUsed: searchConfig.table
+      records: data.records,
+      total: data.records.length
     };
     
   } catch (error) {
-    console.error('❌ Error in MCP search:', error);
-    return { error: error.message, matches: [], total: 0 };
+    console.error('❌ Error searching Airtable:', error);
+    return { error: error.message, records: [], total: 0 };
   }
 }
 
-// Analyze user query to extract project context
-function analyzeProjectContext(userMessage) {
-  const msgLower = userMessage.toLowerCase();
-  const context = {
-    projectType: null,
-    themes: [],
-    budget: null,
-    urgency: null,
-    searchIntent: null
-  };
+// Claude-powered search handler for intelligent brand matching
+async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
+  console.log('🤖 Using Claude for intelligent brand-project matching...');
   
-  // Detect project type
-  const projectTypes = {
-    'horror': ['horror', 'scary', 'thriller', 'suspense'],
-    'comedy': ['comedy', 'funny', 'humor', 'laugh'],
-    'action': ['action', 'fight', 'chase', 'explosion'],
-    'drama': ['drama', 'serious', 'emotional'],
-    'family': ['family', 'kids', 'children', 'animated'],
-    'romance': ['romance', 'love', 'romantic'],
-    'documentary': ['documentary', 'doc', 'real story']
-  };
+  if (!anthropicApiKey) {
+    console.warn('No Anthropic API key found, falling back to OpenAI');
+    return null;
+  }
   
-  for (const [type, keywords] of Object.entries(projectTypes)) {
-    if (keywords.some(keyword => msgLower.includes(keyword))) {
-      context.projectType = type;
-      break;
+  try {
+    // Always search both brands AND meetings for comprehensive insights
+    const brandData = await searchAirtable(userMessage, projectId, 'brands', 100);
+    const meetingData = await searchAirtable(userMessage, projectId, 'meetings', 50);
+    
+    // Start with the knowledge base instructions from Airtable - this is the primary prompt
+    let systemPrompt = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+    
+    // Add the raw data context
+    systemPrompt += "\n\n**PRIORITY CONTEXT FROM YOUR BUSINESS DATA:**\n\n";
+    
+    if (brandData && brandData.records && brandData.records.length > 0) {
+      systemPrompt += "**ACTIVE BRANDS IN YOUR PIPELINE:**\n";
+      systemPrompt += JSON.stringify(brandData.records.map(r => ({
+        brand: r.fields['Brand Name'],
+        budget: r.fields['Budget'],
+        category: r.fields['Category'],
+        campaign_focus: r.fields['Campaign Summary'],
+        last_activity: r.fields['Last Modified']
+      })), null, 2);
+      systemPrompt += "\n\n";
     }
+    
+    if (meetingData && meetingData.records && meetingData.records.length > 0) {
+      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n";
+      systemPrompt += JSON.stringify(meetingData.records.map(r => ({
+        meeting: r.fields['Title'],
+        date: r.fields['Date'],
+        key_points: r.fields['Summary']
+      })), null, 2);
+      systemPrompt += "\n\n";
+    }
+    
+    // Call Claude API
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-opus-20240229',
+        max_tokens: 2000,
+        temperature: 0.7,
+        system: systemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content: userMessage
+          }
+        ]
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('Claude API error:', response.status, errorData);
+      
+      if (response.status === 429) {
+        console.warn('Claude API rate limited, falling back to OpenAI');
+        return null;
+      }
+      
+      throw new Error(`Claude API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.content && data.content.length > 0) {
+      const reply = data.content[0].text;
+      
+      // Extract meaningful thinking steps based on actual data
+      const mcpThinking = [];
+      
+      // Analyze actual brand data
+      if (brandData && brandData.records) {
+        const hotBrands = [];
+        const highValueBrands = [];
+        const activeCategories = new Set();
+        
+        brandData.records.forEach(record => {
+          const fields = record.fields;
+          if (!fields['Brand Name']) return;
+          
+          const brandName = fields['Brand Name'];
+          
+          // Track hot brands (active in last 7 days)
+          if (fields['Last Modified']) {
+            const daysSince = Math.floor((Date.now() - new Date(fields['Last Modified'])) / (1000 * 60 * 60 * 24));
+            if (daysSince < 7) {
+              hotBrands.push(brandName);
+            }
+          }
+          
+          // Track high-value opportunities
+          if (fields['Budget'] >= 5000000) {
+            highValueBrands.push(brandName);
+          }
+          
+          // Track categories
+          if (fields['Category']) {
+            if (Array.isArray(fields['Category'])) {
+              fields['Category'].forEach(cat => activeCategories.add(cat));
+            } else {
+              activeCategories.add(fields['Category']);
+            }
+          }
+        });
+        
+        // Add actual insights to thinking
+        if (hotBrands.length > 0) {
+          mcpThinking.push(`HOT brands (active this week): ${hotBrands.slice(0, 5).join(', ')}`);
+        }
+        if (highValueBrands.length > 0) {
+          mcpThinking.push(`High-value opportunities ($5M+): ${highValueBrands.slice(0, 5).join(', ')}`);
+        }
+        if (activeCategories.size > 0) {
+          mcpThinking.push(`Active categories: ${Array.from(activeCategories).slice(0, 5).join(', ')}`);
+        }
+      }
+      
+      // Analyze meeting insights
+      if (meetingData && meetingData.records) {
+        const brandsInMeetings = new Set();
+        const opportunities = [];
+        
+        meetingData.records.forEach(record => {
+          const summary = record.fields['Summary'] || '';
+          const title = record.fields['Title'] || '';
+          
+          // Find brand mentions in meetings
+          if (brandData && brandData.records) {
+            brandData.records.forEach(brandRecord => {
+              const brandName = brandRecord.fields['Brand Name'];
+              if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
+                brandsInMeetings.add(brandName);
+              }
+            });
+          }
+          
+          // Find opportunities
+          if (summary.includes('pulled out') || summary.includes('budget available')) {
+            opportunities.push(`Opportunity from "${title}"`);
+          }
+        });
+        
+        if (brandsInMeetings.size > 0) {
+          mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
+        }
+        if (opportunities.length > 0) {
+          mcpThinking.push(`Budget opportunities found: ${opportunities.length}`);
+        }
+      }
+      
+      return {
+        reply,
+        mcpThinking,
+        usedMCP: true
+      };
+    }
+    
+    return null;
+    
+  } catch (error) {
+    console.error('Error in Claude search:', error);
+    return null;
   }
-  
-  // Detect themes
-  const themeKeywords = ['luxury', 'tech', 'sports', 'food', 'travel', 'fashion', 'beauty', 'health', 'fitness', 'gaming', 'automotive', 'finance'];
-  context.themes = themeKeywords.filter(theme => msgLower.includes(theme));
-  
-  // Detect urgency
-  if (msgLower.includes('urgent') || msgLower.includes('asap') || msgLower.includes('quick') || msgLower.includes('fast')) {
-    context.urgency = 'high';
-  } else if (msgLower.includes('soon') || msgLower.includes('this week')) {
-    context.urgency = 'medium';
-  }
-  
-  // Detect search intent
-  if (msgLower.includes('easy money') || msgLower.includes('quick approval')) {
-    context.searchIntent = 'fast_deals';
-  } else if (msgLower.includes('high budget') || msgLower.includes('big budget')) {
-    context.searchIntent = 'high_value';
-  } else if (msgLower.includes('wildcard') || msgLower.includes('unexpected')) {
-    context.searchIntent = 'creative';
-  }
-  
-  return context;
 }
 
 export default async function handler(req, res) {
@@ -450,252 +474,10 @@ export default async function handler(req, res) {
         Authorization: `Bearer ${airtableApiKey}` 
       };
 
-      let systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
       let conversationContext = '';
       let existingRecordId = null;
-      let mcpThinking = [];
-      let mcpContext = '';
 
-      // IMPROVED Search Query Detection
-      const searchTriggers = [
-        'brand', 'match', 'suggest', 'integration', 'easy money', 'quick approval',
-        'show me', 'list', 'find', 'search', 'for this project', 'wildcard',
-        'audience match', 'hot new brands', 'what brands', 'which brands',
-        'perfect for', 'good fit', 'meeting', 'discussion', 'talked about',
-        'pending', 'approved', 'budget', 'high value', 'opportunities'
-      ];
-      
-      const isSearchQuery = userMessage && searchTriggers.some(trigger => 
-        userMessage.toLowerCase().includes(trigger)
-      );
-
-      console.log('🔍 Search detection:', { isSearchQuery, userMessage: userMessage?.slice(0, 50) });
-
-      // MCP Search Integration - FIXED AND IMPROVED
-      if (isSearchQuery) {
-        console.log('✅ Executing MCP search...');
-        
-        try {
-          // Analyze project context
-          const projectContext = analyzeProjectContext(userMessage);
-          
-          if (projectContext.projectType) {
-            mcpThinking.push(`Detected ${projectContext.projectType} project`);
-          }
-          if (projectContext.themes.length > 0) {
-            mcpThinking.push(`Themes: ${projectContext.themes.join(', ')}`);
-          }
-          if (projectContext.urgency) {
-            mcpThinking.push(`Urgency level: ${projectContext.urgency}`);
-          }
-          if (projectContext.searchIntent) {
-            mcpThinking.push(`Looking for: ${projectContext.searchIntent === 'fast_deals' ? 'quick approvals' : projectContext.searchIntent === 'high_value' ? 'high-budget brands' : 'creative opportunities'}`);
-          }
-          
-          // Search for brands
-          const brandResults = await callMCPSearch(userMessage, projectId, 'brands', 15);
-          
-          // Search for meetings if relevant
-          let meetingResults = null;
-          if (userMessage.toLowerCase().includes('meeting') || 
-              userMessage.toLowerCase().includes('discussion') ||
-              userMessage.toLowerCase().includes('pending') ||
-              userMessage.toLowerCase().includes('talked')) {
-            meetingResults = await callMCPSearch(userMessage, projectId, 'meetings', 10);
-          }
-          
-          // Build context from results
-          mcpContext = '\n\n**PRIORITY CONTEXT FROM YOUR BUSINESS DATA:**\n\n';
-          
-          // Process brand results
-          if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
-            mcpContext += '**ACTIVE BRANDS IN YOUR PIPELINE:**\n\n';
-            
-            const brandsByStatus = {
-              hot: [],
-              warm: [],
-              highValue: [],
-              quickWins: []
-            };
-            
-            brandResults.matches.forEach(brand => {
-              // Skip if no brand name
-              if (!brand.name) return;
-              
-              // Categorize brands
-              const daysSince = brand.lastModified !== 'Unknown' ? 
-                Math.floor((Date.now() - new Date(brand.lastModified)) / (1000 * 60 * 60 * 24)) : 999;
-              
-              if (daysSince < 7) brandsByStatus.hot.push(brand);
-              else if (daysSince < 30) brandsByStatus.warm.push(brand);
-              
-              if (brand.budgetNum >= 5000000) brandsByStatus.highValue.push(brand);
-              else if (brand.budgetNum >= 500000 && brand.budgetNum < 1000000) brandsByStatus.quickWins.push(brand);
-              
-              // Format brand entry
-              mcpContext += `**${brand.name}**`;
-              
-              // Add status indicators
-              if (daysSince < 7) mcpContext += ' 🔥 [HOT - Active this week]';
-              else if (daysSince < 30) mcpContext += ' 🟡 [WARM - Recent activity]';
-              
-              mcpContext += `\n- Category: ${brand.category}`;
-              mcpContext += `\n- Budget: ${brand.budget}`;
-              
-              if (brand.budgetNum >= 5000000) {
-                mcpContext += ' 💎 [HIGH VALUE]';
-              } else if (brand.budgetNum >= 1000000 && brand.budgetNum < 2000000) {
-                mcpContext += ' ⚡ [QUICK WIN POTENTIAL]';
-              }
-              
-              if (brand.fullCampaignSummary && brand.fullCampaignSummary.length > 10) {
-                // Use FULL campaign summary, not truncated
-                mcpContext += `\n- Current Focus: ${brand.fullCampaignSummary.trim()}`;
-              }
-              
-              mcpContext += '\n\n';
-            });
-            
-            // Add thinking summary with actual names
-            if (brandsByStatus.hot.length > 0) {
-              const hotBrandNames = brandsByStatus.hot.map(b => b.name);
-              mcpThinking.push(`HOT brands (${brandsByStatus.hot.length}): ${hotBrandNames.join(', ')}`);
-            }
-            if (brandsByStatus.highValue.length > 0) {
-              const highValueNames = brandsByStatus.highValue.map(b => b.name);
-              mcpThinking.push(`High-value brands ($5M+): ${highValueNames.join(', ')}`);
-            }
-            if (brandsByStatus.quickWins.length > 0) {
-              const quickWinNames = brandsByStatus.quickWins.map(b => b.name);
-              mcpThinking.push(`Quick win opportunities: ${quickWinNames.join(', ')}`);
-            }
-          }
-          
-          // Process meeting results
-          if (meetingResults && !meetingResults.error && meetingResults.matches.length > 0) {
-            mcpContext += '\n**RECENT MEETINGS & DISCUSSIONS:**\n\n';
-            
-            const brandsInMeetings = new Set();
-            const pendingDeals = [];
-            const approvedDeals = [];
-            
-            meetingResults.matches.forEach(meeting => {
-              const summaryLower = meeting.fullSummary.toLowerCase();
-              
-              // Find brand mentions in summary
-              const mentionedBrands = [];
-              if (brandResults && brandResults.matches) {
-                brandResults.matches.forEach(brand => {
-                  if (brand.name && summaryLower.includes(brand.name.toLowerCase())) {
-                    mentionedBrands.push(brand.name);
-                    brandsInMeetings.add(brand.name);
-                  }
-                });
-              }
-              
-              // Check for deal status
-              if (summaryLower.includes('pending') || summaryLower.includes('waiting')) {
-                pendingDeals.push({ title: meeting.title, brands: mentionedBrands });
-              }
-              if (summaryLower.includes('approved') || summaryLower.includes('green light')) {
-                approvedDeals.push({ title: meeting.title, brands: mentionedBrands });
-              }
-              
-              // Format meeting entry
-              mcpContext += `**${meeting.title}** (${meeting.date})\n`;
-              
-              if (mentionedBrands.length > 0) {
-                mcpContext += `- Brands discussed: ${mentionedBrands.join(', ')}\n`;
-              }
-              
-              // Extract specific quotes and details from summary
-              const summaryLower = meeting.fullSummary.toLowerCase();
-              const fullSummary = meeting.fullSummary;
-              
-              // Look for specific details to quote
-              if (summaryLower.includes('wants')) {
-                const wantsMatch = fullSummary.match(/wants?\s+([^.]+)/i);
-                if (wantsMatch) {
-                  mcpContext += `- Specific request: "${wantsMatch[0]}"\n`;
-                }
-              }
-              
-              if (summaryLower.includes('loves')) {
-                const lovesMatch = fullSummary.match(/loves?\s+([^.]+)/i);
-                if (lovesMatch) {
-                  mcpContext += `- Positive feedback: "${lovesMatch[0]}"\n`;
-                }
-              }
-              
-              if (summaryLower.includes('concerned') || summaryLower.includes('worried')) {
-                const concernMatch = fullSummary.match(/(?:concerned|worried)\s+about\s+([^.]+)/i);
-                if (concernMatch) {
-                  mcpContext += `- Concern: "${concernMatch[0]}"\n`;
-                }
-              }
-              
-              if (summaryLower.includes('deadline') || summaryLower.includes('by friday') || summaryLower.includes('by monday')) {
-                const deadlineMatch = fullSummary.match(/(?:by|deadline|approval.*by)\s+([^.]+)/i);
-                if (deadlineMatch) {
-                  mcpContext += `- ⏰ Timing: "${deadlineMatch[0]}"\n`;
-                }
-              }
-              
-              if (summaryLower.includes('flying in') || summaryLower.includes('meeting with')) {
-                const meetingMatch = fullSummary.match(/(?:flying in|meeting with)\s+([^.]+)/i);
-                if (meetingMatch) {
-                  mcpContext += `- 📅 Upcoming: "${meetingMatch[0]}"\n`;
-                }
-              }
-              
-              if (summaryLower.includes('pulled out') || summaryLower.includes('budget available')) {
-                const budgetMatch = fullSummary.match(/\$[\d,]+(?:M|K)?\s+(?:budget)?\s*(?:now)?\s*available/i);
-                if (budgetMatch) {
-                  mcpContext += `- 💰 Opportunity: "${budgetMatch[0]}"\n`;
-                }
-              }
-              
-              mcpContext += '\n';
-            });
-            
-            // Add meeting insights to thinking
-            if (brandsInMeetings.size > 0) {
-              mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).slice(0, 5).join(', ')}`);
-            }
-            if (pendingDeals.length > 0) {
-              mcpThinking.push(`${pendingDeals.length} pending deals`);
-            }
-            if (approvedDeals.length > 0) {
-              mcpThinking.push(`${approvedDeals.length} approved deals`);
-            }
-          }
-          
-          // Add strategic guidance based on search intent
-          mcpContext += '\n**RECOMMENDATIONS BASED ON YOUR QUERY:**\n';
-          
-          if (projectContext.searchIntent === 'fast_deals') {
-            mcpContext += '- Focus on brands marked as HOT or with recent activity\n';
-            mcpContext += '- Prioritize brands with budgets under $2M (faster approval)\n';
-            mcpContext += '- Look for brands mentioned in recent meetings\n';
-          } else if (projectContext.searchIntent === 'high_value') {
-            mcpContext += '- Target brands with $5M+ budgets\n';
-            mcpContext += '- Consider package deals for multiple integrations\n';
-            mcpContext += '- Focus on brands with "Campaign Summary" indicating major launches\n';
-          } else if (projectContext.projectType) {
-            mcpContext += `- Match brands to ${projectContext.projectType} genre\n`;
-            mcpContext += '- Consider audience alignment and brand values\n';
-            mcpContext += '- Look for brands with relevant campaign themes\n';
-          }
-          
-          // DON'T update system message yet - we'll structure it properly
-          
-        } catch (error) {
-          console.error('❌ MCP search error:', error);
-          mcpThinking.push('Search encountered an error - using standard response');
-        }
-      }
-
-      // Fetch knowledge base - PRESERVE FORMATTING
+      // Fetch knowledge base
       let knowledgeBaseInstructions = '';
       try {
         const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
@@ -703,7 +485,6 @@ export default async function handler(req, res) {
           const knowledgeBaseData = await kbResponse.json();
           const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
           knowledgeBaseInstructions = knowledgeEntries;
-          // Don't add to system message yet - we'll structure it properly later
         }
       } catch (error) {
         console.error(`Error fetching knowledge base:`, error);
@@ -722,40 +503,34 @@ export default async function handler(req, res) {
             if (conversationContext.length > 3000) {
               conversationContext = conversationContext.slice(-3000);
             }
-
-            systemMessageContent += ` Conversation so far: "${conversationContext}".`;
           }
         }
       } catch (error) {
         console.error(`Error fetching conversation history:`, error);
       }
 
-      const currentTimePDT = getCurrentTimeInPDT();
+      // IMPROVED Search Query Detection - only for brand matching requests
+      const isBrandMatchingQuery = userMessage && (
+        // Direct brand requests
+        userMessage.toLowerCase().includes('brand') ||
+        userMessage.toLowerCase().includes('match') ||
+        userMessage.toLowerCase().includes('integration') ||
+        userMessage.toLowerCase().includes('partnership') ||
+        // Suggestion button phrases
+        userMessage.toLowerCase().includes('easy money') ||
+        userMessage.toLowerCase().includes('wildcard') ||
+        userMessage.toLowerCase().includes('audience match') ||
+        userMessage.toLowerCase().includes('hot new brands') ||
+        userMessage.toLowerCase().includes('fits the story') ||
+        userMessage.toLowerCase().includes('save production money') ||
+        // Production context phrases
+        userMessage.toLowerCase().includes('for this project') ||
+        userMessage.toLowerCase().includes('for this production') ||
+        userMessage.toLowerCase().includes('upcoming') ||
+        userMessage.toLowerCase().includes('synopsis')
+      );
       
-      // RESTRUCTURE THE SYSTEM MESSAGE PROPERLY
-      // 1. Start with base identity
-      systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
-      
-      // 2. Add knowledge base instructions WITH PROPER FORMATTING
-      if (knowledgeBaseInstructions) {
-        systemMessageContent = knowledgeBaseInstructions; // Replace entirely with KB instructions
-      }
-      
-      // 3. Add MCP context if we have it
-      if (mcpContext) {
-        systemMessageContent += mcpContext;
-      }
-      
-      // 4. Add conversation history
-      if (conversationContext) {
-        systemMessageContent += `\n\nConversation history: ${conversationContext}`;
-      }
-      
-      // 5. Add metadata
-      systemMessageContent += `\n\nCurrent time in PDT: ${currentTimePDT}.`;
-      if (projectId && projectId !== 'default') {
-        systemMessageContent += ` You are assisting with the ${projectId} project.`;
-      }
+      console.log('🔍 Brand matching detection:', { isBrandMatchingQuery, userMessage: userMessage?.slice(0, 50) });
 
       // Process audio or text
       if (audioData) {
@@ -769,6 +544,16 @@ export default async function handler(req, res) {
               'OpenAI-Beta': 'realtime=v1',
             },
           });
+
+          // Build system message
+          let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+          if (conversationContext) {
+            systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+          }
+          systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+          if (projectId && projectId !== 'default') {
+            systemMessageContent += ` You are assisting with the ${projectId} project.`;
+          }
 
           openaiWs.on('open', () => {
             console.log('Connected to OpenAI Realtime API');
@@ -800,8 +585,8 @@ export default async function handler(req, res) {
                 
                 res.json({ 
                   reply: aiReply,
-                  mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-                  usedMCP: isSearchQuery
+                  mcpThinking: null,
+                  usedMCP: false
                 });
               } else {
                 res.status(500).json({ error: 'No valid reply received from OpenAI.' });
@@ -821,13 +606,44 @@ export default async function handler(req, res) {
         }
       } else if (userMessage) {
         try {
-          console.log('💬 Sending to OpenAI with MCP context:', { 
-            hasContext: mcpContext.length > 0,
-            contextLength: mcpContext.length,
-            thinkingSteps: mcpThinking.length
-          });
+          let aiReply = '';
+          let mcpThinking = [];
+          let usedMCP = false;
+
+          // Try Claude for brand matching queries
+          if (isBrandMatchingQuery && anthropicApiKey) {
+            const claudeResult = await handleClaudeSearch(
+              userMessage, 
+              knowledgeBaseInstructions, 
+              projectId, 
+              sessionId
+            );
+            
+            if (claudeResult) {
+              aiReply = claudeResult.reply;
+              mcpThinking = claudeResult.mcpThinking;
+              usedMCP = true;
+              console.log('✅ Used Claude for intelligent brand matching');
+            }
+          }
           
-          const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+          // Fall back to OpenAI if Claude didn't handle it
+          if (!aiReply) {
+            console.log('📝 Using OpenAI for response');
+            
+            // Build system message
+            let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+            if (conversationContext) {
+              systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+            }
+            systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+            if (projectId && projectId !== 'default') {
+              systemMessageContent += ` You are assisting with the ${projectId} project.`;
+            }
+            
+            const openAIResponse = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+            aiReply = openAIResponse;
+          }
           
           if (aiReply) {
             updateAirtableConversation(
@@ -842,14 +658,14 @@ export default async function handler(req, res) {
             return res.json({ 
               reply: aiReply,
               mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-              usedMCP: isSearchQuery
+              usedMCP: usedMCP
             });
           } else {
-            return res.status(500).json({ error: 'No text reply received from OpenAI.' });
+            return res.status(500).json({ error: 'No text reply received.' });
           }
         } catch (error) {
-          console.error('Error fetching text response from OpenAI:', error);
-          return res.status(500).json({ error: 'Error fetching text response from OpenAI.', details: error.message });
+          console.error('Error fetching response:', error);
+          return res.status(500).json({ error: 'Error fetching response.', details: error.message });
         }
       }
     } catch (error) {
