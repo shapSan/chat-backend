@@ -261,7 +261,7 @@ ${brands.slice(0, 50).map(b =>
   }
 }
 
-// Stage 3: Claude-powered search handler - ENHANCED
+// Stage 3: Claude-powered search handler - ENHANCED WITH MEETING LINKS
 async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
   console.log('🤖 Starting 3-stage intelligent brand-project matching...');
   
@@ -293,6 +293,9 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     // Stage 3: Deep analysis with Claude
     console.log('🧠 Stage 3: Claude deep analysis on top candidates...');
     
+    // Store meeting data for link references
+    const meetingLinks = {};
+    
     // Start with the knowledge base instructions from Airtable - this is the primary prompt
     let systemPrompt = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
     
@@ -316,7 +319,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       console.log(`📊 Sending ${brandInfo.length} top brands to Claude for deep analysis`);
     }
     
-    // ENHANCED: Add meeting context WITH brand mentions
+    // ENHANCED: Add meeting context WITH brand mentions and prepare link data
     if (meetingData && meetingData.records && meetingData.records.length > 0 && topBrands) {
       systemPrompt += "**RECENT MEETINGS & BRAND MENTIONS:**\n```json\n";
       
@@ -329,6 +332,12 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
         .map(r => {
           const summary = r.fields['Summary'] || '';
           const title = r.fields['Title'] || 'Untitled';
+          const link = r.fields['Link'] || null;
+          
+          // Store meeting link for later reference
+          if (link) {
+            meetingLinks[title] = link;
+          }
           
           // Find which top brands are mentioned in this meeting
           const mentionedBrands = [];
@@ -343,13 +352,17 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
             meeting: title,
             date: r.fields['Date'] || 'No date',
             key_points: summary,
-            brands_mentioned: mentionedBrands.length > 0 ? mentionedBrands : undefined
+            brands_mentioned: mentionedBrands.length > 0 ? mentionedBrands : undefined,
+            has_link: !!link // Let Claude know a link exists
           };
         })
         .filter(m => m.key_points); // Only include meetings with content
       
       systemPrompt += JSON.stringify(meetingInfo, null, 2);
       systemPrompt += "\n```\n\n";
+      
+      // Add instruction about meeting references
+      systemPrompt += "\n**When referencing meetings in your response, always use the exact meeting title as it appears in the data above. Format meeting references as [[Meeting Title]] so they can be properly linked.**\n";
       
       console.log(`📅 Sending ${meetingInfo.length} relevant meetings to Claude`);
     }
@@ -487,7 +500,8 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       return {
         reply,
         mcpThinking,
-        usedMCP: true
+        usedMCP: true,
+        meetingLinks // Pass the meeting links to the frontend
       };
     }
     
@@ -719,21 +733,23 @@ export default async function handler(req, res) {
             console.log('OpenAI WebSocket message:', event);
             if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
               const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
-              if (aiReply) {
-                updateAirtableConversation(
-                  sessionId, 
-                  projectId, 
-                  chatUrl, 
-                  headersAirtable, 
-                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
-                  existingRecordId
-                ).catch(err => console.error('Airtable update error:', err));
-                
-                res.json({ 
-                  reply: aiReply,
-                  mcpThinking: null,
-                  usedMCP: false
-                });
+             if (aiReply) {
+  updateAirtableConversation(
+    sessionId, 
+    projectId, 
+    chatUrl, 
+    headersAirtable, 
+    `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
+    existingRecordId
+  ).catch(err => console.error('Airtable update error:', err));
+  
+  return res.json({ 
+    reply: aiReply,
+    mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
+    usedMCP: usedMCP,
+    meetingLinks: claudeResult?.meetingLinks || {} // Include meeting links if available
+  });
+}
               } else {
                 res.status(500).json({ error: 'No valid reply received from OpenAI.' });
               }
