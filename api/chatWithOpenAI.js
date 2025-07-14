@@ -15,6 +15,7 @@ export const config = {
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
+const anthropicApiKey = process.env.ANTHROPIC_API_KEY; // Add this to your Vercel env vars
 
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
@@ -93,34 +94,46 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-// Enhanced MCP Search function with meeting details extraction
-async function callMCPSearch(query, projectId, limit = 10) {
-  console.log('🚀 callMCPSearch called with:', { query, projectId, limit });
+// Stage 1: Enhanced search function that returns structured data for Claude
+async function searchAirtable(query, projectId, searchType = 'auto', limit = 100) {
+  console.log('🔍 Stage 1: Searching Airtable:', { query, projectId, searchType, limit });
+  
   try {
-    // Determine search type
-    const searchType = query.toLowerCase().includes('meeting') || 
-                      query.toLowerCase().includes('call') || 
-                      query.toLowerCase().includes('discussion') 
-                      ? 'meetings' : 'brands';
+    // Auto-detect search type if not specified
+    if (searchType === 'auto') {
+      const queryLower = query.toLowerCase();
+      if (queryLower.includes('meeting') || 
+          queryLower.includes('call') || 
+          queryLower.includes('discussion') ||
+          queryLower.includes('talked') ||
+          queryLower.includes('spoke')) {
+        searchType = 'meetings';
+      } else {
+        searchType = 'brands';
+      }
+    }
     
-    // Configuration
     const config = {
-      baseId: 'apphslK7rslGb7Z8K',
+      baseId: 'apphslK7rslGb7Z8K', // Your actual base ID
       searchMappings: {
         'meetings': {
-          table: 'Meeting Steam',
-          view: 'ALL Meetings',
+          table: 'Meeting Steam', // Your actual table name
+          view: 'ALL Meetings', // Could use a filtered view like 'Recent 30 Days'
           fields: ['Title', 'Date', 'Summary', 'Link']
         },
         'brands': {
-          table: 'Brands',
-          view: null,
+          table: 'Brands', // Your actual table name
+          view: null, // Could use 'Active Brands' view
           fields: ['Brand Name', 'Last Modified', 'Category', 'Budget', 'Campaign Summary']
         }
       }
     };
     
     const searchConfig = config.searchMappings[searchType];
+    if (!searchConfig) {
+      console.error('Invalid search type:', searchType);
+      return { error: 'Invalid search type', records: [], total: 0 };
+    }
     
     // Build Airtable URL
     let url = `https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)}`;
@@ -136,6 +149,8 @@ async function callMCPSearch(query, projectId, limit = 10) {
     
     url += '?' + params.join('&');
     
+    console.log('📡 Fetching from Airtable URL:', url);
+    
     // Fetch from Airtable
     const response = await fetch(url, {
       headers: {
@@ -145,252 +160,333 @@ async function callMCPSearch(query, projectId, limit = 10) {
     });
     
     if (!response.ok) {
-      throw new Error(`Airtable API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error('❌ Airtable API error:', response.status, errorText);
+      throw new Error(`Airtable API error: ${response.status} - ${errorText}`);
     }
     
     const data = await response.json();
+    console.log(`✅ Stage 1 complete: Got ${data.records.length} ${searchType} from Airtable`);
     
-    // Process results based on type with enhanced extraction
-    let processed;
-    if (searchType === 'meetings') {
-      processed = data.records.map(record => {
-        const fields = record.fields;
-        const summary = fields['Summary'] || '';
-        
-        // Extract insights from meeting data
-        const insights = extractMeetingInsights(summary);
-        
-        return {
-          id: record.id,
-          title: fields['Title'] || 'Untitled Meeting',
-          date: fields['Date'] || 'No date',
-          summary: summary.substring(0, 150) + '...',
-          fullSummary: summary,
-          link: fields['Link'] || null,
-          insights: insights,
-          relevance: 50,
-          type: 'meeting'
-        };
-      });
-    } else {
-      processed = data.records.map(record => {
-        const fields = record.fields;
-        
-        let budgetDisplay = 'Budget TBD';
-        let budgetNum = 0;
-        if (fields['Budget'] !== undefined && fields['Budget'] !== null) {
-          budgetNum = fields['Budget'];
-          budgetDisplay = `$${fields['Budget'].toLocaleString()}`;
-        }
-        
-        let categoryDisplay = 'Uncategorized';
-        if (fields['Category'] && Array.isArray(fields['Category'])) {
-          categoryDisplay = fields['Category'].join(', ');
-        }
-        
-        // Extract insights from brand data
-        const campaignSummary = fields['Campaign Summary'] || '';
-        const brandInsights = extractBrandInsights('', campaignSummary);
-        
-        return {
-          id: record.id,
-          name: fields['Brand Name'] || 'Unknown Brand',
-          category: categoryDisplay,
-          budget: budgetDisplay,
-          budgetNum: budgetNum,
-          lastModified: fields['Last Modified'] || 'Unknown',
-          campaignSummary: campaignSummary.substring(0, 100) + '...',
-          fullCampaignSummary: campaignSummary,
-          insights: brandInsights,
-          relevance: 50,
-          type: 'brand'
-        };
-      });
-    }
-    
+    // Return raw data for next stage
     return {
-      matches: processed.slice(0, limit),
-      total: processed.length,
       searchType,
-      tableUsed: searchConfig.table
+      records: data.records,
+      total: data.records.length
     };
     
   } catch (error) {
-    console.error('Error in MCP search:', error);
-    return { error: error.message, matches: [], total: 0 };
+    console.error('❌ Error searching Airtable:', error);
+    return { error: error.message, records: [], total: 0 };
   }
 }
 
-// Extract insights from meeting summaries
-function extractMeetingInsights(text) {
-  const insights = {
-    concerns: [],
-    requests: [],
-    opportunities: [],
-    deadlines: [],
-    quotes: []
-  };
-  
-  const textLower = text.toLowerCase();
-  
-  // Extract concerns
-  const concernPatterns = [
-    /concerned about (.+?)(?:\.|,|;|$)/gi,
-    /worried about (.+?)(?:\.|,|;|$)/gi,
-    /hesitant about (.+?)(?:\.|,|;|$)/gi,
-    /concern:?\s*(.+?)(?:\.|,|;|$)/gi
-  ];
-  
-  concernPatterns.forEach(pattern => {
-    const matches = text.matchAll(pattern);
-    for (const match of matches) {
-      insights.concerns.push(match[1].trim());
+// Stage 2: OpenAI narrowing function
+async function narrowWithOpenAI(brands, meetings, userMessage) {
+  try {
+    console.log(`🧮 Stage 2: Narrowing ${brands.length} brands with OpenAI...`);
+    
+    // Only process if we have brands
+    if (!brands || brands.length === 0) {
+      return { topBrands: [], scores: {} };
     }
-  });
-  
-  // Extract specific requests
-  const requestPatterns = [
-    /wants? (.+?)(?:\.|,|;|$)/gi,
-    /looking for (.+?)(?:\.|,|;|$)/gi,
-    /needs? (.+?)(?:\.|,|;|$)/gi,
-    /requested (.+?)(?:\.|,|;|$)/gi,
-    /specifically asked for (.+?)(?:\.|,|;|$)/gi
-  ];
-  
-  requestPatterns.forEach(pattern => {
-    const matches = text.matchAll(pattern);
-    for (const match of matches) {
-      insights.requests.push(match[1].trim());
+    
+    // Create a lightweight scoring prompt
+    const scoringPrompt = `
+Production details: ${userMessage}
+
+Score these brands 0-100 based on relevance to this production.
+Consider: genre fit, budget size, campaign focus, timing.
+Return ONLY a JSON object with brand names as keys and scores as values.
+
+Brands:
+${brands.slice(0, 50).map(b => 
+  `${b.fields['Brand Name']}: ${b.fields['Category'] || 'General'}, Budget: ${b.fields['Budget'] || 'TBD'}, Focus: ${(b.fields['Campaign Summary'] || '').slice(0, 100)}`
+).join('\n')}`;
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo-1106', // Fast, cheap, good at JSON
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a relevance scoring engine. Return only valid JSON with brand names as keys and numeric scores 0-100 as values.'
+          },
+          {
+            role: 'user',
+            content: scoringPrompt
+          }
+        ],
+        temperature: 0.3, // Low for consistency
+        max_tokens: 800,
+        response_format: { type: "json_object" }
+      }),
+    });
+    
+    if (!response.ok) {
+      console.error('OpenAI scoring error:', response.status);
+      // If OpenAI fails, just return all brands
+      return { topBrands: brands.slice(0, 15), scores: {} };
     }
-  });
-  
-  // Extract deadlines
-  const deadlinePatterns = [
-    /by (monday|tuesday|wednesday|thursday|friday|next week|end of month|end of week|tomorrow)/gi,
-    /deadline[:\s]+([^.,;]+)/gi,
-    /approval needed by ([^.,;]+)/gi,
-    /decision by ([^.,;]+)/gi,
-    /flying in ([^.,;]+)/gi
-  ];
-  
-  deadlinePatterns.forEach(pattern => {
-    const matches = text.matchAll(pattern);
-    for (const match of matches) {
-      insights.deadlines.push(match[1].trim());
-    }
-  });
-  
-  // Extract direct quotes (in quotes)
-  const quotePattern = /"([^"]+)"/g;
-  const quotes = text.matchAll(quotePattern);
-  for (const match of quotes) {
-    insights.quotes.push(match[1]);
+    
+    const data = await response.json();
+    const scores = JSON.parse(data.choices[0].message.content);
+    
+    // Sort brands by score and take top 15
+    const topBrands = brands
+      .filter(b => b.fields['Brand Name']) // Ensure brand has a name
+      .map(b => ({
+        ...b,
+        relevanceScore: scores[b.fields['Brand Name']] || 0
+      }))
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, 15);
+    
+    console.log(`✅ Stage 2 complete: Narrowed to ${topBrands.length} top brands`);
+    console.log(`🏆 Top 3: ${topBrands.slice(0, 3).map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`).join(', ')}`);
+    
+    return { topBrands, scores };
+    
+  } catch (error) {
+    console.error('❌ Error in OpenAI narrowing:', error);
+    // On error, just return first 15 brands
+    return { topBrands: brands.slice(0, 15), scores: {} };
   }
-  
-  // Extract opportunities
-  if (textLower.includes('pulled out') || textLower.includes('cancelled') || textLower.includes('withdrew')) {
-    const pulloutMatch = text.match(/(\w+)\s+(?:pulled out|cancelled|withdrew)/i);
-    if (pulloutMatch) {
-      insights.opportunities.push(`${pulloutMatch[1]} pulled out - budget may be available`);
-    }
-  }
-  if (textLower.includes('flying in') || textLower.includes('visiting') || textLower.includes('in town')) {
-    insights.opportunities.push('In-person meeting opportunity');
-  }
-  if (textLower.includes('loves') || textLower.includes('excited about')) {
-    const lovesMatch = text.match(/(?:loves?|excited about)\s+(.+?)(?:\.|,|;|$)/i);
-    if (lovesMatch) {
-      insights.opportunities.push(`Strong interest in: ${lovesMatch[1]}`);
-    }
-  }
-  
-  return insights;
 }
 
-// Extract insights from brand notes
-function extractBrandInsights(notes, campaignSummary) {
-  const insights = {
-    preferences: [],
-    restrictions: [],
-    pastSuccess: [],
-    timing: [],
-    keyConcerns: []
-  };
+// Stage 3: Claude-powered search handler for intelligent brand matching
+async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
+  console.log('🤖 Starting 3-stage intelligent brand-project matching...');
   
-  const combined = `${notes} ${campaignSummary}`.toLowerCase();
-  const fullText = `${notes} ${campaignSummary}`;
-  
-  // Extract preferences
-  const prefPatterns = [
-    /prefers?\s+(.+?)(?:\.|,|;|$)/gi,
-    /likes?\s+(.+?)(?:\.|,|;|$)/gi,
-    /favor\s+(.+?)(?:\.|,|;|$)/gi,
-    /interested in\s+(.+?)(?:\.|,|;|$)/gi
-  ];
-  
-  prefPatterns.forEach(pattern => {
-    const matches = fullText.matchAll(pattern);
-    for (const match of matches) {
-      insights.preferences.push(match[1].trim());
-    }
-  });
-  
-  // Extract restrictions
-  if (combined.includes('no alcohol')) insights.restrictions.push('No alcohol scenes');
-  if (combined.includes('no violence')) insights.restrictions.push('No violence');
-  if (combined.includes('no smoking')) insights.restrictions.push('No smoking');
-  if (combined.includes('family friendly')) insights.restrictions.push('Must be family friendly');
-  if (combined.includes('no competitors')) insights.restrictions.push('No competitor brands');
-  
-  // Extract timing
-  const timingPatterns = [
-    /(q[1-4]\s*\d{4})/gi,
-    /launch(?:ing)?\s+(.+?)(?:\.|,|;|$)/gi,
-    /campaign\s+(?:starts?|begins?)\s+(.+?)(?:\.|,|;|$)/gi
-  ];
-  
-  timingPatterns.forEach(pattern => {
-    const matches = fullText.matchAll(pattern);
-    for (const match of matches) {
-      insights.timing.push(match[1].trim());
-    }
-  });
-  
-  // Extract key concerns from notes
-  if (combined.includes('concern') || combined.includes('worried')) {
-    const concernMatch = fullText.match(/(?:concern|worried)\s+(?:about\s+)?(.+?)(?:\.|,|;|$)/i);
-    if (concernMatch) {
-      insights.keyConcerns.push(concernMatch[1].trim());
-    }
+  if (!anthropicApiKey) {
+    console.warn('No Anthropic API key found, falling back to OpenAI');
+    return null;
   }
   
-  return insights;
+  try {
+    // Stage 1: Get data from Airtable
+    console.log('📊 Stage 1: Fetching from Airtable...');
+    const brandData = await searchAirtable(userMessage, projectId, 'brands', 100);
+    const meetingData = await searchAirtable(userMessage, projectId, 'meetings', 50);
+    
+    // Check if we got actual data
+    if ((!brandData.records || brandData.records.length === 0) && 
+        (!meetingData.records || meetingData.records.length === 0)) {
+      console.error('❌ No data returned from Airtable!');
+      return null;
+    }
+    
+    // Stage 2: Narrow with OpenAI
+    const { topBrands, scores } = await narrowWithOpenAI(
+      brandData.records, 
+      meetingData.records, 
+      userMessage
+    );
+    
+    // Stage 3: Deep analysis with Claude
+    console.log('🧠 Stage 3: Claude deep analysis on top candidates...');
+    
+    // Start with the knowledge base instructions from Airtable - this is the primary prompt
+    let systemPrompt = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+    
+    // Add the narrowed data context
+    systemPrompt += "\n\n**PRIORITY CONTEXT FROM YOUR BUSINESS DATA:**\n\n";
+    
+    if (topBrands && topBrands.length > 0) {
+      systemPrompt += "**TOP RELEVANT BRANDS (pre-scored by relevance):**\n```json\n";
+      const brandInfo = topBrands.map(b => ({
+        brand: b.fields['Brand Name'] || 'Unknown',
+        relevance_score: b.relevanceScore || 0,
+        budget: b.fields['Budget'] || 0,
+        category: b.fields['Category'] || 'Uncategorized',
+        campaign_focus: b.fields['Campaign Summary'] || 'No campaign info',
+        last_activity: b.fields['Last Modified'] || 'Unknown'
+      }));
+      
+      systemPrompt += JSON.stringify(brandInfo, null, 2);
+      systemPrompt += "\n```\n\n";
+      
+      console.log(`📊 Sending ${brandInfo.length} top brands to Claude for deep analysis`);
+    }
+    
+    if (meetingData && meetingData.records && meetingData.records.length > 0) {
+      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n```json\n";
+      const meetingInfo = meetingData.records
+        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10) // Only meaningful meetings
+        .slice(0, 20) // Limit to most recent 20
+        .map(r => ({
+          meeting: r.fields['Title'] || 'Untitled',
+          date: r.fields['Date'] || 'No date',
+          key_points: r.fields['Summary'] || 'No summary'
+        }));
+      
+      systemPrompt += JSON.stringify(meetingInfo, null, 2);
+      systemPrompt += "\n```\n\n";
+      
+      console.log(`📅 Sending ${meetingInfo.length} relevant meetings to Claude`);
+    }
+    
+    console.log('📤 Calling Claude API with focused data...');
+    
+    // Call Claude API
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-opus-20240229',
+        max_tokens: 2000,
+        temperature: 0.7,
+        system: systemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content: userMessage
+          }
+        ]
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('❌ Claude API error:', response.status, errorData);
+      
+      if (response.status === 429) {
+        console.warn('Claude API rate limited, falling back to OpenAI');
+        return null;
+      }
+      
+      throw new Error(`Claude API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('✅ Claude API response received');
+    
+    if (data.content && data.content.length > 0) {
+      const reply = data.content[0].text;
+      
+      // Extract meaningful thinking steps based on actual data
+      const mcpThinking = [];
+      
+      // Add pipeline insights
+      mcpThinking.push(`Filtered ${brandData.total} brands → ${topBrands.length} top candidates`);
+      
+      if (topBrands.length > 0) {
+        const topThree = topBrands.slice(0, 3).map(b => b.fields['Brand Name']).filter(Boolean);
+        mcpThinking.push(`Highest relevance: ${topThree.join(', ')}`);
+      }
+      
+      // Analyze actual brand data
+      if (topBrands && topBrands.length > 0) {
+        const hotBrands = [];
+        const highValueBrands = [];
+        
+        topBrands.forEach(record => {
+          const fields = record.fields;
+          if (!fields['Brand Name']) return;
+          
+          const brandName = fields['Brand Name'];
+          
+          // Track hot brands (active in last 7 days)
+          if (fields['Last Modified']) {
+            const daysSince = Math.floor((Date.now() - new Date(fields['Last Modified'])) / (1000 * 60 * 60 * 24));
+            if (daysSince < 7) {
+              hotBrands.push(brandName);
+            }
+          }
+          
+          // Track high-value opportunities
+          if (fields['Budget'] >= 5000000) {
+            highValueBrands.push(brandName);
+          }
+        });
+        
+        // Add actual insights to thinking
+        if (hotBrands.length > 0) {
+          mcpThinking.push(`HOT brands (active this week): ${hotBrands.join(', ')}`);
+        }
+        if (highValueBrands.length > 0) {
+          mcpThinking.push(`High-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
+        }
+      }
+      
+      // Analyze meeting insights
+      if (meetingData && meetingData.records) {
+        const brandsInMeetings = new Set();
+        const opportunities = [];
+        
+        meetingData.records.forEach(record => {
+          const summary = record.fields['Summary'] || '';
+          const title = record.fields['Title'] || '';
+          
+          // Find brand mentions in meetings
+          if (topBrands) {
+            topBrands.forEach(brandRecord => {
+              const brandName = brandRecord.fields['Brand Name'];
+              if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
+                brandsInMeetings.add(brandName);
+              }
+            });
+          }
+          
+          // Find opportunities
+          if (summary.includes('pulled out') || summary.includes('budget available')) {
+            opportunities.push(`Opportunity from "${title}"`);
+          }
+        });
+        
+        if (brandsInMeetings.size > 0) {
+          mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
+        }
+        if (opportunities.length > 0) {
+          mcpThinking.push(`Budget opportunities found: ${opportunities.length}`);
+        }
+      }
+      
+      return {
+        reply,
+        mcpThinking,
+        usedMCP: true
+      };
+    }
+    
+    return null;
+    
+  } catch (error) {
+    console.error('❌ Error in Claude search:', error);
+    console.error('Error details:', error.stack);
+    return null;
+  }
 }
 
 export default async function handler(req, res) {
-  // Set CORS headers early (before any conditionals)
+  // Set CORS headers early
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
   res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Max-Age", "86400");
 
   if (req.method === "OPTIONS") {
-    return res.status(200).end(); // respond early for preflight
+    return res.status(200).end();
   }
 
   if (req.method === 'POST') {
     try {
-      // Log incoming request to debug
-      console.log('Received request body:', req.body);
-      
-      // Check if this is an audio generation request FIRST
+      // Check if this is an audio generation request
       if (req.body.generateAudio === true) {
         console.log('Processing audio generation request');
         
-        // Handle audio generation
         const { prompt, projectId, sessionId } = req.body;
 
-        // Validate required fields
         if (!prompt) {
           return res.status(400).json({ 
             error: 'Missing required fields',
@@ -398,7 +494,6 @@ export default async function handler(req, res) {
           });
         }
 
-        // Check for ElevenLabs API key
         if (!elevenLabsApiKey) {
           console.error('ElevenLabs API key not configured');
           return res.status(500).json({ 
@@ -407,35 +502,14 @@ export default async function handler(req, res) {
           });
         }
 
-        // Get project-specific configuration including voice settings
         const projectConfig = getProjectConfig(projectId);
         const { voiceId, voiceSettings } = projectConfig;
 
         console.log('Generating audio for project:', projectId, 'using voice:', voiceId);
 
         try {
-            // First, let's check if the API key is valid with a simple voices endpoint call
-            console.log('Checking ElevenLabs API key validity...');
-            const voicesCheck = await fetch('https://api.elevenlabs.io/v1/voices', {
-                headers: {
-                    'xi-api-key': elevenLabsApiKey
-                }
-            });
-            
-            if (!voicesCheck.ok) {
-                console.error('ElevenLabs API key check failed:', voicesCheck.status);
-                return res.status(401).json({ 
-                    error: 'Invalid ElevenLabs API key',
-                    details: 'Please check your ELEVENLABS_API_KEY in Vercel environment variables'
-                });
-            }
-            
-            console.log('API key is valid, proceeding with audio generation...');
-            
-            // Call ElevenLabs API with project-specific voice
             const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
             
-            console.log('Calling ElevenLabs API...');
             const elevenLabsResponse = await fetch(elevenLabsUrl, {
                 method: 'POST',
                 headers: {
@@ -450,47 +524,19 @@ export default async function handler(req, res) {
                 })
             });
 
-            console.log('ElevenLabs response status:', elevenLabsResponse.status);
-
             if (!elevenLabsResponse.ok) {
                 const errorText = await elevenLabsResponse.text();
                 console.error('ElevenLabs API error:', elevenLabsResponse.status, errorText);
-                
-                if (elevenLabsResponse.status === 401) {
-                    return res.status(401).json({ 
-                        error: 'Invalid API key',
-                        details: 'Please check your ElevenLabs API key'
-                    });
-                } else if (elevenLabsResponse.status === 429) {
-                    return res.status(429).json({ 
-                        error: 'Rate limit exceeded',
-                        details: 'Please try again later'
-                    });
-                } else if (elevenLabsResponse.status === 400) {
-                    return res.status(400).json({ 
-                        error: 'Invalid request to ElevenLabs',
-                        details: errorText
-                    });
-                }
-                
-                return res.status(500).json({ 
+                return res.status(elevenLabsResponse.status).json({ 
                     error: 'Failed to generate audio',
                     details: errorText
                 });
             }
 
-            console.log('Getting audio buffer...');
-            // Get audio data as buffer
             const audioBuffer = await elevenLabsResponse.buffer();
-            
-            console.log('Converting to base64...');
-            // Convert to base64 data URL
             const base64Audio = audioBuffer.toString('base64');
             const audioDataUrl = `data:audio/mpeg;base64,${base64Audio}`;
 
-            console.log('Audio generated successfully for project:', projectId, 'size:', audioBuffer.length);
-
-            // Return the audio data URL
             return res.status(200).json({
                 success: true,
                 audioUrl: audioDataUrl,
@@ -506,36 +552,30 @@ export default async function handler(req, res) {
         }
       }
 
-      // Otherwise, handle regular chat messages
-      // Destructure userMessage properly and handle truncation correctly
+      // Handle regular chat messages
       let { userMessage, sessionId, audioData, projectId } = req.body;
 
-      // Truncate AFTER destructuring, not before
       if (userMessage && userMessage.length > 5000) {
         userMessage = userMessage.slice(0, 5000) + "…";
       }
 
-      // Log incoming request data
-      console.log('Received POST request:', { 
+      console.log('📨 Received chat request:', { 
         userMessage: userMessage ? userMessage.slice(0, 100) + '...' : null, 
         sessionId, 
-        audioDataLength: audioData ? audioData.length : 0,
-        projectId,
-        userMessageLength: userMessage ? userMessage.length : 0
+        projectId
       });
 
       if (!sessionId) {
         return res.status(400).json({ error: 'Missing sessionId' });
       }
       if (!userMessage && !audioData) {
-        return res.status(400).json({ error: 'Missing required fields', details: 'Either userMessage or audioData is required.' });
+        return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      // Get project-specific configuration
+      // Get project configuration
       const projectConfig = getProjectConfig(projectId);
       const { baseId, chatTable, knowledgeTable } = projectConfig;
 
-      // Construct Airtable URLs with project-specific base and tables
       const knowledgeBaseUrl = `https://api.airtable.com/v0/${baseId}/${knowledgeTable}`;
       const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
       const headersAirtable = { 
@@ -543,252 +583,27 @@ export default async function handler(req, res) {
         Authorization: `Bearer ${airtableApiKey}` 
       };
 
-      let systemMessageContent = "You are a helpful assistant specialized in AI & Automation.";
       let conversationContext = '';
       let existingRecordId = null;
-      let mcpThinking = []; // Store thinking process for frontend
 
-      // Check if this is a search query
-      const isSearchQuery = userMessage && (
-        userMessage.toLowerCase().includes('brand') ||
-        userMessage.toLowerCase().includes('match') ||
-        userMessage.toLowerCase().includes('suggest') ||
-        userMessage.toLowerCase().includes('integration') ||
-        userMessage.toLowerCase().includes('easy money') ||
-        userMessage.toLowerCase().includes('quick approval') ||
-        userMessage.toLowerCase().includes('show me') ||
-        userMessage.toLowerCase().includes('list') ||
-        userMessage.toLowerCase().includes('find') ||
-        userMessage.toLowerCase().includes('search')
-      );
-
-      // ADD THESE LOGS:
-      console.log('📝 User message:', userMessage);
-      console.log('🔍 Is search query?', isSearchQuery);
-
-      // MCP Search Integration - Enhanced for intelligent context
-      if (isSearchQuery) {
-        console.log('✅ Search query detected, calling MCP...'); // ADD THIS
-        try {
-          console.log('Using MCP for smart search...');
-          
-          // First, search for brands
-          const brandResults = await callMCPSearch(userMessage, projectId || 'HB-PitchAssist', 10);
-          
-          // Also search for relevant meetings if the query mentions projects or discussions
-          let meetingResults = null;
-          if (userMessage.toLowerCase().includes('project') || 
-              userMessage.toLowerCase().includes('pending') ||
-              userMessage.toLowerCase().includes('discussed') ||
-              (brandResults && brandResults.matches && brandResults.matches.length > 0)) {
-            meetingResults = await callMCPSearch('meeting discussion brand integration', projectId || 'HB-PitchAssist', 10);
-          }
-          
-          console.log('📊 Brand results:', brandResults);
-          console.log('📊 Meeting results:', meetingResults);
-          
-          // Build intelligent context from results
-          let mcpContext = '\n\n🎯 PRIORITY CONTEXT FROM YOUR BUSINESS DATA:\n\n';
-          
-          // Add brand information with business intelligence
-          if (brandResults && !brandResults.error && brandResults.matches.length > 0) {
-            mcpContext += '**ACTIVE BRANDS IN YOUR PIPELINE:**\n';
-            mcpThinking.push(`Found ${brandResults.matches.length} brands in pipeline`);
-            
-            let hotBrands = [];
-            let warmBrands = [];
-            let highValueBrands = [];
-            
-            brandResults.matches.forEach(brand => {
-              const lastModDate = new Date(brand.lastModified);
-              const daysSinceModified = Math.floor((Date.now() - lastModDate) / (1000 * 60 * 60 * 24));
-              
-              mcpContext += `\n🔥 ${brand.name}`;
-              
-              // Add urgency indicators
-              if (daysSinceModified < 7) {
-                mcpContext += ' [HOT - Updated this week!]';
-                hotBrands.push(brand.name);
-              } else if (daysSinceModified < 30) {
-                mcpContext += ' [WARM - Recent activity]';
-                warmBrands.push(brand.name);
-              }
-              
-              mcpContext += `\n   • Category: ${brand.category}\n   • Budget: ${brand.budget}`;
-              
-              if (brand.campaignSummary) {
-                mcpContext += `\n   • Current Focus: ${brand.campaignSummary}`;
-              }
-              
-              // Add insights from brand data
-              if (brand.insights) {
-                if (brand.insights.preferences.length > 0) {
-                  mcpContext += `\n   • Preferences: ${brand.insights.preferences.join(', ')}`;
-                }
-                if (brand.insights.restrictions.length > 0) {
-                  mcpContext += `\n   • ⚠️ Restrictions: ${brand.insights.restrictions.join(', ')}`;
-                }
-                if (brand.insights.timing.length > 0) {
-                  mcpContext += `\n   • 📅 Timing: ${brand.insights.timing.join(', ')}`;
-                }
-                if (brand.insights.keyConcerns.length > 0) {
-                  mcpContext += `\n   • 🎯 Key Concerns: ${brand.insights.keyConcerns.join(', ')}`;
-                }
-              }
-              
-              // Smart insights based on budget
-              if (brand.budgetNum >= 5000000) {
-                mcpContext += '\n   • 💰 HIGH-VALUE OPPORTUNITY - Prioritize for major integrations';
-                highValueBrands.push(brand.name);
-              } else if (brand.budgetNum >= 1000000) {
-                mcpContext += '\n   • 💎 SOLID BUDGET - Good for featured placements';
-              }
-              
-              // Add next steps if available
-              if (brand.campaignSummary && brand.campaignSummary.includes('next')) {
-                mcpContext += `\n   • ⚡ Next Steps: Check campaign summary`;
-              }
-              
-              mcpContext += '\n';
-            });
-            
-            // Add insights to thinking process
-            if (hotBrands.length > 0) {
-              mcpThinking.push(`${hotBrands.length} HOT brands: ${hotBrands.join(', ')}`);
-            }
-            if (warmBrands.length > 0) {
-              mcpThinking.push(`${warmBrands.length} WARM brands with recent activity`);
-            }
-            if (highValueBrands.length > 0) {
-              mcpThinking.push(`${highValueBrands.length} high-value opportunities ($5M+)`);
-            }
-          }
-          
-          // Add meeting context for business intelligence
-          if (meetingResults && !meetingResults.error && meetingResults.matches.length > 0) {
-            mcpContext += '\n**RECENT DISCUSSIONS & PENDING DEALS:**\n';
-            
-            let pendingDeals = [];
-            let approvedDeals = [];
-            let urgentDeadlines = [];
-            let keyOpportunities = [];
-            
-            meetingResults.matches.forEach(meeting => {
-              const meetingDate = new Date(meeting.date);
-              const daysSinceMeeting = Math.floor((Date.now() - meetingDate) / (1000 * 60 * 60 * 24));
-              
-              // Only include recent and relevant meetings
-              if (daysSinceMeeting < 30) {
-                // Check if any brands are mentioned in this meeting
-                const meetingTextLower = meeting.fullSummary.toLowerCase();
-                const mentionedBrands = brandResults.matches.filter(brand => 
-                  meetingTextLower.includes(brand.name.toLowerCase())
-                );
-                
-                if (meeting.insights || mentionedBrands.length > 0 || 
-                    meetingTextLower.includes('brand') || 
-                    meetingTextLower.includes('integration')) {
-                  
-                  mcpContext += `\n📅 ${meeting.title} (${meeting.date})`;
-                  
-                  if (daysSinceMeeting < 7) {
-                    mcpContext += ' [THIS WEEK]';
-                  }
-                  
-                  // Add insights from meeting
-                  if (meeting.insights) {
-                    if (meeting.insights.concerns.length > 0) {
-                      mcpContext += `\n   • ⚠️ Concerns: ${meeting.insights.concerns.join(', ')}`;
-                    }
-                    if (meeting.insights.requests.length > 0) {
-                      mcpContext += `\n   • 📋 Requests: ${meeting.insights.requests.join(', ')}`;
-                    }
-                    if (meeting.insights.deadlines.length > 0) {
-                      mcpContext += `\n   • ⏰ Deadlines: ${meeting.insights.deadlines.join(', ')}`;
-                      urgentDeadlines.push(...meeting.insights.deadlines);
-                    }
-                    if (meeting.insights.quotes.length > 0) {
-                      mcpContext += `\n   • 💬 Direct quotes: "${meeting.insights.quotes.join('", "')}"`;
-                    }
-                    if (meeting.insights.opportunities.length > 0) {
-                      mcpContext += `\n   • 🎯 Opportunities: ${meeting.insights.opportunities.join(', ')}`;
-                      keyOpportunities.push(...meeting.insights.opportunities);
-                    }
-                  }
-                  
-                  // Track pending deals
-                  if (meetingTextLower.includes('pending') || meetingTextLower.includes('waiting')) {
-                    pendingDeals.push(meeting.title);
-                  }
-                  if (meetingTextLower.includes('approved') || meetingTextLower.includes('green light')) {
-                    approvedDeals.push(meeting.title);
-                  }
-                  
-                  // Add mentioned brands
-                  if (mentionedBrands.length > 0) {
-                    mcpContext += `\n   • 🏷️ Brands discussed: ${mentionedBrands.map(b => b.name).join(', ')}`;
-                    mcpThinking.push(`${mentionedBrands.map(b => b.name).join(', ')} discussed in ${meeting.title}`);
-                  }
-                  
-                  mcpContext += '\n';
-                }
-              }
-            });
-            
-            // Add meeting insights to thinking
-            if (pendingDeals.length > 0) {
-              mcpThinking.push(`${pendingDeals.length} pending deals from meetings`);
-            }
-            if (approvedDeals.length > 0) {
-              mcpThinking.push(`${approvedDeals.length} deals already approved`);
-            }
-            if (urgentDeadlines.length > 0) {
-              mcpThinking.push(`Urgent deadlines: ${urgentDeadlines.join(', ')}`);
-            }
-            if (keyOpportunities.length > 0) {
-              mcpThinking.push(`Key opportunities: ${keyOpportunities.join(', ')}`);
-            }
-          }
-          
-          // Add strategic instructions
-          mcpContext += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
-          mcpContext += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
-          mcpContext += '2. Consider pending deals from meetings when suggesting integrations\n';
-          mcpContext += '3. Match high-budget brands with hero/featured integrations\n';
-          mcpContext += '4. If a brand was recently discussed in meetings, reference that context\n';
-          mcpContext += '5. Flag any brands that are close to closing (based on meeting summaries)\n';
-          mcpContext += '6. Quote specific requests or concerns from meetings when relevant\n';
-          mcpContext += '7. Highlight timing opportunities (people flying in, approvals pending)\n';
-          mcpContext += '8. Connect creative solutions to stated brand concerns\n';
-          mcpContext += '9. Surface hidden opportunities (e.g., budget available from cancelled deals)\n';
-          
-          // Add to system message
-          systemMessageContent = systemMessageContent.replace(
-            'You are a helpful assistant specialized in AI & Automation.',
-            'You are a helpful assistant specialized in AI & Automation.' + mcpContext
-          );
-        } catch (error) {
-          console.error('MCP search error:', error);
-          mcpThinking.push('MCP search encountered an error');
-        }
-      }
-
-      // Fetch project-specific knowledge base
+      // Fetch knowledge base
+      let knowledgeBaseInstructions = '';
       try {
+        console.log('📚 Fetching knowledge base from:', knowledgeBaseUrl);
         const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
         if (kbResponse.ok) {
           const knowledgeBaseData = await kbResponse.json();
           const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
-          systemMessageContent += ` Available knowledge: "${knowledgeEntries}".`;
-          console.log(`Loaded knowledge base for project: ${projectId}`);
+          knowledgeBaseInstructions = knowledgeEntries;
+          console.log('✅ Knowledge base loaded:', knowledgeBaseInstructions.slice(0, 200) + '...');
         } else {
-          console.warn(`Knowledge base not found for project: ${projectId}, using default assistant behavior`);
+          console.warn('⚠️ Knowledge base not found, using default');
         }
       } catch (error) {
-        console.error(`Error fetching knowledge base for project ${projectId}:`, error);
+        console.error(`❌ Error fetching knowledge base:`, error);
       }
 
-      // Fetch conversation history from project-specific table
+      // Fetch conversation history
       try {
         const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
         const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
@@ -798,26 +613,39 @@ export default async function handler(req, res) {
             conversationContext = result.records[0].fields.Conversation || '';
             existingRecordId = result.records[0].id;
 
-            // Truncate long history to avoid OpenAI errors
             if (conversationContext.length > 3000) {
               conversationContext = conversationContext.slice(-3000);
             }
-
-            systemMessageContent += ` Conversation so far: "${conversationContext}".`;
           }
         }
       } catch (error) {
-        console.error(`Error fetching conversation history for project ${projectId}:`, error);
+        console.error(`Error fetching conversation history:`, error);
       }
 
-      const currentTimePDT = getCurrentTimeInPDT();
-      systemMessageContent += ` Current time in PDT: ${currentTimePDT}.`;
+      // IMPROVED Search Query Detection - only for brand matching requests
+      const isBrandMatchingQuery = userMessage && (
+        // Direct brand requests
+        userMessage.toLowerCase().includes('brand') ||
+        userMessage.toLowerCase().includes('match') ||
+        userMessage.toLowerCase().includes('integration') ||
+        userMessage.toLowerCase().includes('partnership') ||
+        // Suggestion button phrases
+        userMessage.toLowerCase().includes('easy money') ||
+        userMessage.toLowerCase().includes('wildcard') ||
+        userMessage.toLowerCase().includes('audience match') ||
+        userMessage.toLowerCase().includes('hot new brands') ||
+        userMessage.toLowerCase().includes('fits the story') ||
+        userMessage.toLowerCase().includes('save production money') ||
+        // Production context phrases
+        userMessage.toLowerCase().includes('for this project') ||
+        userMessage.toLowerCase().includes('for this production') ||
+        userMessage.toLowerCase().includes('upcoming') ||
+        userMessage.toLowerCase().includes('synopsis')
+      );
       
-      // Add project context to system message if available
-      if (projectId && projectId !== 'default') {
-        systemMessageContent += ` You are assisting with the ${projectId} project.`;
-      }
+      console.log('🔍 Brand matching detection:', { isBrandMatchingQuery, userMessage: userMessage?.slice(0, 50) });
 
+      // Process audio or text
       if (audioData) {
         try {
           const audioBuffer = Buffer.from(audioData, 'base64');
@@ -829,6 +657,16 @@ export default async function handler(req, res) {
               'OpenAI-Beta': 'realtime=v1',
             },
           });
+
+          // Build system message
+          let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+          if (conversationContext) {
+            systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+          }
+          systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+          if (projectId && projectId !== 'default') {
+            systemMessageContent += ` You are assisting with the ${projectId} project.`;
+          }
 
           openaiWs.on('open', () => {
             console.log('Connected to OpenAI Realtime API');
@@ -849,7 +687,6 @@ export default async function handler(req, res) {
             if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
               const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
               if (aiReply) {
-                // Make Airtable update async - don't await
                 updateAirtableConversation(
                   sessionId, 
                   projectId, 
@@ -861,11 +698,10 @@ export default async function handler(req, res) {
                 
                 res.json({ 
                   reply: aiReply,
-                  mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-                  usedMCP: isSearchQuery
+                  mcpThinking: null,
+                  usedMCP: false
                 });
               } else {
-                console.error('No valid reply received from OpenAI WebSocket.');
                 res.status(500).json({ error: 'No valid reply received from OpenAI.' });
               }
               openaiWs.close();
@@ -883,14 +719,59 @@ export default async function handler(req, res) {
         }
       } else if (userMessage) {
         try {
-          console.log('Sending text message to OpenAI:', { 
-            userMessageLength: userMessage.length, 
-            systemMessageLength: systemMessageContent.length 
-          });
-          const aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-          console.log('Received AI response:', aiReply ? aiReply.slice(0, 100) + '...' : null);
+          let aiReply = '';
+          let mcpThinking = [];
+          let usedMCP = false;
+
+          // Try Claude for brand matching queries
+          if (isBrandMatchingQuery && anthropicApiKey) {
+            console.log('🎯 Brand matching query detected - attempting Claude...');
+            console.log('🔑 Anthropic API key:', anthropicApiKey ? 'Present' : 'MISSING!');
+            
+            const claudeResult = await handleClaudeSearch(
+              userMessage, 
+              knowledgeBaseInstructions, 
+              projectId, 
+              sessionId
+            );
+            
+            if (claudeResult) {
+              aiReply = claudeResult.reply;
+              mcpThinking = claudeResult.mcpThinking;
+              usedMCP = true;
+              console.log('✅ Used Claude for intelligent brand matching');
+              console.log('🧠 MCP Thinking:', mcpThinking);
+            } else {
+              console.log('⚠️ Claude failed or returned null, falling back to OpenAI');
+            }
+          } else {
+            if (!isBrandMatchingQuery) {
+              console.log('❌ Not a brand matching query - using OpenAI');
+            }
+            if (!anthropicApiKey) {
+              console.log('❌ No Anthropic API key - using OpenAI');
+            }
+          }
+          
+          // Fall back to OpenAI if Claude didn't handle it
+          if (!aiReply) {
+            console.log('📝 Using OpenAI for response');
+            
+            // Build system message
+            let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+            if (conversationContext) {
+              systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+            }
+            systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+            if (projectId && projectId !== 'default') {
+              systemMessageContent += ` You are assisting with the ${projectId} project.`;
+            }
+            
+            const openAIResponse = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+            aiReply = openAIResponse;
+          }
+          
           if (aiReply) {
-            // Make Airtable update async - don't await
             updateAirtableConversation(
               sessionId, 
               projectId, 
@@ -903,15 +784,14 @@ export default async function handler(req, res) {
             return res.json({ 
               reply: aiReply,
               mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-              usedMCP: isSearchQuery
+              usedMCP: usedMCP
             });
           } else {
-            console.error('No text reply received from OpenAI.');
-            return res.status(500).json({ error: 'No text reply received from OpenAI.' });
+            return res.status(500).json({ error: 'No text reply received.' });
           }
         } catch (error) {
-          console.error('Error fetching text response from OpenAI:', error);
-          return res.status(500).json({ error: 'Error fetching text response from OpenAI.', details: error.message });
+          console.error('Error fetching response:', error);
+          return res.status(500).json({ error: 'Error fetching response.', details: error.message });
         }
       }
     } catch (error) {
@@ -926,13 +806,11 @@ export default async function handler(req, res) {
 
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
   try {
-    // Add better error handling and message length validation
     const messages = [
       { role: 'system', content: systemMessageContent },
       { role: 'user', content: userMessage }
     ];
     
-    // Calculate total tokens (rough estimate)
     const totalLength = systemMessageContent.length + userMessage.length;
     console.log(`Total message length: ${totalLength} characters`);
     
@@ -946,7 +824,7 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
         model: 'gpt-4o',
         messages: messages,
         max_tokens: 1000,
-        temperature: 0.7 // Add temperature for consistency
+        temperature: 0.7
       }),
     });
     
@@ -957,7 +835,7 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
     }
     
     const data = await response.json();
-    console.log('OpenAI response:', data);
+    console.log('OpenAI response received');
     if (data.choices && data.choices.length > 0) {
       return data.choices[0].message.content;
     } else {
@@ -972,10 +850,8 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
 
 async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
   try {
-    // Truncate conversation before saving to Airtable to avoid size limits
     let conversationToSave = updatedConversation;
     if (conversationToSave.length > 10000) {
-      // Keep only the last 10000 characters
       conversationToSave = '...' + conversationToSave.slice(-10000);
     }
     
@@ -988,7 +864,6 @@ async function updateAirtableConversation(sessionId, projectId, chatUrl, headers
     };
 
     if (existingRecordId) {
-      // Update existing record
       await fetch(`${chatUrl}/${existingRecordId}`, {
         method: 'PATCH',
         headers: headersAirtable,
@@ -996,7 +871,6 @@ async function updateAirtableConversation(sessionId, projectId, chatUrl, headers
       });
       console.log(`Updated conversation for project: ${projectId}, session: ${sessionId}`);
     } else {
-      // Create new record
       await fetch(chatUrl, {
         method: 'POST',
         headers: headersAirtable,
