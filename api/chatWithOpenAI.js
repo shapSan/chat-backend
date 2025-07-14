@@ -110,12 +110,12 @@ async function callMCPSearch(query, projectId, limit = 10) {
         'meetings': {
           table: 'Meeting Steam',
           view: 'ALL Meetings',
-          fields: ['Title', 'Date', 'Summary', 'Link', 'Attendees', 'Action Items', 'Notes']
+          fields: ['Title', 'Date', 'Summary', 'Link']
         },
         'brands': {
           table: 'Brands',
           view: null,
-          fields: ['Brand Name', 'Last Modified', 'Category', 'Budget', 'Campaign Summary', 'Notes', 'Contact', 'Next Steps', 'Status']
+          fields: ['Brand Name', 'Last Modified', 'Category', 'Budget', 'Campaign Summary']
         }
       }
     };
@@ -156,11 +156,9 @@ async function callMCPSearch(query, projectId, limit = 10) {
       processed = data.records.map(record => {
         const fields = record.fields;
         const summary = fields['Summary'] || '';
-        const notes = fields['Notes'] || '';
-        const fullText = `${summary} ${notes}`;
         
         // Extract insights from meeting data
-        const insights = extractMeetingInsights(fullText);
+        const insights = extractMeetingInsights(summary);
         
         return {
           id: record.id,
@@ -168,10 +166,7 @@ async function callMCPSearch(query, projectId, limit = 10) {
           date: fields['Date'] || 'No date',
           summary: summary.substring(0, 150) + '...',
           fullSummary: summary,
-          notes: notes,
           link: fields['Link'] || null,
-          attendees: fields['Attendees'] || [],
-          actionItems: fields['Action Items'] || [],
           insights: insights,
           relevance: 50,
           type: 'meeting'
@@ -194,9 +189,8 @@ async function callMCPSearch(query, projectId, limit = 10) {
         }
         
         // Extract insights from brand data
-        const notes = fields['Notes'] || '';
         const campaignSummary = fields['Campaign Summary'] || '';
-        const brandInsights = extractBrandInsights(notes, campaignSummary);
+        const brandInsights = extractBrandInsights('', campaignSummary);
         
         return {
           id: record.id,
@@ -207,10 +201,6 @@ async function callMCPSearch(query, projectId, limit = 10) {
           lastModified: fields['Last Modified'] || 'Unknown',
           campaignSummary: campaignSummary.substring(0, 100) + '...',
           fullCampaignSummary: campaignSummary,
-          notes: notes,
-          contact: fields['Contact'] || null,
-          nextSteps: fields['Next Steps'] || null,
-          status: fields['Status'] || null,
           insights: brandInsights,
           relevance: 50,
           type: 'brand'
@@ -655,13 +645,8 @@ export default async function handler(req, res) {
               }
               
               // Add next steps if available
-              if (brand.nextSteps) {
-                mcpContext += `\n   • ⚡ Next Steps: ${brand.nextSteps}`;
-              }
-              
-              // Add status if available
-              if (brand.status) {
-                mcpContext += `\n   • 📊 Status: ${brand.status}`;
+              if (brand.campaignSummary && brand.campaignSummary.includes('next')) {
+                mcpContext += `\n   • ⚡ Next Steps: Check campaign summary`;
               }
               
               mcpContext += '\n';
@@ -695,7 +680,7 @@ export default async function handler(req, res) {
               // Only include recent and relevant meetings
               if (daysSinceMeeting < 30) {
                 // Check if any brands are mentioned in this meeting
-                const meetingTextLower = (meeting.fullSummary + ' ' + meeting.notes).toLowerCase();
+                const meetingTextLower = meeting.fullSummary.toLowerCase();
                 const mentionedBrands = brandResults.matches.filter(brand => 
                   meetingTextLower.includes(brand.name.toLowerCase())
                 );
