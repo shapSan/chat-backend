@@ -195,11 +195,13 @@ async function narrowWithOpenAI(brands, meetings, userMessage) {
     const scoringPrompt = `
 Production details: ${userMessage}
 
-Score these brands 0-100 based on relevance to this production.
-Consider: genre fit, budget size, campaign focus, timing.
+Score these brands 0-100 based on relevance to this specific production.
+Consider: genre fit, budget alignment, campaign focus match, and natural integration opportunities.
+Higher scores for brands that naturally fit the production's themes, setting, and audience.
+
 Return ONLY a JSON object with brand names as keys and scores as values.
 
-Brands:
+Brands to evaluate:
 ${brands.slice(0, 50).map(b => 
   `${b.fields['Brand Name']}: ${b.fields['Category'] || 'General'}, Budget: ${b.fields['Budget'] || 'TBD'}, Focus: ${(b.fields['Campaign Summary'] || '').slice(0, 100)}`
 ).join('\n')}`;
@@ -215,7 +217,7 @@ ${brands.slice(0, 50).map(b =>
         messages: [
           {
             role: 'system',
-            content: 'You are a relevance scoring engine. Return only valid JSON with brand names as keys and numeric scores 0-100 as values.'
+            content: 'You are a relevance scoring engine for brand-production matching. Analyze the production details and score each brand based on natural fit. Return only valid JSON with brand names as keys and numeric scores 0-100 as values.'
           },
           {
             role: 'user',
@@ -376,18 +378,23 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       // Extract meaningful thinking steps based on actual data
       const mcpThinking = [];
       
-      // Add pipeline insights
+      // Add pipeline insights FIRST
       mcpThinking.push(`Filtered ${brandData.total} brands → ${topBrands.length} top candidates`);
       
-      if (topBrands.length > 0) {
-        const topThree = topBrands.slice(0, 3).map(b => b.fields['Brand Name']).filter(Boolean);
+      // Show actual top brands from scoring
+      if (topBrands.length > 0 && scores) {
+        const topThree = topBrands
+          .slice(0, 3)
+          .map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`)
+          .filter(Boolean);
         mcpThinking.push(`Highest relevance: ${topThree.join(', ')}`);
       }
       
-      // Analyze actual brand data
+      // Analyze actual brand data from what Claude is seeing
       if (topBrands && topBrands.length > 0) {
         const hotBrands = [];
         const highValueBrands = [];
+        const activeCategories = new Set();
         
         topBrands.forEach(record => {
           const fields = record.fields;
@@ -407,19 +414,31 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
           if (fields['Budget'] >= 5000000) {
             highValueBrands.push(brandName);
           }
+          
+          // Track categories
+          if (fields['Category']) {
+            if (Array.isArray(fields['Category'])) {
+              fields['Category'].forEach(cat => activeCategories.add(cat));
+            } else {
+              activeCategories.add(fields['Category']);
+            }
+          }
         });
         
-        // Add actual insights to thinking
+        // Add actual insights to thinking based on the narrowed data
         if (hotBrands.length > 0) {
           mcpThinking.push(`HOT brands (active this week): ${hotBrands.join(', ')}`);
         }
         if (highValueBrands.length > 0) {
           mcpThinking.push(`High-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
         }
+        if (activeCategories.size > 0) {
+          mcpThinking.push(`Categories in play: ${Array.from(activeCategories).slice(0, 5).join(', ')}`);
+        }
       }
       
-      // Analyze meeting insights
-      if (meetingData && meetingData.records) {
+      // Analyze meeting insights for the brands Claude is actually analyzing
+      if (meetingData && meetingData.records && topBrands) {
         const brandsInMeetings = new Set();
         const opportunities = [];
         
@@ -427,19 +446,19 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
           const summary = record.fields['Summary'] || '';
           const title = record.fields['Title'] || '';
           
-          // Find brand mentions in meetings
-          if (topBrands) {
-            topBrands.forEach(brandRecord => {
-              const brandName = brandRecord.fields['Brand Name'];
-              if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
-                brandsInMeetings.add(brandName);
-              }
-            });
-          }
+          // Only look for mentions of the top brands that Claude is analyzing
+          topBrands.forEach(brandRecord => {
+            const brandName = brandRecord.fields['Brand Name'];
+            if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
+              brandsInMeetings.add(brandName);
+            }
+          });
           
           // Find opportunities
-          if (summary.includes('pulled out') || summary.includes('budget available')) {
-            opportunities.push(`Opportunity from "${title}"`);
+          if (summary.toLowerCase().includes('pulled out') || 
+              summary.toLowerCase().includes('budget available') ||
+              summary.toLowerCase().includes('looking for')) {
+            opportunities.push(title);
           }
         });
         
@@ -447,7 +466,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
           mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
         }
         if (opportunities.length > 0) {
-          mcpThinking.push(`Budget opportunities found: ${opportunities.length}`);
+          mcpThinking.push(`Meeting opportunities: ${opportunities.slice(0, 3).join(', ')}`);
         }
       }
       
