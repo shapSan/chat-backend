@@ -576,6 +576,21 @@ export default async function handler(req, res) {
             details: 'prompt is required'
           }
           
+          // Add meeting context if available
+          if (meetingResults && !meetingResults.error && meetingResults.matches.length > 0) {
+            mcpContext += '\n**RECENT MEETINGS:**\n';
+            
+            meetingResults.matches.slice(0, 3).forEach(meeting => {
+              mcpContext += `\n📅 ${meeting.title} (${meeting.date})`;
+              if (meeting.summary) {
+                mcpContext += `\n   • ${meeting.summary}`;
+              }
+              mcpContext += '\n';
+            });
+            
+            thinkingProcess.push(`Analyzed ${meetingResults.matches.length} recent meetings`);
+          }
+          
           // Add strategic instructions
           mcpContext += '\n**INTEGRATION STRATEGY INSTRUCTIONS:**\n';
           mcpContext += '1. PRIORITIZE brands marked as HOT or with recent meeting discussions\n';
@@ -585,7 +600,15 @@ export default async function handler(req, res) {
           mcpContext += '5. Flag any brands that are close to closing (based on meeting summaries)\n';
           
           // Store thinking for UI
-          mcpThinking = thinkingProcess;);
+          mcpThinking = thinkingProcess;
+          
+          // Add to system message
+          if (mcpContext) {
+            systemMessageContent = systemMessageContent.replace(
+              'You are a helpful assistant specialized in AI & Automation.',
+              'You are a helpful assistant specialized in AI & Automation.' + mcpContext
+            );
+          });
         }
 
         // Check for ElevenLabs API key
@@ -897,6 +920,7 @@ export default async function handler(req, res) {
             if (categories.length > 0) {
               thinkingProcess.push(`Categories found: ${categories.join(', ')}`);
             }
+          }
           } pipeline');
           }
           
