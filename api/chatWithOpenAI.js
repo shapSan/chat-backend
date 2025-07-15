@@ -105,7 +105,7 @@ function getCurrentTimeInPDT() {
 async function generateRunwayVideo({ 
   promptText, 
   promptImage, 
-  model = 'gen4_turbo',
+  model = 'gen3_alpha_turbo',  // Cheaper model - uses fewer credits
   ratio = '1280:720',
   duration = 5
 }) {
@@ -194,8 +194,12 @@ async function generateRunwayVideo({
       throw new Error('Rate limit exceeded. Try again later.');
     }
     
-    if (error.message?.includes('insufficient_credits')) {
-      throw new Error('Insufficient Runway credits. Please add credits to your account.');
+    if (error.message?.includes('insufficient_credits') || error.status === 402) {
+      throw new Error('Runway credits exhausted. Please upgrade your plan or wait for credits to reset.');
+    }
+    
+    if (error.status === 504 || error.message?.includes('timeout')) {
+      throw new Error('Video generation timed out. This usually means the server is busy. Please try again.');
     }
     
     throw error;
@@ -730,7 +734,7 @@ export default async function handler(req, res) {
             promptImage: imageToUse,
             model: model || 'gen4_turbo',
             ratio: ratio || '1280:720',
-            duration: duration || 10
+            duration: duration || 5  // Reduce from 10 to 5 seconds
           });
 
           console.log('✅ Video generated successfully:', taskId);
