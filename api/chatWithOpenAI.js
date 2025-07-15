@@ -373,15 +373,20 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
     let hubspotContacts = null;
     
     if (hubspotAccessToken) {
-      // Search for relevant deals if the query mentions deals, opportunities, or revenue
-      if (userMessage.toLowerCase().includes('deal') || 
-          userMessage.toLowerCase().includes('opportunit') ||
-          userMessage.toLowerCase().includes('revenue') ||
-          userMessage.toLowerCase().includes('pipeline') ||
-          userMessage.toLowerCase().includes('value') ||
-          userMessage.toLowerCase().includes('highest')) {
-        hubspotDeals = await searchHubSpot(userMessage, 'deals', 10);
+      // Always search HubSpot for brand matching queries to get comprehensive data
+      console.log('🔍 HubSpot token present, searching for deals...');
+      hubspotDeals = await searchHubSpot('', 'deals', 10); // Empty query gets all deals sorted by value
+      
+      // Also search for contacts if specifically mentioned
+      if (userMessage.toLowerCase().includes('contact') ||
+          userMessage.toLowerCase().includes('person') ||
+          userMessage.toLowerCase().includes('people')) {
+        console.log('🔍 Also searching HubSpot contacts...');
+        hubspotContacts = await searchHubSpot(userMessage, 'contacts', 10);
       }
+    } else {
+      console.log('❌ No HubSpot token configured');
+    }
       
       // Search for contacts if query mentions people or contacts
       if (userMessage.toLowerCase().includes('contact') ||
@@ -529,23 +534,38 @@ When providing insights:
       // Enhanced MCP thinking to include HubSpot insights
       const mcpThinking = [];
       
-      // Your existing thinking steps
-      mcpThinking.push(`Searched: ${brandData.total} brands, ${meetingData.total} meetings`);
+      // Add data source summary FIRST
+      const dataSources = [];
+      if (brandData.total > 0) dataSources.push(`${brandData.total} brands`);
+      if (meetingData.total > 0) dataSources.push(`${meetingData.total} meetings`);
+      if (hubspotDeals && hubspotDeals.total > 0) dataSources.push(`${hubspotDeals.total} HubSpot deals`);
+      if (hubspotContacts && hubspotContacts.total > 0) dataSources.push(`${hubspotContacts.total} HubSpot contacts`);
       
-      // Add HubSpot search results
-      if (hubspotDeals && hubspotDeals.total > 0) {
-        mcpThinking.push(`HubSpot: Found ${hubspotDeals.total} deals`);
-        
+      if (dataSources.length > 0) {
+        mcpThinking.push(`Searched: ${dataSources.join(', ')}`);
+      }
+      
+      // Add HubSpot insights if we have them
+      if (hubspotDeals && hubspotDeals.records && hubspotDeals.records.length > 0) {
         // Calculate total pipeline value
         const totalPipeline = hubspotDeals.records
           .reduce((sum, deal) => sum + (parseInt(deal.properties.amount) || 0), 0);
+        
+        // Get top 3 deals
+        const topDeals = hubspotDeals.records
+          .slice(0, 3)
+          .map(deal => {
+            const amount = parseInt(deal.properties.amount) || 0;
+            return `${deal.properties.dealname} (${amount.toLocaleString()})`;
+          })
+          .filter(Boolean);
+        
         if (totalPipeline > 0) {
-          mcpThinking.push(`Pipeline value: $${totalPipeline.toLocaleString()}`);
+          mcpThinking.push(`HubSpot pipeline: ${totalPipeline.toLocaleString()}`);
         }
-      }
-      
-      if (hubspotContacts && hubspotContacts.total > 0) {
-        mcpThinking.push(`HubSpot: Found ${hubspotContacts.total} contacts`);
+        if (topDeals.length > 0) {
+          mcpThinking.push(`Top HubSpot deals: ${topDeals.join(', ')}`);
+        }
       }
       
       // Your existing brand insights
@@ -554,7 +574,9 @@ When providing insights:
           .slice(0, 3)
           .map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`)
           .filter(Boolean);
-        mcpThinking.push(`Top brands: ${topThree.join(', ')}`);
+        if (topThree.length > 0) {
+          mcpThinking.push(`Top Airtable brands: ${topThree.join(', ')}`);
+        }
       }
       
       return {
@@ -758,7 +780,9 @@ export default async function handler(req, res) {
         userMessage.toLowerCase().includes('deal') ||
         userMessage.toLowerCase().includes('opportunit') ||
         userMessage.toLowerCase().includes('pipeline') ||
-        userMessage.toLowerCase().includes('highest value')
+        userMessage.toLowerCase().includes('highest') ||
+        userMessage.toLowerCase().includes('value') ||
+        userMessage.toLowerCase().includes('revenue')
       );
       
       console.log('🔍 Brand matching detection:', { isBrandMatchingQuery, userMessage: userMessage?.slice(0, 50) });
