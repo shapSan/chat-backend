@@ -13,7 +13,6 @@ export const config = {
   },
 };
 
-
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
@@ -98,13 +97,14 @@ function getCurrentTimeInPDT() {
 }
 
 /**
- * Generate a video using Runway AI's SDK
+ * Generate a video from text using Runway AI's SDK
+ * First generates an image from text, then creates a video from that image
  * @param {Object} params - Video generation parameters
  * @returns {Promise<{url: string, taskId: string}>} - Video URL and task ID
  */
 async function generateRunwayVideo({ 
   promptText, 
-  promptImage, 
+  promptImage, // Optional - if not provided, we'll generate one
   model = 'gen4_turbo',
   ratio = '1280:720',
   duration = 5
@@ -113,14 +113,7 @@ async function generateRunwayVideo({
     throw new Error('RUNWAY_API_KEY not configured');
   }
 
-  console.log('🎬 Starting Runway video generation with SDK...');
-  console.log('Request details:', {
-    model,
-    promptText: promptText.substring(0, 100) + '...',
-    promptImage: promptImage.substring(0, 100) + '...',
-    ratio,
-    duration
-  });
+  console.log('🎬 Starting Runway video generation...');
 
   try {
     // Initialize Runway client
@@ -128,33 +121,80 @@ async function generateRunwayVideo({
       apiKey: runwayApiKey
     });
 
-    // Create the image-to-video task
-    console.log('Creating video generation task...');
-    const imageToVideoTask = await client.imageToVideo.create({
+    let imageUrl = promptImage;
+    
+    // If no image provided, generate one from the text first
+    if (!imageUrl || imageUrl.includes('dummyimage.com')) {
+      console.log('🖼️ No image provided, generating image from text first...');
+      
+      try {
+        // Create text-to-image task
+        const imageTask = await client.textToImage.create({
+          model: 'gen4_image', // Runway's text-to-image model
+          prompt: promptText,
+          ratio: ratio,
+          style: 'cinematic' // You can adjust this
+        });
+
+        console.log('⏳ Waiting for image generation...');
+        
+        // Wait for image to be ready
+        let imageGenTask = imageTask;
+        let imageAttempts = 0;
+        const maxImageAttempts = 30; // 2.5 minutes max
+
+        while (imageAttempts < maxImageAttempts) {
+          imageGenTask = await client.tasks.retrieve(imageGenTask.id);
+          
+          if (imageGenTask.status === 'SUCCEEDED') {
+            imageUrl = imageGenTask.output?.[0];
+            console.log('✅ Image generated successfully');
+            break;
+          }
+          
+          if (imageGenTask.status === 'FAILED') {
+            throw new Error('Image generation failed');
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          imageAttempts++;
+        }
+        
+        if (!imageUrl) {
+          throw new Error('Image generation timed out or failed');
+        }
+        
+      } catch (imageError) {
+        console.error('Failed to generate image:', imageError);
+        throw new Error(`Failed to generate image from text: ${imageError.message}`);
+      }
+    }
+
+    // Now create the video from the image
+    console.log('🎥 Creating video from image...');
+    const videoTask = await client.imageToVideo.create({
       model: model,
-      promptImage: promptImage,
+      promptImage: imageUrl,
       promptText: promptText,
       ratio: ratio,
       duration: duration
     });
 
-    console.log('✅ Task created:', imageToVideoTask.id);
+    console.log('✅ Video task created:', videoTask.id);
 
-    // Poll for completion
-    console.log('Waiting for video generation to complete...');
-    let task = imageToVideoTask;
+    // Poll for video completion
+    console.log('⏳ Waiting for video generation to complete...');
+    let task = videoTask;
     let attempts = 0;
     const maxAttempts = 60; // 5 minutes max
 
     while (attempts < maxAttempts) {
-      // Retrieve the latest task status
       task = await client.tasks.retrieve(task.id);
-      console.log(`🔄 Task status: ${task.status} (attempt ${attempts + 1})`);
+      console.log(`🔄 Video status: ${task.status} (attempt ${attempts + 1})`);
 
       if (task.status === 'SUCCEEDED') {
         console.log('✅ Video generation complete!');
         
-        // Get the video URL from the output
         const videoUrl = task.output?.[0];
         if (!videoUrl) {
           throw new Error('No video URL in task output');
@@ -162,7 +202,8 @@ async function generateRunwayVideo({
 
         return {
           url: videoUrl,
-          taskId: task.id
+          taskId: task.id,
+          generatedImage: imageUrl // Also return the generated image
         };
       }
 
@@ -170,7 +211,6 @@ async function generateRunwayVideo({
         throw new Error(`Video generation failed: ${task.failure || 'Unknown error'}`);
       }
 
-      // Wait 5 seconds before checking again
       await new Promise(resolve => setTimeout(resolve, 5000));
       attempts++;
     }
@@ -180,12 +220,10 @@ async function generateRunwayVideo({
   } catch (error) {
     console.error('Runway SDK Error:', error);
     
-    // Check if it's an authentication error
     if (error.message?.includes('401') || error.message?.includes('Unauthorized')) {
       throw new Error('Invalid Runway API key. Please check your RUNWAY_API_KEY environment variable.');
     }
     
-    // Check if it's a rate limit error
     if (error.message?.includes('429')) {
       throw new Error('Runway API rate limit exceeded. Please try again later.');
     }
@@ -686,10 +724,10 @@ export default async function handler(req, res) {
         
         const { promptText, promptImage, projectId, model, ratio, duration } = req.body;
 
-        if (!promptText || !promptImage) {
+        if (!promptText) {
           return res.status(400).json({ 
             error: 'Missing required fields',
-            details: 'promptText and promptImage are required'
+            details: 'promptText is required'
           });
         }
 
@@ -710,9 +748,16 @@ export default async function handler(req, res) {
             });
           }
           
+          // Use a default test image if the provided one is from dummyimage.com
+          let imageToUse = promptImage;
+          if (promptImage.includes('dummyimage.com')) {
+            console.log('⚠️ Replacing dummyimage.com with a proper test image');
+            imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
+          }
+          
           const { url, taskId } = await generateRunwayVideo({
             promptText,
-            promptImage,
+            promptImage: imageToUse,
             model: model || 'gen4_turbo',
             ratio: ratio || '1280:720',
             duration: duration || 10
@@ -724,7 +769,8 @@ export default async function handler(req, res) {
             success: true,
             videoUrl: url,
             taskId,
-            model: model || 'gen4_turbo'
+            model: model || 'gen4_turbo',
+            generatedImage: result.generatedImage // Include the generated image URL
           });
 
         } catch (error) {
