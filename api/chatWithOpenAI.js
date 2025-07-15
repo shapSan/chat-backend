@@ -324,7 +324,8 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
         .map(r => ({
           meeting: r.fields['Title'] || 'Untitled',
           date: r.fields['Date'] || 'No date',
-          key_points: r.fields['Summary'] || 'No summary'
+          key_points: r.fields['Summary'] || 'No summary',
+          link: r.fields['Link'] || null
         }));
       
       systemPrompt += JSON.stringify(meetingInfo, null, 2);
@@ -332,6 +333,14 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       
       console.log(`📅 Sending ${meetingInfo.length} relevant meetings to Claude`);
     }
+    
+    // Add instructions for Claude to include meeting links in the response
+    systemPrompt += `
+When referencing meetings in your response:
+- If a meeting has a link, include it in your response formatted as: **Meeting: [Meeting Title]** Link: [URL]
+- This allows the frontend to create clickable hyperlinks for meeting references
+- Maintain the exact meeting titles from the data provided
+`;
     
     console.log('📤 Calling Claude API with focused data...');
     
