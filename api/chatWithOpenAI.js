@@ -187,22 +187,22 @@ async function analyzeWithClaude(brands, meetings, userMessage, knowledgeBaseIns
     console.log(`🧠 Stage 2: Claude analyzing ${brands.length} brands for best matches...`);
     
     if (!anthropicApiKey || !brands || brands.length === 0) {
-      return { selectedBrands: brands.slice(0, 15), reasoning: [] };
+      return { selectedBrands: brands.slice(0, 15), reasoning: {} };
     }
     
     // Build focused prompt for Claude to analyze
     const systemPrompt = `You are an expert at matching brands to productions. Analyze the production and select the BEST brand matches based on creative fit, business opportunity, and strategic value.
 
-${knowledgeBaseInstructions || ''}
-
-TASK: Analyze these brands and select the top 10-15 that are the BEST matches for this production. Return a JSON object with:
+CRITICAL: You MUST return ONLY a valid JSON object in this exact format:
 {
   "selectedBrands": ["Brand Name 1", "Brand Name 2", ...],
   "reasoning": {
     "Brand Name 1": "Why this is a perfect match",
     "Brand Name 2": "Why this fits the production"
   }
-}`;
+}
+
+Do not include any text before or after the JSON. Select 10-15 best brands.`;
 
     const brandData = brands.map(b => ({
       name: b.fields['Brand Name'],
@@ -227,7 +227,7 @@ ${JSON.stringify(brandData, null, 2)}
 Recent Meeting Context:
 ${JSON.stringify(meetingData, null, 2)}
 
-Select the best brand matches and explain why each is perfect for this production.`;
+Select the best brand matches and explain why each is perfect for this production. Return ONLY the JSON response.`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -251,12 +251,49 @@ Select the best brand matches and explain why each is perfect for this productio
     });
     
     if (!response.ok) {
-      console.error('Claude analysis error:', response.status);
-      return { selectedBrands: brands.slice(0, 15), reasoning: [] };
+      const errorText = await response.text();
+      console.error('Claude analysis error:', response.status, errorText);
+      return { selectedBrands: brands.slice(0, 15), reasoning: {} };
     }
     
     const data = await response.json();
-    const result = JSON.parse(data.content[0].text);
+    let result;
+    
+    try {
+      // Extract the JSON from Claude's response
+      const content = data.content[0].text;
+      console.log('Claude raw response:', content.slice(0, 200) + '...');
+      
+      // Try to parse the JSON directly
+      result = JSON.parse(content);
+    } catch (parseError) {
+      console.error('Failed to parse Claude response as JSON, trying to extract JSON...');
+      
+      // Try to extract JSON from the response
+      const content = data.content[0].text;
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      
+      if (jsonMatch) {
+        try {
+          result = JSON.parse(jsonMatch[0]);
+        } catch (e) {
+          console.error('Failed to extract valid JSON from Claude response');
+          // Fallback: use first 10 brands
+          const fallbackBrands = brands.slice(0, 10).map(b => b.fields['Brand Name']).filter(Boolean);
+          result = {
+            selectedBrands: fallbackBrands,
+            reasoning: {}
+          };
+        }
+      } else {
+        // Complete fallback
+        const fallbackBrands = brands.slice(0, 10).map(b => b.fields['Brand Name']).filter(Boolean);
+        result = {
+          selectedBrands: fallbackBrands,
+          reasoning: {}
+        };
+      }
+    }
     
     // Get the selected brands with their full data
     const selectedBrandNames = result.selectedBrands || [];
@@ -276,7 +313,7 @@ Select the best brand matches and explain why each is perfect for this productio
   } catch (error) {
     console.error('❌ Error in Claude analysis:', error);
     // On error, just return first 15 brands
-    return { selectedBrands: brands.slice(0, 15), reasoning: [] };
+    return { selectedBrands: brands.slice(0, 15), reasoning: {} };
   }
 }
 
