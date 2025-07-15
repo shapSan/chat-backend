@@ -387,19 +387,19 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
     } else {
       console.log('❌ No HubSpot token configured');
     }
-      
-      // Search for contacts if query mentions people or contacts
-      if (userMessage.toLowerCase().includes('contact') ||
-          userMessage.toLowerCase().includes('person') ||
-          userMessage.toLowerCase().includes('people')) {
-        hubspotContacts = await searchHubSpot(userMessage, 'contacts', 10);
-      }
+    
+    // Check if we got actual data
+    if ((!brandData.records || brandData.records.length === 0) && 
+        (!meetingData.records || meetingData.records.length === 0) &&
+        (!hubspotDeals || !hubspotDeals.records || hubspotDeals.records.length === 0)) {
+      console.error('❌ No data returned from any source!');
+      return null;
     }
     
     // Stage 2: Narrow with OpenAI (your existing logic)
     const { topBrands, scores } = await narrowWithOpenAI(
-      brandData.records, 
-      meetingData.records, 
+      brandData.records || [], 
+      meetingData.records || [], 
       userMessage
     );
     
