@@ -322,7 +322,7 @@ async function formatWithGPT4(selectedBrands, claudeReasoning, userMessage, know
   try {
     console.log(`📝 Stage 3: GPT-4 formatting ${selectedBrands.length} brands into final output...`);
     
-    // Build the context for GPT-4
+    // Build the context for GPT-4 - structured to match expected format
     const brandContext = selectedBrands.map(b => ({
       name: b.fields['Brand Name'],
       budget: b.fields['Budget'],
@@ -332,18 +332,33 @@ async function formatWithGPT4(selectedBrands, claudeReasoning, userMessage, know
       whySelected: claudeReasoning[b.fields['Brand Name']] || 'Strong brand-production fit'
     }));
     
-    const systemPrompt = `${knowledgeBaseInstructions || 'You are a helpful assistant.'}
-
-IMPORTANT: Follow the exact format specified in the instructions above. Use the brand selections and reasoning provided to create the final output.`;
+    // Extract project name from user message
+    const projectName = userMessage.split('\n')[0] || 'this project';
     
-    const userPrompt = `Create brand integration suggestions for this production:
-
+    // Build the structured data that GPT-4 needs
+    const structuredContext = `
+PRODUCTION DETAILS:
 ${userMessage}
 
-Selected brands and why they were chosen:
-${JSON.stringify(brandContext, null, 2)}
+PRIORITY CONTEXT FROM YOUR BUSINESS DATA:
 
-Format the response exactly as specified in your instructions, creating compelling integration ideas for each brand.`;
+**SELECTED BRANDS FOR THIS PRODUCTION:**
+${brandContext.map(b => `
+**${b.name}**
+- Budget: ${b.budget?.toLocaleString() || 'TBD'}
+- Category: ${b.category || 'General'}
+- Current Focus: ${b.campaignFocus || 'Open to opportunities'}
+- Why Selected: ${b.whySelected}
+`).join('\n')}
+`;
+    
+    const systemPrompt = knowledgeBaseInstructions || 'You are a helpful assistant.';
+    
+    const userPrompt = `Using the brand selections above, create integration suggestions for ${projectName} following your exact formatting instructions.
+
+${structuredContext}
+
+Remember to follow your exact format including suggested categories, brand cards with Integration/Why it works/Pipeline Status, etc.`;
     
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -364,8 +379,7 @@ Format the response exactly as specified in your instructions, creating compelli
           }
         ],
         temperature: 0.7,
-        max_tokens: 2000,
-        timeout: 30000 // Add timeout
+        max_tokens: 2500
       }),
     });
     
@@ -383,13 +397,13 @@ Format the response exactly as specified in your instructions, creating compelli
   } catch (error) {
     console.error('❌ Error in GPT-4 formatting:', error);
     // Fallback: return a simple formatted response
-    const fallbackResponse = selectedBrands.map(brand => {
-      const name = brand.fields['Brand Name'];
-      const reasoning = claudeReasoning[name] || 'Strong fit for this production';
-      return `**${name}**\nIntegration: ${reasoning}\n`;
-    }).join('\n');
-    
-    return `Brand integration suggestions:\n\n${fallbackResponse}`;
+    return `Brand integration suggestions for ${userMessage.split('\n')[0]}:\n\n**Brands & Integration Ideas:**\n\n${
+      selectedBrands.map(brand => {
+        const name = brand.fields['Brand Name'];
+        const reasoning = claudeReasoning[name] || 'Strong fit for this production';
+        return `**${name}**\nIntegration: ${reasoning}\nWhy it works: Perfect brand-production alignment\n`;
+      }).join('\n')
+    }`;
   }
 }
 
