@@ -438,7 +438,8 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       selectedBrands,
       reasoning,
       userMessage,
-      knowledgeBaseInstructions
+      knowledgeBaseInstructions,
+      meetingData.records // Pass meetings to GPT-4
     );
     
     // Build MCP thinking based on Claude's actual analysis
