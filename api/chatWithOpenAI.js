@@ -104,7 +104,7 @@ async function generateRunwayVideo({
   promptText, 
   promptImage, 
   model = 'gen4_turbo',   // gen4_turbo is the latest and most powerful model
-  ratio = '1280:768',     // 16:9 aspect ratio
+  ratio = '16:9',         // Use ratio format like '16:9' instead of pixels
   duration = 10           // seconds (5 or 10 are common options)
 }) {
   if (!runwayApiKey) {
@@ -112,29 +112,43 @@ async function generateRunwayVideo({
   }
 
   console.log('🎬 Starting Runway video generation...');
+  console.log('Request details:', {
+    model,
+    promptText: promptText.substring(0, 100) + '...',
+    promptImage: promptImage.substring(0, 100) + '...',
+    ratio,
+    duration
+  });
   
-  // Start the generation task
-  const startResponse = await fetch('https://api.runwayml.com/v1/tasks/image-to-video', {
+  // Try the image-to-video endpoint format
+  const requestBody = {
+    prompt: promptText,
+    image_url: promptImage,
+    model: model,
+    duration: duration,
+    aspect_ratio: ratio
+  };
+  
+  console.log('Runway API Request:', JSON.stringify(requestBody, null, 2));
+  
+  const startResponse = await fetch('https://api.runwayml.com/v1/image-to-video', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${runwayApiKey}`,
       'X-Runway-Version': '2024-11-06'
     },
-    body: JSON.stringify({
-      model,
-      promptText,
-      promptImage,
-      options: {
-        aspectRatio: ratio,
-        duration
-      }
-    })
+    body: JSON.stringify(requestBody)
   });
 
   if (!startResponse.ok) {
-    const error = await startResponse.text();
-    throw new Error(`Runway API error: ${startResponse.status} - ${error}`);
+    const errorText = await startResponse.text();
+    console.error('Runway API Error Response:', {
+      status: startResponse.status,
+      statusText: startResponse.statusText,
+      error: errorText
+    });
+    throw new Error(`Runway API error: ${startResponse.status} - ${errorText}`);
   }
 
   const { id: taskId } = await startResponse.json();
@@ -686,11 +700,19 @@ export default async function handler(req, res) {
         }
 
         try {
+          // Validate inputs
+          if (!promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
+            return res.status(400).json({
+              error: 'Invalid image format',
+              details: 'promptImage must be a valid URL or base64 data URL'
+            });
+          }
+          
           const { url, taskId } = await generateRunwayVideo({
             promptText,
             promptImage,
             model: model || 'gen4_turbo',
-            ratio: ratio || '1280:768',
+            ratio: ratio || '16:9',
             duration: duration || 10
           });
 
