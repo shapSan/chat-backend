@@ -98,21 +98,22 @@ function getCurrentTimeInPDT() {
 
 /**
  * Generate a video from text using Runway AI's SDK
- * Uses text prompt with gen3_alpha model
+ * Uses text prompt directly with image-to-video model
  * @param {Object} params - Video generation parameters
  * @returns {Promise<{url: string, taskId: string}>} - Video URL and task ID
  */
 async function generateRunwayVideo({ 
   promptText, 
-  model = 'gen3a_turbo',  // Use gen3a_turbo for text generation
-  ratio = '16:9',
+  promptImage, 
+  model = 'gen3_alpha_turbo',  // Cheaper model - uses fewer credits
+  ratio = '1280:720',
   duration = 5
 }) {
   if (!runwayApiKey) {
     throw new Error('RUNWAY_API_KEY not configured');
   }
 
-  console.log('🎬 Starting Runway video generation (text-only)...');
+  console.log('🎬 Starting Runway video generation...');
 
   try {
     // Initialize Runway client
@@ -120,58 +121,25 @@ async function generateRunwayVideo({
       apiKey: runwayApiKey
     });
 
-    // Log available methods to debug
-    console.log('Available client methods:', Object.keys(client));
-    if (client.v1) {
-      console.log('Available v1 methods:', Object.keys(client.v1));
-    }
-
-    // Try using the generate method if it exists
-    let videoTask;
+    // For now, let's use a default cinematic image if none provided
+    // This is a temporary solution until we can properly generate images
+    let imageToUse = promptImage;
     
-    if (client.generate) {
-      videoTask = await client.generate({
-        model: model,
-        prompt: promptText,
-        options: {
-          duration: duration,
-          aspect_ratio: ratio
-        }
-      });
-    } else if (client.generations && client.generations.create) {
-      videoTask = await client.generations.create({
-        model: model,
-        text_prompt: promptText,
-        duration: duration,
-        aspect_ratio: ratio
-      });
-    } else {
-      // Fallback to direct API call
-      console.log('SDK methods not found, using direct API call');
-      
-      const response = await fetch('https://api.runwayml.com/v1/generations', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${runwayApiKey}`,
-          'Content-Type': 'application/json',
-          'X-Runway-Version': '2024-05-16'
-        },
-        body: JSON.stringify({
-          model_name: model,
-          text_prompt: promptText,
-          duration: duration,
-          aspect_ratio: ratio
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Runway API error:', errorData);
-        throw new Error(errorData.detail || errorData.message || `API error: ${response.status}`);
-      }
-
-      videoTask = await response.json();
+    if (!imageToUse || imageToUse.includes('dummyimage.com')) {
+      console.log('📸 Using default cinematic image for video generation...');
+      // Use a high-quality cinematic image as base
+      imageToUse = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1280&h=720&fit=crop&q=80';
     }
+
+    // Create the video with the text prompt guiding the animation
+    console.log('🎥 Creating video...');
+    const videoTask = await client.imageToVideo.create({
+      model: model,
+      promptImage: imageToUse,
+      promptText: promptText, // This will guide how the video animates
+      ratio: ratio,
+      duration: duration
+    });
 
     console.log('✅ Video task created:', videoTask.id);
 
@@ -182,32 +150,14 @@ async function generateRunwayVideo({
     const maxAttempts = 60; // 5 minutes max
 
     while (attempts < maxAttempts) {
-      // Try SDK method first, then fallback to API
-      if (client.tasks && client.tasks.retrieve) {
-        task = await client.tasks.retrieve(task.id);
-      } else {
-        const statusResponse = await fetch(`https://api.runwayml.com/v1/generations/${task.id}`, {
-          headers: {
-            'Authorization': `Bearer ${runwayApiKey}`,
-            'X-Runway-Version': '2024-05-16'
-          }
-        });
-
-        if (!statusResponse.ok) {
-          throw new Error(`Failed to check status: ${statusResponse.status}`);
-        }
-
-        task = await statusResponse.json();
-      }
-
+      task = await client.tasks.retrieve(task.id);
       console.log(`🔄 Status: ${task.status} (${attempts + 1}/60)`);
 
-      if (task.status === 'SUCCEEDED' || task.status === 'COMPLETE') {
+      if (task.status === 'SUCCEEDED') {
         console.log('✅ Video ready!');
         
-        const videoUrl = task.output?.[0] || task.output_url || task.url;
+        const videoUrl = task.output?.[0];
         if (!videoUrl) {
-          console.error('Task response:', JSON.stringify(task, null, 2));
           throw new Error('No video URL in output');
         }
 
@@ -746,8 +696,7 @@ export default async function handler(req, res) {
       if (req.body.generateVideo === true) {
         console.log('Processing video generation request');
         
-        const { promptText, projectId, sessionId, model, ratio, duration } = req.body;
-        // NO promptImage in destructuring
+        const { promptText, promptImage, projectId, model, ratio, duration } = req.body;
 
         if (!promptText) {
           return res.status(400).json({ 
@@ -765,12 +714,27 @@ export default async function handler(req, res) {
         }
 
         try {
-          // Generate video with text only
+          // Validate inputs
+          if (!promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
+            return res.status(400).json({
+              error: 'Invalid image format',
+              details: 'promptImage must be a valid URL or base64 data URL'
+            });
+          }
+          
+          // Use a default test image if the provided one is from dummyimage.com
+          let imageToUse = promptImage;
+          if (promptImage.includes('dummyimage.com')) {
+            console.log('⚠️ Replacing dummyimage.com with a proper test image');
+            imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
+          }
+          
           const { url, taskId } = await generateRunwayVideo({
             promptText,
-            model: model || 'gen3a_turbo',
-            ratio: ratio || '16:9',
-            duration: duration || 5
+            promptImage: imageToUse,
+            model: model || 'gen4_turbo',
+            ratio: ratio || '1280:720',
+            duration: duration || 5  // Reduce from 10 to 5 seconds
           });
 
           console.log('✅ Video generated successfully:', taskId);
@@ -779,7 +743,7 @@ export default async function handler(req, res) {
             success: true,
             videoUrl: url,
             taskId,
-            model: model || 'gen3a_turbo'
+            model: model || 'gen4_turbo'
           });
 
         } catch (error) {
