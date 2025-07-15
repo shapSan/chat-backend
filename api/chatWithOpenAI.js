@@ -352,7 +352,7 @@ Format the response exactly as specified in your instructions, creating compelli
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4-turbo-preview', // Better at following formatting instructions
+        model: 'gpt-4o', // Use same model as your regular chat
         messages: [
           {
             role: 'system',
@@ -364,12 +364,14 @@ Format the response exactly as specified in your instructions, creating compelli
           }
         ],
         temperature: 0.7,
-        max_tokens: 2000
+        max_tokens: 2000,
+        timeout: 30000 // Add timeout
       }),
     });
     
     if (!response.ok) {
-      console.error('GPT-4 formatting error:', response.status);
+      const errorText = await response.text();
+      console.error('GPT-4 formatting error:', response.status, errorText);
       throw new Error(`GPT-4 error: ${response.status}`);
     }
     
@@ -380,7 +382,14 @@ Format the response exactly as specified in your instructions, creating compelli
     
   } catch (error) {
     console.error('❌ Error in GPT-4 formatting:', error);
-    throw error;
+    // Fallback: return a simple formatted response
+    const fallbackResponse = selectedBrands.map(brand => {
+      const name = brand.fields['Brand Name'];
+      const reasoning = claudeReasoning[name] || 'Strong fit for this production';
+      return `**${name}**\nIntegration: ${reasoning}\n`;
+    }).join('\n');
+    
+    return `Brand integration suggestions:\n\n${fallbackResponse}`;
   }
 }
 
