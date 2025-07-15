@@ -98,13 +98,12 @@ function getCurrentTimeInPDT() {
 
 /**
  * Generate a video from text using Runway AI's SDK
- * Uses text prompt directly with image-to-video model
+ * Uses text prompt directly with text-to-video model
  * @param {Object} params - Video generation parameters
  * @returns {Promise<{url: string, taskId: string}>} - Video URL and task ID
  */
 async function generateRunwayVideo({ 
   promptText, 
-  promptImage, 
   model = 'gen3_alpha_turbo',  // Cheaper model - uses fewer credits
   ratio = '1280:720',
   duration = 5
@@ -113,7 +112,7 @@ async function generateRunwayVideo({
     throw new Error('RUNWAY_API_KEY not configured');
   }
 
-  console.log('🎬 Starting Runway video generation...');
+  console.log('🎬 Starting Runway video generation (text-only)...');
 
   try {
     // Initialize Runway client
@@ -121,22 +120,11 @@ async function generateRunwayVideo({
       apiKey: runwayApiKey
     });
 
-    // For now, let's use a default cinematic image if none provided
-    // This is a temporary solution until we can properly generate images
-    let imageToUse = promptImage;
-    
-    if (!imageToUse || imageToUse.includes('dummyimage.com')) {
-      console.log('📸 Using default cinematic image for video generation...');
-      // Use a high-quality cinematic image as base
-      imageToUse = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1280&h=720&fit=crop&q=80';
-    }
-
-    // Create the video with the text prompt guiding the animation
-    console.log('🎥 Creating video...');
-    const videoTask = await client.imageToVideo.create({
+    // Create the video with text prompt only
+    console.log('🎥 Creating video from text prompt...');
+    const videoTask = await client.textToVideo.create({
       model: model,
-      promptImage: imageToUse,
-      promptText: promptText, // This will guide how the video animates
+      promptText: promptText, // Text-only generation
       ratio: ratio,
       duration: duration
     });
@@ -696,7 +684,7 @@ export default async function handler(req, res) {
       if (req.body.generateVideo === true) {
         console.log('Processing video generation request');
         
-        const { promptText, promptImage, projectId, model, ratio, duration } = req.body;
+        const { promptText, projectId, model, ratio, duration } = req.body;
 
         if (!promptText) {
           return res.status(400).json({ 
@@ -714,27 +702,12 @@ export default async function handler(req, res) {
         }
 
         try {
-          // Validate inputs
-          if (!promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
-            return res.status(400).json({
-              error: 'Invalid image format',
-              details: 'promptImage must be a valid URL or base64 data URL'
-            });
-          }
-          
-          // Use a default test image if the provided one is from dummyimage.com
-          let imageToUse = promptImage;
-          if (promptImage.includes('dummyimage.com')) {
-            console.log('⚠️ Replacing dummyimage.com with a proper test image');
-            imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
-          }
-          
+          // Generate video with text only
           const { url, taskId } = await generateRunwayVideo({
             promptText,
-            promptImage: imageToUse,
-            model: model || 'gen4_turbo',
+            model: model || 'gen3_alpha_turbo',
             ratio: ratio || '1280:720',
-            duration: duration || 5  // Reduce from 10 to 5 seconds
+            duration: duration || 5
           });
 
           console.log('✅ Video generated successfully:', taskId);
@@ -743,7 +716,7 @@ export default async function handler(req, res) {
             success: true,
             videoUrl: url,
             taskId,
-            model: model || 'gen4_turbo'
+            model: model || 'gen3_alpha_turbo'
           });
 
         } catch (error) {
