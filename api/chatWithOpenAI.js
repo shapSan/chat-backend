@@ -16,6 +16,7 @@ const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY; // Add this to your Vercel env vars
+const runwayApiKey = process.env.RUNWAY_API_KEY; // 🔑 Runway API key
 
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
@@ -92,6 +93,89 @@ function getCurrentTimeInPDT() {
     second: 'numeric',
     timeZoneName: 'short',
   }).format(new Date());
+}
+
+/**
+ * Generate a video using Runway AI's image-to-video API
+ * @param {Object} params - Video generation parameters
+ * @returns {Promise<{url: string, taskId: string}>} - Video URL and task ID
+ */
+async function generateRunwayVideo({ 
+  promptText, 
+  promptImage, 
+  model = 'gen4_turbo',   // gen4_turbo is the latest and most powerful model
+  ratio = '1280:768',     // 16:9 aspect ratio
+  duration = 10           // seconds (5 or 10 are common options)
+}) {
+  if (!runwayApiKey) {
+    throw new Error('RUNWAY_API_KEY not configured');
+  }
+
+  console.log('🎬 Starting Runway video generation...');
+  
+  // Start the generation task
+  const startResponse = await fetch('https://api.runwayml.com/v1/tasks/image-to-video', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${runwayApiKey}`,
+      'X-Runway-Version': '2024-11-06'
+    },
+    body: JSON.stringify({
+      model,
+      promptText,
+      promptImage,
+      options: {
+        aspectRatio: ratio,
+        duration
+      }
+    })
+  });
+
+  if (!startResponse.ok) {
+    const error = await startResponse.text();
+    throw new Error(`Runway API error: ${startResponse.status} - ${error}`);
+  }
+
+  const { id: taskId } = await startResponse.json();
+  console.log('✅ Runway task created:', taskId);
+
+  // Poll for completion
+  const pollInterval = 3000; // 3 seconds
+  const maxAttempts = 40;    // ~2 minutes max wait
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    const statusResponse = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}`, {
+      headers: {
+        'Authorization': `Bearer ${runwayApiKey}`,
+        'X-Runway-Version': '2024-11-06'
+      }
+    });
+
+    if (!statusResponse.ok) {
+      throw new Error(`Failed to check task status: ${statusResponse.status}`);
+    }
+
+    const task = await statusResponse.json();
+    console.log(`🔄 Task status: ${task.status} (attempt ${attempts + 1})`);
+
+    if (task.status === 'SUCCEEDED' || task.status === 'succeeded') {
+      return {
+        url: task.output?.[0] || task.output || task.url,  // Handle different response formats
+        taskId
+      };
+    }
+
+    if (task.status === 'FAILED' || task.status === 'failed' || task.status === 'CANCELED' || task.status === 'canceled') {
+      throw new Error(`Video generation failed: ${task.failure || task.error || 'Unknown error'}`);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    attempts++;
+  }
+
+  throw new Error('Video generation timed out');
 }
 
 // Stage 1: Enhanced search function that returns structured data for Claude
@@ -577,6 +661,54 @@ export default async function handler(req, res) {
                 error: 'Failed to generate audio',
                 details: error.message 
             });
+        }
+      }
+
+      // Check if this is a video generation request
+      if (req.body.generateVideo === true) {
+        console.log('Processing video generation request');
+        
+        const { promptText, promptImage, projectId, model, ratio, duration } = req.body;
+
+        if (!promptText || !promptImage) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'promptText and promptImage are required'
+          });
+        }
+
+        if (!runwayApiKey) {
+          console.error('Runway API key not configured');
+          return res.status(500).json({ 
+            error: 'Video generation service not configured',
+            details: 'Please configure RUNWAY_API_KEY in Vercel environment variables'
+          });
+        }
+
+        try {
+          const { url, taskId } = await generateRunwayVideo({
+            promptText,
+            promptImage,
+            model: model || 'gen4_turbo',
+            ratio: ratio || '1280:768',
+            duration: duration || 10
+          });
+
+          console.log('✅ Video generated successfully:', taskId);
+
+          return res.status(200).json({
+            success: true,
+            videoUrl: url,
+            taskId,
+            model: model || 'gen4_turbo'
+          });
+
+        } catch (error) {
+          console.error('Error in video generation:', error);
+          return res.status(500).json({ 
+            error: 'Failed to generate video',
+            details: error.message 
+          });
         }
       }
 
