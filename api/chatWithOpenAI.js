@@ -76,7 +76,7 @@ function getProjectConfig(projectId) {
   const config = PROJECT_CONFIGS[projectId] || PROJECT_CONFIGS['default'];
   
   // Log which config is being used (for debugging)
-  console.log(`Using project config for: ${projectId || 'default'}`);
+  console.log(Using project config for: ${projectId || 'default'});
   
   return config;
 }
@@ -103,11 +103,11 @@ async function callHubSpotAPI(endpoint, method = 'GET', body = null) {
   }
 
   try {
-    const url = `https://api.hubapi.com${endpoint}`;
+    const url = https://api.hubapi.com${endpoint};
     const options = {
       method,
       headers: {
-        'Authorization': `Bearer ${hubspotAccessToken}`,
+        'Authorization': Bearer ${hubspotAccessToken},
         'Content-Type': 'application/json'
       }
     };
@@ -119,7 +119,7 @@ async function callHubSpotAPI(endpoint, method = 'GET', body = null) {
     const response = await fetch(url, options);
     
     if (!response.ok) {
-      console.error(`HubSpot API error: ${response.status}`);
+      console.error(HubSpot API error: ${response.status});
       return null;
     }
 
@@ -170,7 +170,7 @@ async function searchHubSpot(query, searchType = 'deals', limit = 20) {
       return { error: 'No data returned', records: [], total: 0 };
     }
 
-    console.log(`✅ Got ${data.results.length} ${searchType} from HubSpot`);
+    console.log(✅ Got ${data.results.length} ${searchType} from HubSpot);
     
     return {
       searchType,
@@ -226,15 +226,15 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
     }
     
     // Build Airtable URL
-    let url = `https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)}`;
-    const params = [`maxRecords=${limit}`];
+    let url = https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)};
+    const params = [maxRecords=${limit}];
     
     if (searchConfig.view) {
-      params.push(`view=${encodeURIComponent(searchConfig.view)}`);
+      params.push(view=${encodeURIComponent(searchConfig.view)});
     }
     
     searchConfig.fields.forEach(field => {
-      params.push(`fields[]=${encodeURIComponent(field)}`);
+      params.push(fields[]=${encodeURIComponent(field)});
     });
     
     url += '?' + params.join('&');
@@ -244,7 +244,7 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
     // Fetch from Airtable
     const response = await fetch(url, {
       headers: {
-        'Authorization': `Bearer ${airtableApiKey}`,
+        'Authorization': Bearer ${airtableApiKey},
         'Content-Type': 'application/json'
       }
     });
@@ -252,11 +252,11 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
     if (!response.ok) {
       const errorText = await response.text();
       console.error('❌ Airtable API error:', response.status, errorText);
-      throw new Error(`Airtable API error: ${response.status} - ${errorText}`);
+      throw new Error(Airtable API error: ${response.status} - ${errorText});
     }
     
     const data = await response.json();
-    console.log(`✅ Stage 1 complete: Got ${data.records.length} ${searchType} from Airtable`);
+    console.log(✅ Stage 1 complete: Got ${data.records.length} ${searchType} from Airtable);
     
     // Return raw data for next stage
     return {
@@ -274,7 +274,7 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
 // Stage 2: OpenAI narrowing function
 async function narrowWithOpenAI(brands, meetings, userMessage) {
   try {
-    console.log(`🧮 Stage 2: Narrowing ${brands.length} brands with OpenAI...`);
+    console.log(🧮 Stage 2: Narrowing ${brands.length} brands with OpenAI...);
     
     // Only process if we have brands
     if (!brands || brands.length === 0) {
@@ -282,7 +282,7 @@ async function narrowWithOpenAI(brands, meetings, userMessage) {
     }
     
     // Create a lightweight scoring prompt
-    const scoringPrompt = `
+    const scoringPrompt = 
 Production details: ${userMessage}
 
 Score these brands 0-100 based on relevance to this specific production.
@@ -293,14 +293,14 @@ Return ONLY a JSON object with brand names as keys and scores as values.
 
 Brands to evaluate:
 ${brands.slice(0, 50).map(b => 
-  `${b.fields['Brand Name']}: ${b.fields['Category'] || 'General'}, Budget: ${b.fields['Budget'] || 'TBD'}, Focus: ${(b.fields['Campaign Summary'] || '').slice(0, 100)}`
-).join('\n')}`;
+  ${b.fields['Brand Name']}: ${b.fields['Category'] || 'General'}, Budget: ${b.fields['Budget'] || 'TBD'}, Focus: ${(b.fields['Campaign Summary'] || '').slice(0, 100)}
+).join('\n')};
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
+        Authorization: Bearer ${openAIApiKey},
       },
       body: JSON.stringify({
         model: 'gpt-3.5-turbo-1106', // Fast, cheap, good at JSON
@@ -339,8 +339,8 @@ ${brands.slice(0, 50).map(b =>
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .slice(0, 15);
     
-    console.log(`✅ Stage 2 complete: Narrowed to ${topBrands.length} top brands`);
-    console.log(`🏆 Top 3: ${topBrands.slice(0, 3).map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`).join(', ')}`);
+    console.log(✅ Stage 2 complete: Narrowed to ${topBrands.length} top brands);
+    console.log(🏆 Top 3: ${topBrands.slice(0, 3).map(b => ${b.fields['Brand Name']} (${b.relevanceScore})).join(', ')});
     
     return { topBrands, scores };
     
@@ -389,19 +389,17 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
     }
     
     // Check if we got actual data
-      
-      // Search for contacts if query mentions people or contacts
-      if (userMessage.toLowerCase().includes('contact') ||
-          userMessage.toLowerCase().includes('person') ||
-          userMessage.toLowerCase().includes('people')) {
-        hubspotContacts = await searchHubSpot(userMessage, 'contacts', 10);
-      }
+    if ((!brandData.records || brandData.records.length === 0) && 
+        (!meetingData.records || meetingData.records.length === 0) &&
+        (!hubspotDeals || !hubspotDeals.records || hubspotDeals.records.length === 0)) {
+      console.error('❌ No data returned from any source!');
+      return null;
     }
     
     // Stage 2: Narrow with OpenAI (your existing logic)
     const { topBrands, scores } = await narrowWithOpenAI(
-      brandData.records, 
-      meetingData.records, 
+      brandData.records || [], 
+      meetingData.records || [], 
       userMessage
     );
     
@@ -416,7 +414,8 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
     
     // Your existing brand data formatting
     if (topBrands && topBrands.length > 0) {
-      systemPrompt += "**TOP RELEVANT BRANDS (from Airtable):**\n```json\n";
+      systemPrompt += "**TOP RELEVANT BRANDS (from Airtable):**\n
+json\n";
       const brandInfo = topBrands.map(b => ({
         brand: b.fields['Brand Name'] || 'Unknown',
         relevance_score: b.relevanceScore || 0,
@@ -427,12 +426,14 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
       }));
       
       systemPrompt += JSON.stringify(brandInfo, null, 2);
-      systemPrompt += "\n```\n\n";
+      systemPrompt += "\n
+\n\n";
     }
     
     // NEW: Add HubSpot deals data
     if (hubspotDeals && hubspotDeals.records && hubspotDeals.records.length > 0) {
-      systemPrompt += "**HUBSPOT DEALS & OPPORTUNITIES:**\n```json\n";
+      systemPrompt += "**HUBSPOT DEALS & OPPORTUNITIES:**\n
+json\n";
       const dealsInfo = hubspotDeals.records.map(deal => ({
         deal_name: deal.properties.dealname,
         amount: deal.properties.amount ? `$${parseInt(deal.properties.amount).toLocaleString()}` : 'Not specified',
@@ -442,14 +443,16 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
       }));
       
       systemPrompt += JSON.stringify(dealsInfo, null, 2);
-      systemPrompt += "\n```\n\n";
+      systemPrompt += "\n
+\n\n";
       
-      console.log(`💼 Sending ${dealsInfo.length} HubSpot deals to Claude`);
+      console.log(💼 Sending ${dealsInfo.length} HubSpot deals to Claude);
     }
     
     // NEW: Add HubSpot contacts data
     if (hubspotContacts && hubspotContacts.records && hubspotContacts.records.length > 0) {
-      systemPrompt += "**HUBSPOT CONTACTS:**\n```json\n";
+      systemPrompt += "**HUBSPOT CONTACTS:**\n
+json\n";
       const contactsInfo = hubspotContacts.records.map(contact => ({
         name: `${contact.properties.firstname || ''} ${contact.properties.lastname || ''}`.trim(),
         email: contact.properties.email,
@@ -458,14 +461,16 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
       }));
       
       systemPrompt += JSON.stringify(contactsInfo, null, 2);
-      systemPrompt += "\n```\n\n";
+      systemPrompt += "\n
+\n\n";
       
-      console.log(`👥 Sending ${contactsInfo.length} HubSpot contacts to Claude`);
+      console.log(👥 Sending ${contactsInfo.length} HubSpot contacts to Claude);
     }
     
     // Your existing meeting data formatting
     if (meetingData && meetingData.records && meetingData.records.length > 0) {
-      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS (from Airtable):**\n```json\n";
+      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS (from Airtable):**\n
+json\n";
       const meetingInfo = meetingData.records
         .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10)
         .slice(0, 20)
@@ -477,11 +482,12 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
         }));
       
       systemPrompt += JSON.stringify(meetingInfo, null, 2);
-      systemPrompt += "\n```\n\n";
+      systemPrompt += "\n
+\n\n";
     }
     
     // Add instructions for Claude
-    systemPrompt += `
+    systemPrompt += 
 When providing insights:
 - Cross-reference brand opportunities from Airtable with deals in HubSpot
 - Identify high-value opportunities from both systems
@@ -489,7 +495,7 @@ When providing insights:
 - If meetings reference brands that also appear in HubSpot deals, highlight these connections
 - Include relevant deal amounts and stages when discussing opportunities
 - When referencing meetings, if a meeting has a link, include it formatted as: **Meeting: [Meeting Title]** Link: [URL]
-`;
+;
     
     console.log('📤 Calling Claude API with combined Airtable + HubSpot data...');
     
@@ -524,7 +530,7 @@ When providing insights:
         return null;
       }
       
-      throw new Error(`Claude API error: ${response.status}`);
+      throw new Error(Claude API error: ${response.status});
     }
     
     const data = await response.json();
@@ -538,13 +544,13 @@ When providing insights:
       
       // Add data source summary FIRST
       const dataSources = [];
-      if (brandData.total > 0) dataSources.push(`${brandData.total} brands`);
-      if (meetingData.total > 0) dataSources.push(`${meetingData.total} meetings`);
-      if (hubspotDeals && hubspotDeals.total > 0) dataSources.push(`${hubspotDeals.total} HubSpot deals`);
-      if (hubspotContacts && hubspotContacts.total > 0) dataSources.push(`${hubspotContacts.total} HubSpot contacts`);
+      if (brandData.total > 0) dataSources.push(${brandData.total} brands);
+      if (meetingData.total > 0) dataSources.push(${meetingData.total} meetings);
+      if (hubspotDeals && hubspotDeals.total > 0) dataSources.push(${hubspotDeals.total} HubSpot deals);
+      if (hubspotContacts && hubspotContacts.total > 0) dataSources.push(${hubspotContacts.total} HubSpot contacts);
       
       if (dataSources.length > 0) {
-        mcpThinking.push(`Searched: ${dataSources.join(', ')}`);
+        mcpThinking.push(Searched: ${dataSources.join(', ')});
       }
       
       // Add HubSpot insights if we have them
@@ -558,15 +564,15 @@ When providing insights:
           .slice(0, 3)
           .map(deal => {
             const amount = parseInt(deal.properties.amount) || 0;
-            return `${deal.properties.dealname} (${amount.toLocaleString()})`;
+            return ${deal.properties.dealname} (${amount.toLocaleString()});
           })
           .filter(Boolean);
         
         if (totalPipeline > 0) {
-          mcpThinking.push(`HubSpot pipeline: ${totalPipeline.toLocaleString()}`);
+          mcpThinking.push(HubSpot pipeline: ${totalPipeline.toLocaleString()});
         }
         if (topDeals.length > 0) {
-          mcpThinking.push(`Top HubSpot deals: ${topDeals.join(', ')}`);
+          mcpThinking.push(Top HubSpot deals: ${topDeals.join(', ')});
         }
       }
       
@@ -574,10 +580,10 @@ When providing insights:
       if (topBrands.length > 0 && scores) {
         const topThree = topBrands
           .slice(0, 3)
-          .map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`)
+          .map(b => ${b.fields['Brand Name']} (${b.relevanceScore}))
           .filter(Boolean);
         if (topThree.length > 0) {
-          mcpThinking.push(`Top Airtable brands: ${topThree.join(', ')}`);
+          mcpThinking.push(Top Airtable brands: ${topThree.join(', ')});
         }
       }
       
@@ -643,7 +649,7 @@ export default async function handler(req, res) {
         console.log('Generating audio for project:', projectId, 'using voice:', voiceId);
 
         try {
-            const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+            const elevenLabsUrl = https://api.elevenlabs.io/v1/text-to-speech/${voiceId};
             
             const elevenLabsResponse = await fetch(elevenLabsUrl, {
                 method: 'POST',
@@ -670,7 +676,7 @@ export default async function handler(req, res) {
 
             const audioBuffer = await elevenLabsResponse.buffer();
             const base64Audio = audioBuffer.toString('base64');
-            const audioDataUrl = `data:audio/mpeg;base64,${base64Audio}`;
+            const audioDataUrl = data:audio/mpeg;base64,${base64Audio};
 
             return res.status(200).json({
                 success: true,
@@ -711,11 +717,11 @@ export default async function handler(req, res) {
       const projectConfig = getProjectConfig(projectId);
       const { baseId, chatTable, knowledgeTable } = projectConfig;
 
-      const knowledgeBaseUrl = `https://api.airtable.com/v0/${baseId}/${knowledgeTable}`;
-      const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
+      const knowledgeBaseUrl = https://api.airtable.com/v0/${baseId}/${knowledgeTable};
+      const chatUrl = https://api.airtable.com/v0/${baseId}/${chatTable};
       const headersAirtable = { 
         'Content-Type': 'application/json', 
-        Authorization: `Bearer ${airtableApiKey}` 
+        Authorization: Bearer ${airtableApiKey} 
       };
 
       let conversationContext = '';
@@ -735,12 +741,12 @@ export default async function handler(req, res) {
           console.warn('⚠️ Knowledge base not found, using default');
         }
       } catch (error) {
-        console.error(`❌ Error fetching knowledge base:`, error);
+        console.error(❌ Error fetching knowledge base:, error);
       }
 
       // Fetch conversation history
       try {
-        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
+        const searchUrl = ${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}");
         const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
         if (historyResponse.ok) {
           const result = await historyResponse.json();
@@ -754,7 +760,7 @@ export default async function handler(req, res) {
           }
         }
       } catch (error) {
-        console.error(`Error fetching conversation history:`, error);
+        console.error(Error fetching conversation history:, error);
       }
 
       // IMPROVED Search Query Detection - only for brand matching requests
@@ -797,7 +803,7 @@ export default async function handler(req, res) {
 
           const openaiWs = new WebSocket(openaiWsUrl, {
             headers: {
-              Authorization: `Bearer ${openAIApiKey}`,
+              Authorization: Bearer ${openAIApiKey},
               'OpenAI-Beta': 'realtime=v1',
             },
           });
@@ -805,11 +811,11 @@ export default async function handler(req, res) {
           // Build system message
           let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
           if (conversationContext) {
-            systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+            systemMessageContent += \n\nConversation history: ${conversationContext};
           }
-          systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+          systemMessageContent += \n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.;
           if (projectId && projectId !== 'default') {
-            systemMessageContent += ` You are assisting with the ${projectId} project.`;
+            systemMessageContent +=  You are assisting with the ${projectId} project.;
           }
 
           openaiWs.on('open', () => {
@@ -836,7 +842,7 @@ export default async function handler(req, res) {
                   projectId, 
                   chatUrl, 
                   headersAirtable, 
-                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
+                  ${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}, 
                   existingRecordId
                 ).catch(err => console.error('Airtable update error:', err));
                 
@@ -904,11 +910,11 @@ export default async function handler(req, res) {
             // Build system message
             let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
             if (conversationContext) {
-              systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+              systemMessageContent += \n\nConversation history: ${conversationContext};
             }
-            systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+            systemMessageContent += \n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.;
             if (projectId && projectId !== 'default') {
-              systemMessageContent += ` You are assisting with the ${projectId} project.`;
+              systemMessageContent +=  You are assisting with the ${projectId} project.;
             }
             
             const openAIResponse = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
@@ -921,7 +927,7 @@ export default async function handler(req, res) {
               projectId, 
               chatUrl, 
               headersAirtable, 
-              `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
+              ${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}, 
               existingRecordId
             ).catch(err => console.error('Airtable update error:', err));
             
@@ -956,13 +962,13 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
     ];
     
     const totalLength = systemMessageContent.length + userMessage.length;
-    console.log(`Total message length: ${totalLength} characters`);
+    console.log(Total message length: ${totalLength} characters);
     
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
+        Authorization: Bearer ${openAIApiKey},
       },
       body: JSON.stringify({
         model: 'gpt-4o',
@@ -975,7 +981,7 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
     if (!response.ok) {
       const errorData = await response.text();
       console.error('OpenAI API error:', response.status, errorData);
-      throw new Error(`OpenAI API error: ${response.status}`);
+      throw new Error(OpenAI API error: ${response.status});
     }
     
     const data = await response.json();
@@ -1008,19 +1014,19 @@ async function updateAirtableConversation(sessionId, projectId, chatUrl, headers
     };
 
     if (existingRecordId) {
-      await fetch(`${chatUrl}/${existingRecordId}`, {
+      await fetch(${chatUrl}/${existingRecordId}, {
         method: 'PATCH',
         headers: headersAirtable,
         body: JSON.stringify({ fields: recordData.fields }),
       });
-      console.log(`Updated conversation for project: ${projectId}, session: ${sessionId}`);
+      console.log(Updated conversation for project: ${projectId}, session: ${sessionId});
     } else {
       await fetch(chatUrl, {
         method: 'POST',
         headers: headersAirtable,
         body: JSON.stringify(recordData),
       });
-      console.log(`Created new conversation for project: ${projectId}, session: ${sessionId}`);
+      console.log(Created new conversation for project: ${projectId}, session: ${sessionId});
     }
   } catch (error) {
     console.error('Error updating Airtable conversation:', error);
