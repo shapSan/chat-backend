@@ -103,8 +103,8 @@ function getCurrentTimeInPDT() {
 async function generateRunwayVideo({ 
   promptText, 
   promptImage, 
-  model = 'gen4_turbo',   // gen4_turbo is the latest and most powerful model
-  ratio = '16:9',         // Use ratio format like '16:9' instead of pixels
+  model = 'gen4_turbo',
+  ratio = '1280:720',     // Gen-4 Turbo: 1280:720, 1584:672, 1104:832, 720:1280, 832:1104, 960:960
   duration = 10           // seconds (5 or 10 are common options)
 }) {
   if (!runwayApiKey) {
@@ -120,23 +120,23 @@ async function generateRunwayVideo({
     duration
   });
   
-  // Try the image-to-video endpoint format
+  // Format request based on Runway API documentation
   const requestBody = {
-    prompt: promptText,
-    image_url: promptImage,
     model: model,
-    duration: duration,
-    aspect_ratio: ratio
+    promptText: promptText,
+    promptImage: promptImage,  // Can be URL or data URI
+    ratio: ratio,              // Must be resolution like "1280:720", not "16:9"
+    duration: duration
   };
   
   console.log('Runway API Request:', JSON.stringify(requestBody, null, 2));
   
-  const startResponse = await fetch('https://api.runwayml.com/v1/image-to-video', {
+  const startResponse = await fetch('https://api.runwayml.com/v1/image_to_video', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${runwayApiKey}`
-      // Remove X-Runway-Version header - it's causing the error
+      'Authorization': `Bearer ${runwayApiKey}`,
+      'X-Runway-Version': '2024-11-06'  // This IS required, just needs correct format
     },
     body: JSON.stringify(requestBody)
   });
@@ -162,8 +162,8 @@ async function generateRunwayVideo({
   while (attempts < maxAttempts) {
     const statusResponse = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}`, {
       headers: {
-        'Authorization': `Bearer ${runwayApiKey}`
-        // Remove X-Runway-Version header here too
+        'Authorization': `Bearer ${runwayApiKey}`,
+        'X-Runway-Version': '2024-11-06'  // Add it back here too
       }
     });
 
@@ -712,7 +712,7 @@ export default async function handler(req, res) {
             promptText,
             promptImage,
             model: model || 'gen4_turbo',
-            ratio: ratio || '16:9',
+            ratio: ratio || '1280:720',
             duration: duration || 10
           });
 
