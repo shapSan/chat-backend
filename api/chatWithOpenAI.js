@@ -94,7 +94,7 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-// Stage 1: Enhanced search function that returns structured data for Claude
+// Stage 1: Enhanced search function that returns structured data
 async function searchAirtable(query, projectId, searchType = 'auto', limit = 100) {
   console.log('🔍 Stage 1: Searching Airtable:', { query, projectId, searchType, limit });
   
@@ -181,31 +181,133 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
   }
 }
 
-// Stage 2: OpenAI narrowing function
-async function narrowWithOpenAI(brands, meetings, userMessage) {
+// Stage 2: Claude analyzes and selects best brands (MCP reasoning)
+async function analyzeWithClaude(brands, meetings, userMessage, knowledgeBaseInstructions) {
   try {
-    console.log(`🧮 Stage 2: Narrowing ${brands.length} brands with OpenAI...`);
+    console.log(`🧠 Stage 2: Claude analyzing ${brands.length} brands for best matches...`);
     
-    // Only process if we have brands
-    if (!brands || brands.length === 0) {
-      return { topBrands: [], scores: {} };
+    if (!anthropicApiKey || !brands || brands.length === 0) {
+      return { selectedBrands: brands.slice(0, 15), reasoning: [] };
     }
     
-    // Create a lightweight scoring prompt
-    const scoringPrompt = `
-Production details: ${userMessage}
+    // Build focused prompt for Claude to analyze
+    const systemPrompt = `You are an expert at matching brands to productions. Analyze the production and select the BEST brand matches based on creative fit, business opportunity, and strategic value.
 
-Score these brands 0-100 based on relevance to this specific production.
-Consider: genre fit, budget alignment, campaign focus match, and natural integration opportunities.
-Higher scores for brands that naturally fit the production's themes, setting, and audience.
+${knowledgeBaseInstructions || ''}
 
-Return ONLY a JSON object with brand names as keys and scores as values.
+TASK: Analyze these brands and select the top 10-15 that are the BEST matches for this production. Return a JSON object with:
+{
+  "selectedBrands": ["Brand Name 1", "Brand Name 2", ...],
+  "reasoning": {
+    "Brand Name 1": "Why this is a perfect match",
+    "Brand Name 2": "Why this fits the production"
+  }
+}`;
 
-Brands to evaluate:
-${brands.slice(0, 50).map(b => 
-  `${b.fields['Brand Name']}: ${b.fields['Category'] || 'General'}, Budget: ${b.fields['Budget'] || 'TBD'}, Focus: ${(b.fields['Campaign Summary'] || '').slice(0, 100)}`
-).join('\n')}`;
+    const brandData = brands.map(b => ({
+      name: b.fields['Brand Name'],
+      budget: b.fields['Budget'],
+      category: b.fields['Category'],
+      focus: b.fields['Campaign Summary'],
+      lastActivity: b.fields['Last Modified']
+    }));
+    
+    const meetingData = meetings.slice(0, 10).map(m => ({
+      title: m.fields['Title'],
+      date: m.fields['Date'],
+      summary: (m.fields['Summary'] || '').slice(0, 300)
+    }));
+    
+    const userPrompt = `
+Production: ${userMessage}
 
+Available Brands:
+${JSON.stringify(brandData, null, 2)}
+
+Recent Meeting Context:
+${JSON.stringify(meetingData, null, 2)}
+
+Select the best brand matches and explain why each is perfect for this production.`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-haiku-20240307', // Fast for analysis
+        max_tokens: 1000,
+        temperature: 0.3, // Lower temp for consistent analysis
+        system: systemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content: userPrompt
+          }
+        ]
+      })
+    });
+    
+    if (!response.ok) {
+      console.error('Claude analysis error:', response.status);
+      return { selectedBrands: brands.slice(0, 15), reasoning: [] };
+    }
+    
+    const data = await response.json();
+    const result = JSON.parse(data.content[0].text);
+    
+    // Get the selected brands with their full data
+    const selectedBrandNames = result.selectedBrands || [];
+    const selectedBrands = brands.filter(b => 
+      selectedBrandNames.includes(b.fields['Brand Name'])
+    );
+    
+    console.log(`✅ Stage 2 complete: Claude selected ${selectedBrands.length} best matches`);
+    console.log(`🎯 Top picks: ${selectedBrandNames.slice(0, 5).join(', ')}`);
+    
+    return { 
+      selectedBrands, 
+      reasoning: result.reasoning || {},
+      claudeThinking: selectedBrandNames
+    };
+    
+  } catch (error) {
+    console.error('❌ Error in Claude analysis:', error);
+    // On error, just return first 15 brands
+    return { selectedBrands: brands.slice(0, 15), reasoning: [] };
+  }
+}
+
+// Stage 3: GPT-4 formats the final output following the template
+async function formatWithGPT4(selectedBrands, claudeReasoning, userMessage, knowledgeBaseInstructions) {
+  try {
+    console.log(`📝 Stage 3: GPT-4 formatting ${selectedBrands.length} brands into final output...`);
+    
+    // Build the context for GPT-4
+    const brandContext = selectedBrands.map(b => ({
+      name: b.fields['Brand Name'],
+      budget: b.fields['Budget'],
+      category: b.fields['Category'],
+      campaignFocus: b.fields['Campaign Summary'],
+      lastModified: b.fields['Last Modified'],
+      whySelected: claudeReasoning[b.fields['Brand Name']] || 'Strong brand-production fit'
+    }));
+    
+    const systemPrompt = `${knowledgeBaseInstructions || 'You are a helpful assistant.'}
+
+IMPORTANT: Follow the exact format specified in the instructions above. Use the brand selections and reasoning provided to create the final output.`;
+    
+    const userPrompt = `Create brand integration suggestions for this production:
+
+${userMessage}
+
+Selected brands and why they were chosen:
+${JSON.stringify(brandContext, null, 2)}
+
+Format the response exactly as specified in your instructions, creating compelling integration ideas for each brand.`;
+    
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -213,62 +315,41 @@ ${brands.slice(0, 50).map(b =>
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo-1106', // Fast, cheap, good at JSON
+        model: 'gpt-4-turbo-preview', // Better at following formatting instructions
         messages: [
           {
             role: 'system',
-            content: 'You are a relevance scoring engine for brand-production matching. Analyze the production details and score each brand based on natural fit. Return only valid JSON with brand names as keys and numeric scores 0-100 as values.'
+            content: systemPrompt
           },
           {
             role: 'user',
-            content: scoringPrompt
+            content: userPrompt
           }
         ],
-        temperature: 0.3, // Low for consistency
-        max_tokens: 800,
-        response_format: { type: "json_object" }
+        temperature: 0.7,
+        max_tokens: 2000
       }),
     });
     
     if (!response.ok) {
-      console.error('OpenAI scoring error:', response.status);
-      // If OpenAI fails, just return all brands
-      return { topBrands: brands.slice(0, 15), scores: {} };
+      console.error('GPT-4 formatting error:', response.status);
+      throw new Error(`GPT-4 error: ${response.status}`);
     }
     
     const data = await response.json();
-    const scores = JSON.parse(data.choices[0].message.content);
+    console.log('✅ Stage 3 complete: GPT-4 formatted final response');
     
-    // Sort brands by score and take top 15
-    const topBrands = brands
-      .filter(b => b.fields['Brand Name']) // Ensure brand has a name
-      .map(b => ({
-        ...b,
-        relevanceScore: scores[b.fields['Brand Name']] || 0
-      }))
-      .sort((a, b) => b.relevanceScore - a.relevanceScore)
-      .slice(0, 15);
-    
-    console.log(`✅ Stage 2 complete: Narrowed to ${topBrands.length} top brands`);
-    console.log(`🏆 Top 3: ${topBrands.slice(0, 3).map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`).join(', ')}`);
-    
-    return { topBrands, scores };
+    return data.choices[0].message.content;
     
   } catch (error) {
-    console.error('❌ Error in OpenAI narrowing:', error);
-    // On error, just return first 15 brands
-    return { topBrands: brands.slice(0, 15), scores: {} };
+    console.error('❌ Error in GPT-4 formatting:', error);
+    throw error;
   }
 }
 
-// Stage 3: Claude-powered search handler for intelligent brand matching
+// Updated Claude search handler - now orchestrates the flipped pipeline
 async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
-  console.log('🤖 Starting 3-stage intelligent brand-project matching...');
-  
-  if (!anthropicApiKey) {
-    console.warn('No Anthropic API key found, falling back to OpenAI');
-    return null;
-  }
+  console.log('🤖 Starting intelligent brand-project matching (Claude → GPT-4)...');
   
   try {
     // Stage 1: Get data from Airtable
@@ -283,204 +364,85 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       return null;
     }
     
-    // Stage 2: Narrow with OpenAI
-    const { topBrands, scores } = await narrowWithOpenAI(
+    // Stage 2: Claude analyzes and selects best brands (MCP reasoning)
+    const { selectedBrands, reasoning, claudeThinking } = await analyzeWithClaude(
       brandData.records, 
       meetingData.records, 
-      userMessage
+      userMessage,
+      knowledgeBaseInstructions
     );
     
-    // Stage 3: Deep analysis with Claude
-    console.log('🧠 Stage 3: Claude deep analysis on top candidates...');
+    // Stage 3: GPT-4 formats the final output
+    console.log('📝 Stage 3: GPT-4 formatting final response...');
+    const finalResponse = await formatWithGPT4(
+      selectedBrands,
+      reasoning,
+      userMessage,
+      knowledgeBaseInstructions
+    );
     
-    // Start with the knowledge base instructions from Airtable - this is the primary prompt
-    let systemPrompt = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+    // Build MCP thinking based on Claude's actual analysis
+    const mcpThinking = [];
+    mcpThinking.push(`Analyzed ${brandData.total} brands → Selected ${selectedBrands.length} best matches`);
     
-    // Add the narrowed data context
-    systemPrompt += "\n\n**PRIORITY CONTEXT FROM YOUR BUSINESS DATA:**\n\n";
-    
-    if (topBrands && topBrands.length > 0) {
-      systemPrompt += "**TOP RELEVANT BRANDS (pre-scored by relevance):**\n```json\n";
-      const brandInfo = topBrands.map(b => ({
-        brand: b.fields['Brand Name'] || 'Unknown',
-        relevance_score: b.relevanceScore || 0,
-        budget: b.fields['Budget'] || 0,
-        category: b.fields['Category'] || 'Uncategorized',
-        campaign_focus: b.fields['Campaign Summary'] || 'No campaign info',
-        last_activity: b.fields['Last Modified'] || 'Unknown'
-      }));
-      
-      systemPrompt += JSON.stringify(brandInfo, null, 2);
-      systemPrompt += "\n```\n\n";
-      
-      console.log(`📊 Sending ${brandInfo.length} top brands to Claude for deep analysis`);
+    if (claudeThinking && claudeThinking.length > 0) {
+      mcpThinking.push(`Claude's top picks: ${claudeThinking.slice(0, 5).join(', ')}`);
     }
     
-    if (meetingData && meetingData.records && meetingData.records.length > 0) {
-      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n```json\n";
-      const meetingInfo = meetingData.records
-        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10) // Only meaningful meetings
-        .slice(0, 10) // Reduce from 20 to 10
-        .map(r => ({
-          meeting: r.fields['Title'] || 'Untitled',
-          date: r.fields['Date'] || 'No date',
-          key_points: (r.fields['Summary'] || '').slice(0, 200) // Limit summary length
-        }));
-      
-      systemPrompt += JSON.stringify(meetingInfo, null, 2);
-      systemPrompt += "\n```\n\n";
-      
-      console.log(`📅 Sending ${meetingInfo.length} relevant meetings to Claude`);
-    }
+    // Add insights about the selected brands
+    const hotBrands = [];
+    const highValueBrands = [];
     
-    console.log('📤 Calling Claude API with focused data...');
-    
-    // Call Claude API
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': anthropicApiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-3-haiku-20240307', // Faster, cheaper, less likely to timeout
-        max_tokens: 1500, // Reduced from 2000
-        temperature: 0.7,
-        system: systemPrompt,
-        messages: [
-          {
-            role: 'user',
-            content: userMessage
-          }
-        ]
-      })
+    selectedBrands.forEach(record => {
+      const fields = record.fields;
+      if (!fields['Brand Name']) return;
+      
+      const brandName = fields['Brand Name'];
+      
+      // Track hot brands
+      if (fields['Last Modified']) {
+        const daysSince = Math.floor((Date.now() - new Date(fields['Last Modified'])) / (1000 * 60 * 60 * 24));
+        if (daysSince < 7) {
+          hotBrands.push(brandName);
+        }
+      }
+      
+      // Track high-value
+      if (fields['Budget'] >= 5000000) {
+        highValueBrands.push(brandName);
+      }
     });
     
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error('❌ Claude API error:', response.status, errorData);
-      
-      if (response.status === 429) {
-        console.warn('Claude API rate limited, falling back to OpenAI');
-        return null;
-      }
-      
-      throw new Error(`Claude API error: ${response.status}`);
+    if (hotBrands.length > 0) {
+      mcpThinking.push(`HOT brands (active this week): ${hotBrands.join(', ')}`);
+    }
+    if (highValueBrands.length > 0) {
+      mcpThinking.push(`High-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
     }
     
-    const data = await response.json();
-    console.log('✅ Claude API response received');
+    // Check for brand mentions in meetings
+    const brandsInMeetings = new Set();
+    meetingData.records.forEach(record => {
+      const summary = (record.fields['Summary'] || '').toLowerCase();
+      selectedBrands.forEach(brand => {
+        if (brand.fields['Brand Name'] && summary.includes(brand.fields['Brand Name'].toLowerCase())) {
+          brandsInMeetings.add(brand.fields['Brand Name']);
+        }
+      });
+    });
     
-    if (data.content && data.content.length > 0) {
-      const reply = data.content[0].text;
-      
-      // Extract meaningful thinking steps based on actual data
-      const mcpThinking = [];
-      
-      // Add pipeline insights FIRST
-      mcpThinking.push(`Filtered ${brandData.total} brands → ${topBrands.length} top candidates`);
-      
-      // Show actual top brands from scoring
-      if (topBrands.length > 0 && scores) {
-        const topThree = topBrands
-          .slice(0, 3)
-          .map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`)
-          .filter(Boolean);
-        mcpThinking.push(`Highest relevance: ${topThree.join(', ')}`);
-      }
-      
-      // Analyze actual brand data from what Claude is seeing
-      if (topBrands && topBrands.length > 0) {
-        const hotBrands = [];
-        const highValueBrands = [];
-        const activeCategories = new Set();
-        
-        topBrands.forEach(record => {
-          const fields = record.fields;
-          if (!fields['Brand Name']) return;
-          
-          const brandName = fields['Brand Name'];
-          
-          // Track hot brands (active in last 7 days)
-          if (fields['Last Modified']) {
-            const daysSince = Math.floor((Date.now() - new Date(fields['Last Modified'])) / (1000 * 60 * 60 * 24));
-            if (daysSince < 7) {
-              hotBrands.push(brandName);
-            }
-          }
-          
-          // Track high-value opportunities
-          if (fields['Budget'] >= 5000000) {
-            highValueBrands.push(brandName);
-          }
-          
-          // Track categories
-          if (fields['Category']) {
-            if (Array.isArray(fields['Category'])) {
-              fields['Category'].forEach(cat => activeCategories.add(cat));
-            } else {
-              activeCategories.add(fields['Category']);
-            }
-          }
-        });
-        
-        // Add actual insights to thinking based on the narrowed data
-        if (hotBrands.length > 0) {
-          mcpThinking.push(`HOT brands (active this week): ${hotBrands.join(', ')}`);
-        }
-        if (highValueBrands.length > 0) {
-          mcpThinking.push(`High-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
-        }
-        if (activeCategories.size > 0) {
-          mcpThinking.push(`Categories in play: ${Array.from(activeCategories).slice(0, 5).join(', ')}`);
-        }
-      }
-      
-      // Analyze meeting insights for the brands Claude is actually analyzing
-      if (meetingData && meetingData.records && topBrands) {
-        const brandsInMeetings = new Set();
-        const opportunities = [];
-        
-        meetingData.records.forEach(record => {
-          const summary = record.fields['Summary'] || '';
-          const title = record.fields['Title'] || '';
-          
-          // Only look for mentions of the top brands that Claude is analyzing
-          topBrands.forEach(brandRecord => {
-            const brandName = brandRecord.fields['Brand Name'];
-            if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
-              brandsInMeetings.add(brandName);
-            }
-          });
-          
-          // Find opportunities
-          if (summary.toLowerCase().includes('pulled out') || 
-              summary.toLowerCase().includes('budget available') ||
-              summary.toLowerCase().includes('looking for')) {
-            opportunities.push(title);
-          }
-        });
-        
-        if (brandsInMeetings.size > 0) {
-          mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
-        }
-        if (opportunities.length > 0) {
-          mcpThinking.push(`Meeting opportunities: ${opportunities.slice(0, 3).join(', ')}`);
-        }
-      }
-      
-      return {
-        reply,
-        mcpThinking,
-        usedMCP: true
-      };
+    if (brandsInMeetings.size > 0) {
+      mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
     }
     
-    return null;
+    return {
+      reply: finalResponse,
+      mcpThinking,
+      usedMCP: true
+    };
     
   } catch (error) {
-    console.error('❌ Error in Claude search:', error);
+    console.error('❌ Error in brand matching pipeline:', error);
     console.error('Error details:', error.stack);
     return null;
   }
@@ -659,7 +621,12 @@ export default async function handler(req, res) {
         userMessage.toLowerCase().includes('for this project') ||
         userMessage.toLowerCase().includes('for this production') ||
         userMessage.toLowerCase().includes('upcoming') ||
-        userMessage.toLowerCase().includes('synopsis')
+        userMessage.toLowerCase().includes('synopsis') ||
+        // Production indicators
+        userMessage.toLowerCase().includes('distributor:') ||
+        userMessage.toLowerCase().includes('cast:') ||
+        userMessage.toLowerCase().includes('starting fee:') ||
+        userMessage.toLowerCase().includes('shoot date')
       );
       
       console.log('🔍 Brand matching detection:', { isBrandMatchingQuery, userMessage: userMessage?.slice(0, 50) });
