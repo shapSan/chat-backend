@@ -135,8 +135,8 @@ async function generateRunwayVideo({
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${runwayApiKey}`,
-      'X-Runway-Version': '2024-11-06'
+      'Authorization': `Bearer ${runwayApiKey}`
+      // Remove X-Runway-Version header - it's causing the error
     },
     body: JSON.stringify(requestBody)
   });
@@ -162,8 +162,8 @@ async function generateRunwayVideo({
   while (attempts < maxAttempts) {
     const statusResponse = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}`, {
       headers: {
-        'Authorization': `Bearer ${runwayApiKey}`,
-        'X-Runway-Version': '2024-11-06'
+        'Authorization': `Bearer ${runwayApiKey}`
+        // Remove X-Runway-Version header here too
       }
     });
 
