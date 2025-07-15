@@ -115,38 +115,57 @@ async function generateRunwayVideo({
   console.log('🎬 Starting Runway video generation (text-only)...');
 
   try {
-    // Initialize Runway client
-    const client = new RunwayML({
-      apiKey: runwayApiKey
+    // Make direct API call since imageToVideo requires an image
+    const response = await fetch('https://api.runwayai.com/v1/generations', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${runwayApiKey}`,
+        'Content-Type': 'application/json',
+        'X-Runway-Version': '2024-11-06'
+      },
+      body: JSON.stringify({
+        model: model,
+        text_prompt: promptText,
+        duration: duration,
+        aspect_ratio: ratio
+      })
     });
 
-    // Create the video with text prompt only
-    console.log('🎥 Creating video from text prompt...');
-    const videoTask = await client.imageToVideo.create({
-      model: model,
-      promptText: promptText,
-      ratio: ratio,
-      duration: duration
-      // NO promptImage field
-    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('Runway API error:', errorData);
+      throw new Error(errorData.error || `API error: ${response.status}`);
+    }
 
+    const videoTask = await response.json();
     console.log('✅ Video task created:', videoTask.id);
 
     // Poll for completion
     console.log('⏳ Waiting for video generation...');
-    let task = videoTask;
     let attempts = 0;
     const maxAttempts = 60; // 5 minutes max
 
     while (attempts < maxAttempts) {
-      task = await client.tasks.retrieve(task.id);
+      const statusResponse = await fetch(`https://api.runwayai.com/v1/generations/${videoTask.id}`, {
+        headers: {
+          'Authorization': `Bearer ${runwayApiKey}`,
+          'X-Runway-Version': '2024-11-06'
+        }
+      });
+
+      if (!statusResponse.ok) {
+        throw new Error(`Failed to check status: ${statusResponse.status}`);
+      }
+
+      const task = await statusResponse.json();
       console.log(`🔄 Status: ${task.status} (${attempts + 1}/60)`);
 
-      if (task.status === 'SUCCEEDED') {
+      if (task.status === 'SUCCEEDED' || task.status === 'COMPLETED') {
         console.log('✅ Video ready!');
         
-        const videoUrl = task.output?.[0];
+        const videoUrl = task.output || task.artifacts?.[0]?.url || task.url;
         if (!videoUrl) {
+          console.error('Task response:', JSON.stringify(task, null, 2));
           throw new Error('No video URL in output');
         }
 
@@ -158,7 +177,7 @@ async function generateRunwayVideo({
 
       if (task.status === 'FAILED') {
         console.error('Task failed:', task);
-        throw new Error(`Generation failed: ${task.failure || task.error || 'Unknown error'}`);
+        throw new Error(`Generation failed: ${task.failure_reason || task.error || 'Unknown error'}`);
       }
 
       await new Promise(resolve => setTimeout(resolve, 5000));
