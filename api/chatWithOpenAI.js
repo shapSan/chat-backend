@@ -98,13 +98,13 @@ function getCurrentTimeInPDT() {
 
 /**
  * Generate a video from text using Runway AI's SDK
- * First generates an image from text, then creates a video from that image
+ * Uses text prompt directly with image-to-video model
  * @param {Object} params - Video generation parameters
  * @returns {Promise<{url: string, taskId: string}>} - Video URL and task ID
  */
 async function generateRunwayVideo({ 
   promptText, 
-  promptImage, // Optional - if not provided, we'll generate one
+  promptImage, 
   model = 'gen4_turbo',
   ratio = '1280:720',
   duration = 5
@@ -121,111 +121,81 @@ async function generateRunwayVideo({
       apiKey: runwayApiKey
     });
 
-    let imageUrl = promptImage;
+    // For now, let's use a default cinematic image if none provided
+    // This is a temporary solution until we can properly generate images
+    let imageToUse = promptImage;
     
-    // If no image provided, generate one from the text first
-    if (!imageUrl || imageUrl.includes('dummyimage.com')) {
-      console.log('🖼️ No image provided, generating image from text first...');
-      
-      try {
-        // Create text-to-image task
-        const imageTask = await client.textToImage.create({
-          model: 'gen4_image', // Runway's text-to-image model
-          prompt: promptText,
-          ratio: ratio,
-          style: 'cinematic' // You can adjust this
-        });
-
-        console.log('⏳ Waiting for image generation...');
-        
-        // Wait for image to be ready
-        let imageGenTask = imageTask;
-        let imageAttempts = 0;
-        const maxImageAttempts = 30; // 2.5 minutes max
-
-        while (imageAttempts < maxImageAttempts) {
-          imageGenTask = await client.tasks.retrieve(imageGenTask.id);
-          
-          if (imageGenTask.status === 'SUCCEEDED') {
-            imageUrl = imageGenTask.output?.[0];
-            console.log('✅ Image generated successfully');
-            break;
-          }
-          
-          if (imageGenTask.status === 'FAILED') {
-            throw new Error('Image generation failed');
-          }
-          
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          imageAttempts++;
-        }
-        
-        if (!imageUrl) {
-          throw new Error('Image generation timed out or failed');
-        }
-        
-      } catch (imageError) {
-        console.error('Failed to generate image:', imageError);
-        throw new Error(`Failed to generate image from text: ${imageError.message}`);
-      }
+    if (!imageToUse || imageToUse.includes('dummyimage.com')) {
+      console.log('📸 Using default cinematic image for video generation...');
+      // Use a high-quality cinematic image as base
+      imageToUse = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1280&h=720&fit=crop&q=80';
     }
 
-    // Now create the video from the image
-    console.log('🎥 Creating video from image...');
+    // Create the video with the text prompt guiding the animation
+    console.log('🎥 Creating video...');
     const videoTask = await client.imageToVideo.create({
       model: model,
-      promptImage: imageUrl,
-      promptText: promptText,
+      promptImage: imageToUse,
+      promptText: promptText, // This will guide how the video animates
       ratio: ratio,
       duration: duration
     });
 
     console.log('✅ Video task created:', videoTask.id);
 
-    // Poll for video completion
-    console.log('⏳ Waiting for video generation to complete...');
+    // Poll for completion
+    console.log('⏳ Waiting for video generation...');
     let task = videoTask;
     let attempts = 0;
     const maxAttempts = 60; // 5 minutes max
 
     while (attempts < maxAttempts) {
       task = await client.tasks.retrieve(task.id);
-      console.log(`🔄 Video status: ${task.status} (attempt ${attempts + 1})`);
+      console.log(`🔄 Status: ${task.status} (${attempts + 1}/60)`);
 
       if (task.status === 'SUCCEEDED') {
-        console.log('✅ Video generation complete!');
+        console.log('✅ Video ready!');
         
         const videoUrl = task.output?.[0];
         if (!videoUrl) {
-          throw new Error('No video URL in task output');
+          throw new Error('No video URL in output');
         }
 
         return {
           url: videoUrl,
-          taskId: task.id,
-          generatedImage: imageUrl // Also return the generated image
+          taskId: task.id
         };
       }
 
       if (task.status === 'FAILED') {
-        throw new Error(`Video generation failed: ${task.failure || 'Unknown error'}`);
+        console.error('Task failed:', task);
+        throw new Error(`Generation failed: ${task.failure || task.error || 'Unknown error'}`);
       }
 
       await new Promise(resolve => setTimeout(resolve, 5000));
       attempts++;
     }
 
-    throw new Error('Video generation timed out after 5 minutes');
+    throw new Error('Video generation timed out');
 
   } catch (error) {
-    console.error('Runway SDK Error:', error);
+    console.error('Runway Error Details:', {
+      message: error.message,
+      status: error.status,
+      error: error.error
+    });
     
-    if (error.message?.includes('401') || error.message?.includes('Unauthorized')) {
-      throw new Error('Invalid Runway API key. Please check your RUNWAY_API_KEY environment variable.');
+    // Better error messages
+    if (error.message?.includes('401')) {
+      throw new Error('Invalid API key. Check RUNWAY_API_KEY in Vercel settings.');
     }
     
     if (error.message?.includes('429')) {
-      throw new Error('Runway API rate limit exceeded. Please try again later.');
+      throw new Error('Rate limit exceeded. Try again later.');
+    }
+    
+    if (error.message?.includes('insufficient_credits')) {
+      throw new Error('Insufficient Runway credits. Please add credits to your account.');
     }
     
     throw error;
@@ -769,8 +739,7 @@ export default async function handler(req, res) {
             success: true,
             videoUrl: url,
             taskId,
-            model: model || 'gen4_turbo',
-            generatedImage: result.generatedImage // Include the generated image URL
+            model: model || 'gen4_turbo'
           });
 
         } catch (error) {
