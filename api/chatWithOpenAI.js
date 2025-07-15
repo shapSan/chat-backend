@@ -120,18 +120,58 @@ async function generateRunwayVideo({
       apiKey: runwayApiKey
     });
 
-    // Create video from text using the SDK
-    console.log('🎥 Creating video from text prompt...');
+    // Log available methods to debug
+    console.log('Available client methods:', Object.keys(client));
+    if (client.v1) {
+      console.log('Available v1 methods:', Object.keys(client.v1));
+    }
+
+    // Try using the generate method if it exists
+    let videoTask;
     
-    // The SDK method for text-to-video is likely:
-    const videoTask = await client.v1.runModel({
-      model: model,
-      input: {
+    if (client.generate) {
+      videoTask = await client.generate({
+        model: model,
+        prompt: promptText,
+        options: {
+          duration: duration,
+          aspect_ratio: ratio
+        }
+      });
+    } else if (client.generations && client.generations.create) {
+      videoTask = await client.generations.create({
+        model: model,
         text_prompt: promptText,
         duration: duration,
         aspect_ratio: ratio
+      });
+    } else {
+      // Fallback to direct API call
+      console.log('SDK methods not found, using direct API call');
+      
+      const response = await fetch('https://api.runwayml.com/v1/generations', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${runwayApiKey}`,
+          'Content-Type': 'application/json',
+          'X-Runway-Version': '2024-05-16'
+        },
+        body: JSON.stringify({
+          model_name: model,
+          text_prompt: promptText,
+          duration: duration,
+          aspect_ratio: ratio
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Runway API error:', errorData);
+        throw new Error(errorData.detail || errorData.message || `API error: ${response.status}`);
       }
-    });
+
+      videoTask = await response.json();
+    }
 
     console.log('✅ Video task created:', videoTask.id);
 
@@ -142,14 +182,32 @@ async function generateRunwayVideo({
     const maxAttempts = 60; // 5 minutes max
 
     while (attempts < maxAttempts) {
-      task = await client.tasks.retrieve(task.id);
+      // Try SDK method first, then fallback to API
+      if (client.tasks && client.tasks.retrieve) {
+        task = await client.tasks.retrieve(task.id);
+      } else {
+        const statusResponse = await fetch(`https://api.runwayml.com/v1/generations/${task.id}`, {
+          headers: {
+            'Authorization': `Bearer ${runwayApiKey}`,
+            'X-Runway-Version': '2024-05-16'
+          }
+        });
+
+        if (!statusResponse.ok) {
+          throw new Error(`Failed to check status: ${statusResponse.status}`);
+        }
+
+        task = await statusResponse.json();
+      }
+
       console.log(`🔄 Status: ${task.status} (${attempts + 1}/60)`);
 
-      if (task.status === 'SUCCEEDED') {
+      if (task.status === 'SUCCEEDED' || task.status === 'COMPLETE') {
         console.log('✅ Video ready!');
         
-        const videoUrl = task.output?.[0];
+        const videoUrl = task.output?.[0] || task.output_url || task.url;
         if (!videoUrl) {
+          console.error('Task response:', JSON.stringify(task, null, 2));
           throw new Error('No video URL in output');
         }
 
