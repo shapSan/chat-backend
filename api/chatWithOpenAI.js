@@ -4,6 +4,7 @@ import WebSocket from 'ws';
 
 dotenv.config();
 
+
 export const config = {
   api: {
     bodyParser: {
@@ -17,6 +18,7 @@ const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 const hubspotAccessToken = process.env.HUBSPOT_ACCESS_TOKEN; // Add this to your Vercel env vars
+const runwayApiKey = process.env.RUNWAY_API_KEY;
 
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
@@ -599,6 +601,46 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
   // This now calls the enhanced version
   return handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructions, projectId, sessionId);
 }
+/**
+ * Kick off an image-to-video job on Runway and wait until it’s done.
+ * Returns { url, taskId } on success.
+ */
+async function generateRunwayVideo({
+  promptText,
+  promptImage,
+  model = 'gen4_turbo',      // or 'gen3_alpha_turbo'
+  ratio = '1280:720',
+  duration = 5               // seconds
+}) {
+  if (!runwayApiKey) throw new Error('RUNWAY_API_KEY not set');
+
+  // 1️⃣  Start the job
+  const startRes = await fetch('https://api.runwayml.com/v1/image_to_video', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${runwayApiKey}`,
+      'X-Runway-Version': '2024-11-06' // current stable version:contentReference[oaicite:0]{index=0}
+    },
+    body: JSON.stringify({ promptText, promptImage, model, ratio, duration })
+  });
+  if (!startRes.ok) throw new Error(`Runway start failed ${startRes.status}`);
+  const { id: taskId } = await startRes.json();
+
+  // 2️⃣  Poll until finished
+  const poll = async () => {
+    const t = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}`, {
+      headers: { Authorization: `Bearer ${runwayApiKey}` }
+    }).then(r => r.json());
+    if (t.status === 'succeeded') return t.output?.url;
+    if (t.status === 'failed' || t.status === 'canceled')
+      throw new Error('Runway task failed');
+    await new Promise(r => setTimeout(r, 2000)); // 2 s back-off
+    return poll();
+  };
+  const url = await poll();
+  return { url, taskId };
+}
 
 export default async function handler(req, res) {
   // Set CORS headers early
@@ -683,6 +725,38 @@ export default async function handler(req, res) {
                 details: error.message 
             });
         }
+        // ───────────────────────────────────────────────
+// B) VIDEO – Runway image-to-video
+if (req.body.generateVideo === true) {
+  const { promptText, promptImage } = req.body;
+
+  if (!promptText || !promptImage) {
+    return res.status(400).json({
+      error: 'promptText and promptImage are required'
+    });
+  }
+
+  try {
+    // helper we added earlier
+    const { url, taskId } = await generateRunwayVideo({
+      promptText,
+      promptImage
+    });
+
+    return res.status(200).json({
+      success: true,
+      videoUrl: url,
+      runwayTaskId: taskId
+    });
+  } catch (e) {
+    console.error('Runway error:', e);
+    return res.status(500).json({
+      error: 'Runway video failed',
+      details: e.message
+    });
+  }
+}
+
       }
 
       // Handle regular chat messages
