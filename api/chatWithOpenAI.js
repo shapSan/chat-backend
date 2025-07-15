@@ -1,40 +1,4 @@
-// Dynamic helper functions
-function getPipelineName(pipelineId) {
-  const pipelineMap = {
-    '115484704': 'Partnership Deals',
-    '108874645': 'New Business',
-    '114737106': 'Influencer Campaigns',
-    '115618560': 'Playbook Pipeline',
-    '72395917': 'Blog & Podcast',
-    // Add more as discovered
-  };
-  return pipelineMap[pipelineId] || `Pipeline ${pipelineId}`;
-}
-
-function getStageInfo(stageId, pipelineId) {
-  // Dynamic stage mapping based on pipeline
-  const stageData = {
-    // Partnership stages
-    '227286057': { label: 'New Opportunity', score: 5, isAdvanced: false },
-    '205074829': { label: 'Brief Created', score: 10, isAdvanced: false },
-    '204588590': { label: 'Quote Discussion', score: 20, isAdvanced: true },
-    '205087650': { label: 'Fee Approved', score: 30, isAdvanced: true },
-    '204497432': { label: 'Partnership Active', score: 35, isAdvanced: true },
-    '205074833': { label: 'Completed', score: 40, isAdvanced: true },
-    '205074834': { label: 'Failed', score: 0, isAdvanced: false },
-    // New Business stages
-    '196158031': { label: 'Closed Won', score: 40, isAdvanced: true },
-    '196158032': { label: 'Closed Lost', score: 0, isAdvanced: false },
-    '196158029': { label: 'Contract Sent', score: 25, isAdvanced: true },
-    '196158030': { label: 'Contract Signed', score: 35, isAdvanced: true },
-    // Playbook stages
-    '205070213': { label: 'Playbook Complete', score: 30, isAdvanced: true },
-    '204588588': { label: 'Strategy Presented', score: 25, isAdvanced: true },
-    // Add more stages as needed
-  };
-  
-  return stageData[stageId] || { label: 'In Progress', score: 5, isAdvanced: false };
-}import dotenv from 'dotenv';
+import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
 
@@ -53,6 +17,48 @@ const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 const hubspotAccessToken = process.env.HUBSPOT_ACCESS_TOKEN; // Add this to your Vercel env vars
+
+// Your specific pipeline mapping
+const YOUR_PIPELINES = {
+  // Partnership Deals Pipeline
+  'partnerships': {
+    id: '115484704',
+    name: '[IV] Partnership Deals [Fee & Trade]',
+    stages: {
+      'new_opportunity': '227286057',
+      'project_brief_created': '205074829',
+      'quote_discussion': '204588590',
+      'fee_approved': '205087650',
+      'partnership_activated': '204497432',
+      'completed': '205074833',
+      'failed': '205074834'
+    }
+  },
+  // New Business Pipeline
+  'new_business': {
+    id: '108874645',
+    name: '[IV] New Business & Contract Renewals Pipeline',
+    stages: {
+      'new_inquiry': '196170391',
+      'meeting_scheduled': '196170394',
+      'proposal_meeting': '196170395',
+      'contract_sent': '196158029',
+      'closed_won': '196158031',
+      'closed_lost': '196158032'
+    }
+  },
+  // Influencer Campaigns
+  'influencer': {
+    id: '114737106',
+    name: '[IV] Influencer Campaigns Pipeline',
+    stages: {
+      'new_campaign': '938448781',
+      'planning': '938448782',
+      'content_live': '938448787',
+      'closed_won': '938463385'
+    }
+  }
+};
 
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
@@ -129,6 +135,44 @@ function getCurrentTimeInPDT() {
     second: 'numeric',
     timeZoneName: 'short',
   }).format(new Date());
+}
+
+// Dynamic helper functions
+function getPipelineName(pipelineId) {
+  const pipelineMap = {
+    '115484704': 'Partnership Deals',
+    '108874645': 'New Business',
+    '114737106': 'Influencer Campaigns',
+    '115618560': 'Playbook Pipeline',
+    '72395917': 'Blog & Podcast',
+    // Add more as discovered
+  };
+  return pipelineMap[pipelineId] || `Pipeline ${pipelineId}`;
+}
+
+function getStageInfo(stageId, pipelineId) {
+  // Dynamic stage mapping based on pipeline
+  const stageData = {
+    // Partnership stages
+    '227286057': { label: 'New Opportunity', score: 5, isAdvanced: false },
+    '205074829': { label: 'Brief Created', score: 10, isAdvanced: false },
+    '204588590': { label: 'Quote Discussion', score: 20, isAdvanced: true },
+    '205087650': { label: 'Fee Approved', score: 30, isAdvanced: true },
+    '204497432': { label: 'Partnership Active', score: 35, isAdvanced: true },
+    '205074833': { label: 'Completed', score: 40, isAdvanced: true },
+    '205074834': { label: 'Failed', score: 0, isAdvanced: false },
+    // New Business stages
+    '196158031': { label: 'Closed Won', score: 40, isAdvanced: true },
+    '196158032': { label: 'Closed Lost', score: 0, isAdvanced: false },
+    '196158029': { label: 'Contract Sent', score: 25, isAdvanced: true },
+    '196158030': { label: 'Contract Signed', score: 35, isAdvanced: true },
+    // Playbook stages
+    '205070213': { label: 'Playbook Complete', score: 30, isAdvanced: true },
+    '204588588': { label: 'Strategy Presented', score: 25, isAdvanced: true },
+    // Add more stages as needed
+  };
+  
+  return stageData[stageId] || { label: 'In Progress', score: 5, isAdvanced: false };
 }
 
 // HubSpot API helper function
