@@ -104,8 +104,8 @@ function getCurrentTimeInPDT() {
  */
 async function generateRunwayVideo({ 
   promptText, 
-  model = 'gen3_alpha',  // Use gen3_alpha for text-only
-  ratio = '1280:768',
+  model = 'gen3a_turbo',  // Use gen3a_turbo for text generation
+  ratio = '16:9',
   duration = 5
 }) {
   if (!runwayApiKey) {
@@ -115,68 +115,53 @@ async function generateRunwayVideo({
   console.log('🎬 Starting Runway video generation (text-only)...');
 
   try {
-    // Direct API call to Runway's text-to-video endpoint
-    const response = await fetch('https://api.runwayml.com/v1/text2video', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${runwayApiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        text_prompt: promptText,
-        model: model,
-        duration: duration,
-        resolution: ratio
-      })
+    // Initialize Runway client
+    const client = new RunwayML({
+      apiKey: runwayApiKey
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('Runway API error:', errorData);
-      throw new Error(errorData.detail || errorData.error || `API error: ${response.status}`);
-    }
+    // Create video from text using the SDK
+    console.log('🎥 Creating video from text prompt...');
+    
+    // The SDK method for text-to-video is likely:
+    const videoTask = await client.v1.runModel({
+      model: model,
+      input: {
+        text_prompt: promptText,
+        duration: duration,
+        aspect_ratio: ratio
+      }
+    });
 
-    const result = await response.json();
-    const taskId = result.task_id || result.id;
-    console.log('✅ Video task created:', taskId);
+    console.log('✅ Video task created:', videoTask.id);
 
     // Poll for completion
     console.log('⏳ Waiting for video generation...');
+    let task = videoTask;
     let attempts = 0;
     const maxAttempts = 60; // 5 minutes max
 
     while (attempts < maxAttempts) {
-      const statusResponse = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}`, {
-        headers: {
-          'Authorization': `Bearer ${runwayApiKey}`
-        }
-      });
-
-      if (!statusResponse.ok) {
-        throw new Error(`Failed to check status: ${statusResponse.status}`);
-      }
-
-      const task = await statusResponse.json();
+      task = await client.tasks.retrieve(task.id);
       console.log(`🔄 Status: ${task.status} (${attempts + 1}/60)`);
 
-      if (task.status === 'SUCCEEDED' || task.status === 'completed') {
+      if (task.status === 'SUCCEEDED') {
         console.log('✅ Video ready!');
         
-        const videoUrl = task.output?.[0] || task.output_url || task.result?.url;
+        const videoUrl = task.output?.[0];
         if (!videoUrl) {
-          console.error('Task response:', JSON.stringify(task, null, 2));
           throw new Error('No video URL in output');
         }
 
         return {
           url: videoUrl,
-          taskId: taskId
+          taskId: task.id
         };
       }
 
-      if (task.status === 'FAILED' || task.status === 'failed') {
+      if (task.status === 'FAILED') {
         console.error('Task failed:', task);
-        throw new Error(`Generation failed: ${task.error || 'Unknown error'}`);
+        throw new Error(`Generation failed: ${task.failure || task.error || 'Unknown error'}`);
       }
 
       await new Promise(resolve => setTimeout(resolve, 5000));
@@ -725,8 +710,8 @@ export default async function handler(req, res) {
           // Generate video with text only
           const { url, taskId } = await generateRunwayVideo({
             promptText,
-            model: model || 'gen3_alpha', // NOT gen3_alpha_turbo
-            ratio: ratio || '1280:768',
+            model: model || 'gen3a_turbo',
+            ratio: ratio || '16:9',
             duration: duration || 5
           });
 
@@ -736,7 +721,7 @@ export default async function handler(req, res) {
             success: true,
             videoUrl: url,
             taskId,
-            model: model || 'gen3_alpha'
+            model: model || 'gen3a_turbo'
           });
 
         } catch (error) {
