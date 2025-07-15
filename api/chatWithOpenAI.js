@@ -15,7 +15,8 @@ export const config = {
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
-const anthropicApiKey = process.env.ANTHROPIC_API_KEY; // Add this to your Vercel env vars
+const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+const hubspotAccessToken = process.env.HUBSPOT_ACCESS_TOKEN; // Add this to your Vercel env vars
 
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
@@ -92,6 +93,95 @@ function getCurrentTimeInPDT() {
     second: 'numeric',
     timeZoneName: 'short',
   }).format(new Date());
+}
+
+// HubSpot API helper function
+async function callHubSpotAPI(endpoint, method = 'GET', body = null) {
+  if (!hubspotAccessToken) {
+    console.warn('No HubSpot access token configured');
+    return null;
+  }
+
+  try {
+    const url = `https://api.hubapi.com${endpoint}`;
+    const options = {
+      method,
+      headers: {
+        'Authorization': `Bearer ${hubspotAccessToken}`,
+        'Content-Type': 'application/json'
+      }
+    };
+
+    if (body && method !== 'GET') {
+      options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, options);
+    
+    if (!response.ok) {
+      console.error(`HubSpot API error: ${response.status}`);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('HubSpot API call failed:', error);
+    return null;
+  }
+}
+
+// HubSpot search function to match your existing searchAirtable pattern
+async function searchHubSpot(query, searchType = 'deals', limit = 20) {
+  console.log('🔍 Searching HubSpot:', { query, searchType, limit });
+  
+  try {
+    let endpoint = '';
+    let searchBody = {
+      limit,
+      properties: []
+    };
+
+    switch (searchType) {
+      case 'deals':
+        endpoint = '/crm/v3/objects/deals/search';
+        searchBody.properties = ['dealname', 'amount', 'dealstage', 'closedate', 'pipeline'];
+        searchBody.sorts = [{ propertyName: 'amount', direction: 'DESCENDING' }];
+        break;
+      
+      case 'contacts':
+        endpoint = '/crm/v3/objects/contacts/search';
+        searchBody.properties = ['firstname', 'lastname', 'email', 'company', 'phone'];
+        break;
+      
+      case 'companies':
+        endpoint = '/crm/v3/objects/companies/search';
+        searchBody.properties = ['name', 'industry', 'city', 'state', 'annualrevenue'];
+        break;
+    }
+
+    // Add query if provided
+    if (query) {
+      searchBody.query = query;
+    }
+
+    const data = await callHubSpotAPI(endpoint, 'POST', searchBody);
+    
+    if (!data || !data.results) {
+      return { error: 'No data returned', records: [], total: 0 };
+    }
+
+    console.log(`✅ Got ${data.results.length} ${searchType} from HubSpot`);
+    
+    return {
+      searchType,
+      records: data.results,
+      total: data.total
+    };
+    
+  } catch (error) {
+    console.error('❌ Error searching HubSpot:', error);
+    return { error: error.message, records: [], total: 0 };
+  }
 }
 
 // Stage 1: Enhanced search function that returns structured data for Claude
@@ -261,9 +351,9 @@ ${brands.slice(0, 50).map(b =>
   }
 }
 
-// Stage 3: Claude-powered search handler for intelligent brand matching
-async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
-  console.log('🤖 Starting 3-stage intelligent brand-project matching...');
+// Enhanced Claude search handler that includes HubSpot data
+async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
+  console.log('🤖 Starting enhanced brand-project matching with HubSpot data...');
   
   if (!anthropicApiKey) {
     console.warn('No Anthropic API key found, falling back to OpenAI');
@@ -271,36 +361,55 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
   }
   
   try {
-    // Stage 1: Get data from Airtable
-    console.log('📊 Stage 1: Fetching from Airtable...');
+    // Stage 1: Get data from both Airtable AND HubSpot
+    console.log('📊 Stage 1: Fetching from Airtable and HubSpot...');
+    
+    // Your existing Airtable searches
     const brandData = await searchAirtable(userMessage, projectId, 'brands', 100);
     const meetingData = await searchAirtable(userMessage, projectId, 'meetings', 50);
     
-    // Check if we got actual data
-    if ((!brandData.records || brandData.records.length === 0) && 
-        (!meetingData.records || meetingData.records.length === 0)) {
-      console.error('❌ No data returned from Airtable!');
-      return null;
+    // NEW: Add HubSpot searches
+    let hubspotDeals = null;
+    let hubspotContacts = null;
+    
+    if (hubspotAccessToken) {
+      // Search for relevant deals if the query mentions deals, opportunities, or revenue
+      if (userMessage.toLowerCase().includes('deal') || 
+          userMessage.toLowerCase().includes('opportunit') ||
+          userMessage.toLowerCase().includes('revenue') ||
+          userMessage.toLowerCase().includes('pipeline') ||
+          userMessage.toLowerCase().includes('value') ||
+          userMessage.toLowerCase().includes('highest')) {
+        hubspotDeals = await searchHubSpot(userMessage, 'deals', 10);
+      }
+      
+      // Search for contacts if query mentions people or contacts
+      if (userMessage.toLowerCase().includes('contact') ||
+          userMessage.toLowerCase().includes('person') ||
+          userMessage.toLowerCase().includes('people')) {
+        hubspotContacts = await searchHubSpot(userMessage, 'contacts', 10);
+      }
     }
     
-    // Stage 2: Narrow with OpenAI
+    // Stage 2: Narrow with OpenAI (your existing logic)
     const { topBrands, scores } = await narrowWithOpenAI(
       brandData.records, 
       meetingData.records, 
       userMessage
     );
     
-    // Stage 3: Deep analysis with Claude
-    console.log('🧠 Stage 3: Claude deep analysis on top candidates...');
+    // Stage 3: Deep analysis with Claude including HubSpot data
+    console.log('🧠 Stage 3: Claude deep analysis with all data sources...');
     
-    // Start with the knowledge base instructions from Airtable - this is the primary prompt
+    // Start with the knowledge base instructions
     let systemPrompt = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
     
     // Add the narrowed data context
     systemPrompt += "\n\n**PRIORITY CONTEXT FROM YOUR BUSINESS DATA:**\n\n";
     
+    // Your existing brand data formatting
     if (topBrands && topBrands.length > 0) {
-      systemPrompt += "**TOP RELEVANT BRANDS (pre-scored by relevance):**\n```json\n";
+      systemPrompt += "**TOP RELEVANT BRANDS (from Airtable):**\n```json\n";
       const brandInfo = topBrands.map(b => ({
         brand: b.fields['Brand Name'] || 'Unknown',
         relevance_score: b.relevanceScore || 0,
@@ -312,15 +421,47 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       
       systemPrompt += JSON.stringify(brandInfo, null, 2);
       systemPrompt += "\n```\n\n";
-      
-      console.log(`📊 Sending ${brandInfo.length} top brands to Claude for deep analysis`);
     }
     
+    // NEW: Add HubSpot deals data
+    if (hubspotDeals && hubspotDeals.records && hubspotDeals.records.length > 0) {
+      systemPrompt += "**HUBSPOT DEALS & OPPORTUNITIES:**\n```json\n";
+      const dealsInfo = hubspotDeals.records.map(deal => ({
+        deal_name: deal.properties.dealname,
+        amount: deal.properties.amount ? `$${parseInt(deal.properties.amount).toLocaleString()}` : 'Not specified',
+        stage: deal.properties.dealstage,
+        close_date: deal.properties.closedate,
+        pipeline: deal.properties.pipeline
+      }));
+      
+      systemPrompt += JSON.stringify(dealsInfo, null, 2);
+      systemPrompt += "\n```\n\n";
+      
+      console.log(`💼 Sending ${dealsInfo.length} HubSpot deals to Claude`);
+    }
+    
+    // NEW: Add HubSpot contacts data
+    if (hubspotContacts && hubspotContacts.records && hubspotContacts.records.length > 0) {
+      systemPrompt += "**HUBSPOT CONTACTS:**\n```json\n";
+      const contactsInfo = hubspotContacts.records.map(contact => ({
+        name: `${contact.properties.firstname || ''} ${contact.properties.lastname || ''}`.trim(),
+        email: contact.properties.email,
+        company: contact.properties.company,
+        phone: contact.properties.phone
+      }));
+      
+      systemPrompt += JSON.stringify(contactsInfo, null, 2);
+      systemPrompt += "\n```\n\n";
+      
+      console.log(`👥 Sending ${contactsInfo.length} HubSpot contacts to Claude`);
+    }
+    
+    // Your existing meeting data formatting
     if (meetingData && meetingData.records && meetingData.records.length > 0) {
-      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n```json\n";
+      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS (from Airtable):**\n```json\n";
       const meetingInfo = meetingData.records
-        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10) // Only meaningful meetings
-        .slice(0, 20) // Limit to most recent 20
+        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10)
+        .slice(0, 20)
         .map(r => ({
           meeting: r.fields['Title'] || 'Untitled',
           date: r.fields['Date'] || 'No date',
@@ -330,19 +471,20 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       
       systemPrompt += JSON.stringify(meetingInfo, null, 2);
       systemPrompt += "\n```\n\n";
-      
-      console.log(`📅 Sending ${meetingInfo.length} relevant meetings to Claude`);
     }
     
-    // Add instructions for Claude to include meeting links in the response
+    // Add instructions for Claude
     systemPrompt += `
-When referencing meetings in your response:
-- If a meeting has a link, include it in your response formatted as: **Meeting: [Meeting Title]** Link: [URL]
-- This allows the frontend to create clickable hyperlinks for meeting references
-- Maintain the exact meeting titles from the data provided
+When providing insights:
+- Cross-reference brand opportunities from Airtable with deals in HubSpot
+- Identify high-value opportunities from both systems
+- Note any connections between brands, meetings, and HubSpot deals
+- If meetings reference brands that also appear in HubSpot deals, highlight these connections
+- Include relevant deal amounts and stages when discussing opportunities
+- When referencing meetings, if a meeting has a link, include it formatted as: **Meeting: [Meeting Title]** Link: [URL]
 `;
     
-    console.log('📤 Calling Claude API with focused data...');
+    console.log('📤 Calling Claude API with combined Airtable + HubSpot data...');
     
     // Call Claude API
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -353,7 +495,7 @@ When referencing meetings in your response:
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022', // Most capable and cost-effective
+        model: 'claude-3-5-sonnet-20241022',
         max_tokens: 2000,
         temperature: 0.7,
         system: systemPrompt,
@@ -384,99 +526,35 @@ When referencing meetings in your response:
     if (data.content && data.content.length > 0) {
       const reply = data.content[0].text;
       
-      // Extract meaningful thinking steps based on actual data
+      // Enhanced MCP thinking to include HubSpot insights
       const mcpThinking = [];
       
-      // Add pipeline insights FIRST
-      mcpThinking.push(`Filtered ${brandData.total} brands → ${topBrands.length} top candidates`);
+      // Your existing thinking steps
+      mcpThinking.push(`Searched: ${brandData.total} brands, ${meetingData.total} meetings`);
       
-      // Show actual top brands from scoring
+      // Add HubSpot search results
+      if (hubspotDeals && hubspotDeals.total > 0) {
+        mcpThinking.push(`HubSpot: Found ${hubspotDeals.total} deals`);
+        
+        // Calculate total pipeline value
+        const totalPipeline = hubspotDeals.records
+          .reduce((sum, deal) => sum + (parseInt(deal.properties.amount) || 0), 0);
+        if (totalPipeline > 0) {
+          mcpThinking.push(`Pipeline value: $${totalPipeline.toLocaleString()}`);
+        }
+      }
+      
+      if (hubspotContacts && hubspotContacts.total > 0) {
+        mcpThinking.push(`HubSpot: Found ${hubspotContacts.total} contacts`);
+      }
+      
+      // Your existing brand insights
       if (topBrands.length > 0 && scores) {
         const topThree = topBrands
           .slice(0, 3)
           .map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`)
           .filter(Boolean);
-        mcpThinking.push(`Highest relevance: ${topThree.join(', ')}`);
-      }
-      
-      // Analyze actual brand data from what Claude is seeing
-      if (topBrands && topBrands.length > 0) {
-        const hotBrands = [];
-        const highValueBrands = [];
-        const activeCategories = new Set();
-        
-        topBrands.forEach(record => {
-          const fields = record.fields;
-          if (!fields['Brand Name']) return;
-          
-          const brandName = fields['Brand Name'];
-          
-          // Track hot brands (active in last 7 days)
-          if (fields['Last Modified']) {
-            const daysSince = Math.floor((Date.now() - new Date(fields['Last Modified'])) / (1000 * 60 * 60 * 24));
-            if (daysSince < 7) {
-              hotBrands.push(brandName);
-            }
-          }
-          
-          // Track high-value opportunities
-          if (fields['Budget'] >= 5000000) {
-            highValueBrands.push(brandName);
-          }
-          
-          // Track categories
-          if (fields['Category']) {
-            if (Array.isArray(fields['Category'])) {
-              fields['Category'].forEach(cat => activeCategories.add(cat));
-            } else {
-              activeCategories.add(fields['Category']);
-            }
-          }
-        });
-        
-        // Add actual insights to thinking based on the narrowed data
-        if (hotBrands.length > 0) {
-          mcpThinking.push(`HOT brands (active this week): ${hotBrands.join(', ')}`);
-        }
-        if (highValueBrands.length > 0) {
-          mcpThinking.push(`High-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
-        }
-        if (activeCategories.size > 0) {
-          mcpThinking.push(`Categories in play: ${Array.from(activeCategories).slice(0, 5).join(', ')}`);
-        }
-      }
-      
-      // Analyze meeting insights for the brands Claude is actually analyzing
-      if (meetingData && meetingData.records && topBrands) {
-        const brandsInMeetings = new Set();
-        const opportunities = [];
-        
-        meetingData.records.forEach(record => {
-          const summary = record.fields['Summary'] || '';
-          const title = record.fields['Title'] || '';
-          
-          // Only look for mentions of the top brands that Claude is analyzing
-          topBrands.forEach(brandRecord => {
-            const brandName = brandRecord.fields['Brand Name'];
-            if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
-              brandsInMeetings.add(brandName);
-            }
-          });
-          
-          // Find opportunities
-          if (summary.toLowerCase().includes('pulled out') || 
-              summary.toLowerCase().includes('budget available') ||
-              summary.toLowerCase().includes('looking for')) {
-            opportunities.push(title);
-          }
-        });
-        
-        if (brandsInMeetings.size > 0) {
-          mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
-        }
-        if (opportunities.length > 0) {
-          mcpThinking.push(`Meeting opportunities: ${opportunities.slice(0, 3).join(', ')}`);
-        }
+        mcpThinking.push(`Top brands: ${topThree.join(', ')}`);
       }
       
       return {
@@ -489,10 +567,15 @@ When referencing meetings in your response:
     return null;
     
   } catch (error) {
-    console.error('❌ Error in Claude search:', error);
-    console.error('Error details:', error.stack);
+    console.error('❌ Error in enhanced Claude search:', error);
     return null;
   }
+}
+
+// Stage 3: Claude-powered search handler for intelligent brand matching (keeping original for backward compatibility)
+async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
+  // This now calls the enhanced version
+  return handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructions, projectId, sessionId);
 }
 
 export default async function handler(req, res) {
@@ -668,7 +751,14 @@ export default async function handler(req, res) {
         userMessage.toLowerCase().includes('for this project') ||
         userMessage.toLowerCase().includes('for this production') ||
         userMessage.toLowerCase().includes('upcoming') ||
-        userMessage.toLowerCase().includes('synopsis')
+        userMessage.toLowerCase().includes('synopsis') ||
+        // HubSpot specific queries
+        userMessage.toLowerCase().includes('hubspot') ||
+        userMessage.toLowerCase().includes('crm') ||
+        userMessage.toLowerCase().includes('deal') ||
+        userMessage.toLowerCase().includes('opportunit') ||
+        userMessage.toLowerCase().includes('pipeline') ||
+        userMessage.toLowerCase().includes('highest value')
       );
       
       console.log('🔍 Brand matching detection:', { isBrandMatchingQuery, userMessage: userMessage?.slice(0, 50) });
@@ -756,7 +846,7 @@ export default async function handler(req, res) {
             console.log('🎯 Brand matching query detected - attempting Claude...');
             console.log('🔑 Anthropic API key:', anthropicApiKey ? 'Present' : 'MISSING!');
             
-            const claudeResult = await handleClaudeSearch(
+            const claudeResult = await handleClaudeSearchWithHubSpot(
               userMessage, 
               knowledgeBaseInstructions, 
               projectId, 
