@@ -130,8 +130,8 @@ async function callHubSpotAPI(endpoint, method = 'GET', body = null) {
   }
 }
 
-// Enhanced HubSpot search function with intelligent filtering
-async function searchHubSpot(query, searchType = 'deals', limit = 20, filters = null) {
+// HubSpot search function to match your existing searchAirtable pattern
+async function searchHubSpot(query, searchType = 'deals', limit = 20) {
   console.log('🔍 Searching HubSpot:', { query, searchType, limit });
   
   try {
@@ -144,54 +144,24 @@ async function searchHubSpot(query, searchType = 'deals', limit = 20, filters = 
     switch (searchType) {
       case 'deals':
         endpoint = '/crm/v3/objects/deals/search';
-        // Add all your custom properties here
-        searchBody.properties = [
-          'dealname', 
-          'amount', 
-          'dealstage', 
-          'closedate', 
-          'pipeline',
-          'description',
-          'hs_object_id',
-          'client_status', // For Active & Pending
-          'campaign_type', // To check if they met face to face
-          'production_stage', // Pre-production, Development, etc.
-          'partner_attached', // Partner association
-          'has_contact', // Contact association
-          'is_retainer' // Retainer status
-        ];
+        searchBody.properties = ['dealname', 'amount', 'dealstage', 'closedate', 'pipeline'];
         searchBody.sorts = [{ propertyName: 'amount', direction: 'DESCENDING' }];
         break;
       
       case 'contacts':
         endpoint = '/crm/v3/objects/contacts/search';
-        searchBody.properties = ['firstname', 'lastname', 'email', 'company', 'phone', 'hs_object_id'];
+        searchBody.properties = ['firstname', 'lastname', 'email', 'company', 'phone'];
         break;
       
       case 'companies':
         endpoint = '/crm/v3/objects/companies/search';
-        searchBody.properties = [
-          'name', 
-          'industry', 
-          'city', 
-          'state', 
-          'annualrevenue', 
-          'description',
-          'client_status', // Active, Pending, etc.
-          'is_partner', // Partner status
-          'campaign_history' // Face to face meetings
-        ];
+        searchBody.properties = ['name', 'industry', 'city', 'state', 'annualrevenue'];
         break;
     }
 
-    // Add intelligent query construction
+    // Add query if provided
     if (query) {
       searchBody.query = query;
-    }
-    
-    // Add filters if provided
-    if (filters) {
-      searchBody.filterGroups = filters;
     }
 
     const data = await callHubSpotAPI(endpoint, 'POST', searchBody);
@@ -201,26 +171,6 @@ async function searchHubSpot(query, searchType = 'deals', limit = 20, filters = 
     }
 
     console.log(`✅ Got ${data.results.length} ${searchType} from HubSpot`);
-    
-    // Now get associations for deals to check contacts and partners
-    if (searchType === 'deals' && data.results.length > 0) {
-      console.log('🔗 Fetching deal associations...');
-      for (let deal of data.results) {
-        // Get associations for this deal
-        const associations = await callHubSpotAPI(
-          `/crm/v3/objects/deals/${deal.id}/associations/contacts`,
-          'GET'
-        );
-        deal.hasContact = associations && associations.results && associations.results.length > 0;
-        
-        // Get partner associations (assuming partners are stored as companies)
-        const partnerAssoc = await callHubSpotAPI(
-          `/crm/v3/objects/deals/${deal.id}/associations/companies`,
-          'GET'
-        );
-        deal.hasPartner = partnerAssoc && partnerAssoc.results && partnerAssoc.results.length > 0;
-      }
-    }
     
     return {
       searchType,
@@ -232,100 +182,6 @@ async function searchHubSpot(query, searchType = 'deals', limit = 20, filters = 
     console.error('❌ Error searching HubSpot:', error);
     return { error: error.message, records: [], total: 0 };
   }
-}
-
-// Production pipeline stages mapping
-const PRODUCTION_PIPELINES = {
-  'partners_pipeline': 'Partners Pipeline',
-  'pre_production': 'Pre-production', // 3-4 weeks before
-  'development': 'Development', // on the horizon
-  'post_production': 'Post-Production', // premier, sponsorship, co-branded
-  'ongoing_evergreen': 'On-going Evergreen',
-  'renewed_series': 'Renewed Series'
-};
-
-// Intelligent project analysis for better matching
-function analyzeProjectForMatching(userMessage) {
-  const analysis = {
-    genres: [],
-    themes: [],
-    demographics: [],
-    priceRange: null,
-    keywords: [],
-    cast: [],
-    setting: [],
-    timeline: null, // When is production?
-    productionStage: null // What stage are we in?
-  };
-  
-  const messageLower = userMessage.toLowerCase();
-  
-  // Extract production timeline
-  if (messageLower.includes('3-4 weeks') || messageLower.includes('next month')) {
-    analysis.timeline = 'pre-production';
-    analysis.productionStage = 'Pre-production';
-  } else if (messageLower.includes('development') || messageLower.includes('horizon')) {
-    analysis.timeline = 'development';
-    analysis.productionStage = 'Development';
-  } else if (messageLower.includes('post') || messageLower.includes('premier')) {
-    analysis.timeline = 'post-production';
-    analysis.productionStage = 'Post-Production';
-  }
-  
-  // Extract genres
-  const genrePatterns = {
-    'sports': ['olympic', 'hockey', 'skier', 'athlete', 'games', 'sports', 'football', 'basketball', 'soccer'],
-    'romance': ['romance', 'love', 'relationship', 'dating', 'romantic'],
-    'family': ['family', 'kids', 'children', 'parent', 'animated'],
-    'action': ['action', 'thriller', 'explosive', 'chase', 'fight'],
-    'comedy': ['comedy', 'funny', 'humor', 'laugh', 'hilarious'],
-    'documentary': ['documentary', 'doc', 'real story', 'true story'],
-    'series': ['series', 'season', 'episode', 'renewed']
-  };
-  
-  for (const [genre, keywords] of Object.entries(genrePatterns)) {
-    if (keywords.some(kw => messageLower.includes(kw))) {
-      analysis.genres.push(genre);
-    }
-  }
-  
-  // Extract themes
-  if (messageLower.includes('winter') || messageLower.includes('cold') || messageLower.includes('snow')) {
-    analysis.themes.push('winter');
-    analysis.setting.push('cold climate');
-  }
-  if (messageLower.includes('olympic') || messageLower.includes('competition')) {
-    analysis.themes.push('competition');
-    analysis.themes.push('achievement');
-  }
-  if (messageLower.includes('evergreen')) {
-    analysis.themes.push('evergreen');
-  }
-  
-  // Extract price range
-  const priceMatch = userMessage.match(/(\d+(?:\.\d+)?)\s*M\+?/i);
-  if (priceMatch) {
-    analysis.priceRange = parseFloat(priceMatch[1]) * 1000000;
-  }
-  
-  // Extract cast
-  const castMatch = userMessage.match(/Cast:\s*([^\.]+)/i);
-  if (castMatch) {
-    analysis.cast = castMatch[1].split(',').map(name => name.trim());
-  }
-  
-  // Extract key product categories based on context
-  if (analysis.genres.includes('sports') || analysis.themes.includes('competition')) {
-    analysis.keywords.push('athletic', 'performance', 'energy', 'sports drink', 'equipment');
-  }
-  if (analysis.themes.includes('winter')) {
-    analysis.keywords.push('cold weather', 'warm', 'comfort', 'seasonal');
-  }
-  if (analysis.genres.includes('family')) {
-    analysis.keywords.push('family-friendly', 'kids', 'snacks', 'entertainment');
-  }
-  
-  return analysis;
 }
 
 // Stage 1: Enhanced search function that returns structured data for Claude
@@ -512,149 +368,21 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
     const brandData = await searchAirtable(userMessage, projectId, 'brands', 100);
     const meetingData = await searchAirtable(userMessage, projectId, 'meetings', 50);
     
-    // NEW: Add HubSpot searches with intelligent filtering
+    // NEW: Add HubSpot searches
     let hubspotDeals = null;
     let hubspotContacts = null;
-    let hubspotCompanies = null;
     
     if (hubspotAccessToken) {
-      console.log('🔍 Analyzing project for intelligent HubSpot matching...');
+      // Always search HubSpot for brand matching queries to get comprehensive data
+      console.log('🔍 HubSpot token present, searching for deals...');
+      hubspotDeals = await searchHubSpot('', 'deals', 10); // Empty query gets all deals sorted by value
       
-      // Analyze the project to understand what we're looking for
-      const projectAnalysis = analyzeProjectForMatching(userMessage);
-      console.log('📊 Project analysis:', projectAnalysis);
-      
-      // Build intelligent search queries based on project analysis
-      const searchQueries = [];
-      
-      // Add genre-based searches
-      if (projectAnalysis.genres.includes('sports')) {
-        searchQueries.push('athletic OR sports OR energy OR performance');
-      }
-      if (projectAnalysis.themes.includes('winter')) {
-        searchQueries.push('winter OR cold OR seasonal OR holiday');
-      }
-      
-      // Search for relevant deals with filters for whitelisted criteria
-      const dealFilters = [];
-      
-      // Add filter for active/pending clients
-      dealFilters.push({
-        filters: [
-          {
-            propertyName: 'client_status',
-            operator: 'IN',
-            values: ['Active', 'Pending']
-          }
-        ]
-      });
-      
-      // Add filter for production stages if identified
-      if (projectAnalysis.productionStage) {
-        dealFilters.push({
-          filters: [
-            {
-              propertyName: 'production_stage',
-              operator: 'EQ',
-              value: projectAnalysis.productionStage
-            }
-          ]
-        });
-      }
-      
-      const dealQuery = searchQueries.length > 0 ? searchQueries.join(' OR ') : '';
-      hubspotDeals = await searchHubSpot(dealQuery, 'deals', 30, dealFilters.length > 0 ? dealFilters : null);
-      
-      // After getting deals, filter for additional criteria
-      if (hubspotDeals && hubspotDeals.records) {
-        console.log('🔍 Analyzing deal quality criteria...');
-        
-        hubspotDeals.records = hubspotDeals.records.map(deal => {
-          // Score each deal based on criteria
-          deal.qualityScore = 0;
-          deal.qualityFactors = [];
-          
-          // Check if has contact
-          if (deal.hasContact) {
-            deal.qualityScore += 20;
-            deal.qualityFactors.push('Has contact');
-          }
-          
-          // Check if has partner
-          if (deal.hasPartner) {
-            deal.qualityScore += 20;
-            deal.qualityFactors.push('Partner attached');
-          }
-          
-          // Check if it's a face-to-face campaign
-          if (deal.properties.campaign_type === 'face-to-face' || 
-              (deal.properties.dealname && deal.properties.dealname.toLowerCase().includes('campaign'))) {
-            deal.qualityScore += 30;
-            deal.qualityFactors.push('Face-to-face campaign');
-          }
-          
-          // Check client status
-          if (deal.properties.client_status === 'Active') {
-            deal.qualityScore += 25;
-            deal.qualityFactors.push('Active client');
-          } else if (deal.properties.client_status === 'Pending') {
-            deal.qualityScore += 15;
-            deal.qualityFactors.push('Pending client');
-          }
-          
-          // Check if retainer
-          if (deal.properties.is_retainer === 'true') {
-            deal.qualityScore += 25;
-            deal.qualityFactors.push('Retainer client');
-          }
-          
-          // Check production stage alignment
-          if (deal.properties.production_stage === projectAnalysis.productionStage) {
-            deal.qualityScore += 20;
-            deal.qualityFactors.push(`Matching stage: ${projectAnalysis.productionStage}`);
-          }
-          
-          return deal;
-        });
-        
-        // Sort by quality score first, then by amount
-        hubspotDeals.records.sort((a, b) => {
-          if (b.qualityScore !== a.qualityScore) {
-            return b.qualityScore - a.qualityScore;
-          }
-          return (parseInt(b.properties.amount) || 0) - (parseInt(a.properties.amount) || 0);
-        });
-      }
-      
-      // If we have brand names from Airtable, also search for those in HubSpot
-      if (topBrands && topBrands.length > 0) {
-        const brandNames = topBrands
-          .slice(0, 5)
-          .map(b => b.fields['Brand Name'])
-          .filter(Boolean);
-        
-        if (brandNames.length > 0) {
-          const brandQuery = brandNames.map(name => `"${name}"`).join(' OR ');
-          const brandSpecificDeals = await searchHubSpot(brandQuery, 'deals', 10);
-          
-          // Merge results intelligently
-          if (brandSpecificDeals.records.length > 0) {
-            console.log(`🎯 Found ${brandSpecificDeals.records.length} deals matching Airtable brands`);
-            // Add to existing deals but avoid duplicates
-            const existingIds = new Set(hubspotDeals.records.map(d => d.id));
-            brandSpecificDeals.records.forEach(deal => {
-              if (!existingIds.has(deal.id)) {
-                hubspotDeals.records.push(deal);
-              }
-            });
-          }
-        }
-      }
-      
-      // Search for relevant companies based on industry
-      if (projectAnalysis.keywords.length > 0) {
-        const companyQuery = projectAnalysis.keywords.slice(0, 3).join(' OR ');
-        hubspotCompanies = await searchHubSpot(companyQuery, 'companies', 10);
+      // Also search for contacts if specifically mentioned
+      if (userMessage.toLowerCase().includes('contact') ||
+          userMessage.toLowerCase().includes('person') ||
+          userMessage.toLowerCase().includes('people')) {
+        console.log('🔍 Also searching HubSpot contacts...');
+        hubspotContacts = await searchHubSpot(userMessage, 'contacts', 10);
       }
     } else {
       console.log('❌ No HubSpot token configured');
@@ -754,42 +482,13 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
     
     // Add instructions for Claude
     systemPrompt += `
-When providing brand matching insights:
-- PRIORITIZE deals/brands with these quality factors:
-  * Has a contact person attached (can reach someone)
-  * Has a partner attached (established relationship)
-  * Face-to-face campaigns (met in person)
-  * Active or Pending client status (whitelisted)
-  * Retainer relationships (ongoing commitment)
-  * Matches the production timeline stage
-
-- For each recommendation, mention:
-  * Quality factors (contact ✓, partner ✓, met face-to-face ✓)
-  * Client status (Active/Pending/Retainer)
-  * Production stage alignment
-  * Why it fits the production creatively
-  * Budget alignment with production fee
-
-- Cross-reference brands in both systems:
-  * Brands in Airtable = curated/priority
-  * If also in HubSpot with good quality score = TOP PRIORITY
-  * Note any recent meetings about these brands
-
-- Consider production timeline:
-  * Pre-production (3-4 weeks out) = urgent opportunities
-  * Development = longer-term planning
-  * Post-production = premier sponsorships, co-branded promos
-
-- Flag HOT opportunities:
-  * Recent pull-outs from other projects
-  * Brands actively looking for content
-  * Budget available immediately
-  * Matches production timeline perfectly
-
-Format recommendations showing quality indicators:
-⭐ HIGH QUALITY: [Brand] - Active client, has contact & partner, met face-to-face
-✅ GOOD MATCH: [Brand] - Pending status, retainer, fits timeline
-🔥 HOT OPPORTUNITY: [Brand] - Just pulled out of X, budget ready, perfect fit
+When providing insights:
+- Cross-reference brand opportunities from Airtable with deals in HubSpot
+- Identify high-value opportunities from both systems
+- Note any connections between brands, meetings, and HubSpot deals
+- If meetings reference brands that also appear in HubSpot deals, highlight these connections
+- Include relevant deal amounts and stages when discussing opportunities
+- When referencing meetings, if a meeting has a link, include it formatted as: **Meeting: [Meeting Title]** Link: [URL]
 `;
     
     console.log('📤 Calling Claude API with combined Airtable + HubSpot data...');
