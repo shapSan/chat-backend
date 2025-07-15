@@ -98,14 +98,14 @@ function getCurrentTimeInPDT() {
 
 /**
  * Generate a video from text using Runway AI's SDK
- * Uses text prompt directly with text-to-video model
+ * Uses text prompt with gen3_alpha model
  * @param {Object} params - Video generation parameters
  * @returns {Promise<{url: string, taskId: string}>} - Video URL and task ID
  */
 async function generateRunwayVideo({ 
   promptText, 
-  model = 'gen3_alpha_turbo',  // Cheaper model - uses fewer credits
-  ratio = '1280:720',
+  model = 'gen3_alpha',  // Use gen3_alpha for text-only
+  ratio = '1280:768',
   duration = 5
 }) {
   if (!runwayApiKey) {
@@ -122,11 +122,12 @@ async function generateRunwayVideo({
 
     // Create the video with text prompt only
     console.log('🎥 Creating video from text prompt...');
-    const videoTask = await client.textToVideo.create({
+    const videoTask = await client.imageToVideo.create({
       model: model,
-      promptText: promptText, // Text-only generation
+      promptText: promptText,
       ratio: ratio,
       duration: duration
+      // NO promptImage field
     });
 
     console.log('✅ Video task created:', videoTask.id);
@@ -684,7 +685,8 @@ export default async function handler(req, res) {
       if (req.body.generateVideo === true) {
         console.log('Processing video generation request');
         
-        const { promptText, projectId, model, ratio, duration } = req.body;
+        const { promptText, projectId, sessionId, model, ratio, duration } = req.body;
+        // NO promptImage in destructuring
 
         if (!promptText) {
           return res.status(400).json({ 
@@ -705,8 +707,8 @@ export default async function handler(req, res) {
           // Generate video with text only
           const { url, taskId } = await generateRunwayVideo({
             promptText,
-            model: model || 'gen3_alpha_turbo',
-            ratio: ratio || '1280:720',
+            model: model || 'gen3_alpha', // NOT gen3_alpha_turbo
+            ratio: ratio || '1280:768',
             duration: duration || 5
           });
 
@@ -716,7 +718,7 @@ export default async function handler(req, res) {
             success: true,
             videoUrl: url,
             taskId,
-            model: model || 'gen3_alpha_turbo'
+            model: model || 'gen3_alpha'
           });
 
         } catch (error) {
