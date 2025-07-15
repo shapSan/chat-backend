@@ -13,6 +13,7 @@
   "dependencies": {
     "dotenv": "^16.0.3",
     "node-fetch": "^3.3.0",
-    "ws": "^8.13.0"
+    "ws": "^8.13.0",
+    "@runwayml/sdk": "^0.12.2"
   }
 }
