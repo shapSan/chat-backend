@@ -18,48 +18,6 @@ const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 const hubspotAccessToken = process.env.HUBSPOT_ACCESS_TOKEN; // Add this to your Vercel env vars
 
-// Your specific pipeline mapping
-const YOUR_PIPELINES = {
-  // Partnership Deals Pipeline
-  'partnerships': {
-    id: '115484704',
-    name: '[IV] Partnership Deals [Fee & Trade]',
-    stages: {
-      'new_opportunity': '227286057',
-      'project_brief_created': '205074829',
-      'quote_discussion': '204588590',
-      'fee_approved': '205087650',
-      'partnership_activated': '204497432',
-      'completed': '205074833',
-      'failed': '205074834'
-    }
-  },
-  // New Business Pipeline
-  'new_business': {
-    id: '108874645',
-    name: '[IV] New Business & Contract Renewals Pipeline',
-    stages: {
-      'new_inquiry': '196170391',
-      'meeting_scheduled': '196170394',
-      'proposal_meeting': '196170395',
-      'contract_sent': '196158029',
-      'closed_won': '196158031',
-      'closed_lost': '196158032'
-    }
-  },
-  // Influencer Campaigns
-  'influencer': {
-    id: '114737106',
-    name: '[IV] Influencer Campaigns Pipeline',
-    stages: {
-      'new_campaign': '938448781',
-      'planning': '938448782',
-      'content_live': '938448787',
-      'closed_won': '938463385'
-    }
-  }
-};
-
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
   'default': {
