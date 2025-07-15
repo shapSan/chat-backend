@@ -1,9 +1,44 @@
-import dotenv from 'dotenv';
+// Dynamic helper functions
+function getPipelineName(pipelineId) {
+  const pipelineMap = {
+    '115484704': 'Partnership Deals',
+    '108874645': 'New Business',
+    '114737106': 'Influencer Campaigns',
+    '115618560': 'Playbook Pipeline',
+    '72395917': 'Blog & Podcast',
+    // Add more as discovered
+  };
+  return pipelineMap[pipelineId] || `Pipeline ${pipelineId}`;
+}
+
+function getStageInfo(stageId, pipelineId) {
+  // Dynamic stage mapping based on pipeline
+  const stageData = {
+    // Partnership stages
+    '227286057': { label: 'New Opportunity', score: 5, isAdvanced: false },
+    '205074829': { label: 'Brief Created', score: 10, isAdvanced: false },
+    '204588590': { label: 'Quote Discussion', score: 20, isAdvanced: true },
+    '205087650': { label: 'Fee Approved', score: 30, isAdvanced: true },
+    '204497432': { label: 'Partnership Active', score: 35, isAdvanced: true },
+    '205074833': { label: 'Completed', score: 40, isAdvanced: true },
+    '205074834': { label: 'Failed', score: 0, isAdvanced: false },
+    // New Business stages
+    '196158031': { label: 'Closed Won', score: 40, isAdvanced: true },
+    '196158032': { label: 'Closed Lost', score: 0, isAdvanced: false },
+    '196158029': { label: 'Contract Sent', score: 25, isAdvanced: true },
+    '196158030': { label: 'Contract Signed', score: 35, isAdvanced: true },
+    // Playbook stages
+    '205070213': { label: 'Playbook Complete', score: 30, isAdvanced: true },
+    '204588588': { label: 'Strategy Presented', score: 25, isAdvanced: true },
+    // Add more stages as needed
+  };
+  
+  return stageData[stageId] || { label: 'In Progress', score: 5, isAdvanced: false };
+}import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
 
 dotenv.config();
-
 
 export const config = {
   api: {
@@ -18,7 +53,6 @@ const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 const hubspotAccessToken = process.env.HUBSPOT_ACCESS_TOKEN; // Add this to your Vercel env vars
-const runwayApiKey = process.env.RUNWAY_API_KEY;
 
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
@@ -132,8 +166,8 @@ async function callHubSpotAPI(endpoint, method = 'GET', body = null) {
   }
 }
 
-// HubSpot search function to match your existing searchAirtable pattern
-async function searchHubSpot(query, searchType = 'deals', limit = 20) {
+// Enhanced HubSpot search function with YOUR specific fields
+async function searchHubSpot(query, searchType = 'deals', limit = 20, filters = null) {
   console.log('🔍 Searching HubSpot:', { query, searchType, limit });
   
   try {
@@ -146,24 +180,59 @@ async function searchHubSpot(query, searchType = 'deals', limit = 20) {
     switch (searchType) {
       case 'deals':
         endpoint = '/crm/v3/objects/deals/search';
-        searchBody.properties = ['dealname', 'amount', 'dealstage', 'closedate', 'pipeline'];
+        // Your actual HubSpot properties
+        searchBody.properties = [
+          'dealname', 
+          'amount',
+          'full_agreement_amount', // Gross Deal Amount
+          'dealstage', 
+          'closedate', 
+          'pipeline',
+          'description',
+          'hs_object_id',
+          'brand_name', // Your brand field
+          'client_type', // Client categorization
+          'has_the_sow_msa_been_added_', // Contract status
+          'distributor', // Distribution partner
+          'content_type', // Type of content
+          'deal_type___available_for_', // Deal availability
+          'partnership_fee__talent_', // Talent fee
+          'partnership_fee__production_', // Production fee
+          'production_title', // Production name
+          'project_type', // Project categorization
+          'partner_poc_email', // Partner contact
+          'talent_partner' // Talent involved
+        ];
         searchBody.sorts = [{ propertyName: 'amount', direction: 'DESCENDING' }];
         break;
       
       case 'contacts':
         endpoint = '/crm/v3/objects/contacts/search';
-        searchBody.properties = ['firstname', 'lastname', 'email', 'company', 'phone'];
+        searchBody.properties = ['firstname', 'lastname', 'email', 'company', 'phone', 'hs_object_id'];
         break;
       
       case 'companies':
         endpoint = '/crm/v3/objects/companies/search';
-        searchBody.properties = ['name', 'industry', 'city', 'state', 'annualrevenue'];
+        searchBody.properties = [
+          'name', 
+          'industry', 
+          'city', 
+          'state', 
+          'annualrevenue', 
+          'description',
+          'hs_object_id'
+        ];
         break;
     }
 
-    // Add query if provided
+    // Add intelligent query construction
     if (query) {
       searchBody.query = query;
+    }
+    
+    // Add filters if provided
+    if (filters) {
+      searchBody.filterGroups = filters;
     }
 
     const data = await callHubSpotAPI(endpoint, 'POST', searchBody);
@@ -173,6 +242,32 @@ async function searchHubSpot(query, searchType = 'deals', limit = 20) {
     }
 
     console.log(`✅ Got ${data.results.length} ${searchType} from HubSpot`);
+    
+    // Now get associations for deals
+    if (searchType === 'deals' && data.results.length > 0) {
+      console.log('🔗 Checking deal associations...');
+      for (let deal of data.results) {
+        try {
+          // Check for contact associations
+          const contactAssoc = await callHubSpotAPI(
+            `/crm/v3/objects/deals/${deal.id}/associations/contacts`,
+            'GET'
+          );
+          deal.hasContact = contactAssoc && contactAssoc.results && contactAssoc.results.length > 0;
+          
+          // Check for company associations
+          const companyAssoc = await callHubSpotAPI(
+            `/crm/v3/objects/deals/${deal.id}/associations/companies`,
+            'GET'
+          );
+          deal.hasPartner = companyAssoc && companyAssoc.results && companyAssoc.results.length > 0;
+        } catch (error) {
+          console.log(`Could not get associations for deal ${deal.id}`);
+          deal.hasContact = false;
+          deal.hasPartner = false;
+        }
+      }
+    }
     
     return {
       searchType,
@@ -184,6 +279,147 @@ async function searchHubSpot(query, searchType = 'deals', limit = 20) {
     console.error('❌ Error searching HubSpot:', error);
     return { error: error.message, records: [], total: 0 };
   }
+}
+
+// Your specific pipeline mapping
+const YOUR_PIPELINES = {
+  // Partnership Deals Pipeline
+  'partnerships': {
+    id: '115484704',
+    name: '[IV] Partnership Deals [Fee & Trade]',
+    stages: {
+      'new_opportunity': '227286057',
+      'project_brief_created': '205074829',
+      'quote_discussion': '204588590',
+      'fee_approved': '205087650',
+      'partnership_activated': '204497432',
+      'completed': '205074833',
+      'failed': '205074834'
+    }
+  },
+  // New Business Pipeline
+  'new_business': {
+    id: '108874645',
+    name: '[IV] New Business & Contract Renewals Pipeline',
+    stages: {
+      'new_inquiry': '196170391',
+      'meeting_scheduled': '196170394',
+      'proposal_meeting': '196170395',
+      'contract_sent': '196158029',
+      'closed_won': '196158031',
+      'closed_lost': '196158032'
+    }
+  },
+  // Influencer Campaigns
+  'influencer': {
+    id: '114737106',
+    name: '[IV] Influencer Campaigns Pipeline',
+    stages: {
+      'new_campaign': '938448781',
+      'planning': '938448782',
+      'content_live': '938448787',
+      'closed_won': '938463385'
+    }
+  }
+};
+
+// Intelligent project analysis for YOUR business
+function analyzeProjectForMatching(userMessage) {
+  const analysis = {
+    genres: [],
+    themes: [],
+    demographics: [],
+    priceRange: null,
+    keywords: [],
+    cast: [],
+    setting: [],
+    timeline: null,
+    productionStage: null,
+    projectType: null
+  };
+  
+  const messageLower = userMessage.toLowerCase();
+  
+  // Detect production stages based on YOUR pipeline stages
+  if (messageLower.includes('pre-production') || messageLower.includes('3-4 weeks')) {
+    analysis.timeline = 'pre-production';
+    analysis.productionStage = 'Pre-production';
+  } else if (messageLower.includes('development') || messageLower.includes('planning')) {
+    analysis.timeline = 'development';
+    analysis.productionStage = 'Development';
+  } else if (messageLower.includes('post') || messageLower.includes('completed')) {
+    analysis.timeline = 'post-production';
+    analysis.productionStage = 'Post-Production';
+  }
+  
+  // Extract genres
+  const genrePatterns = {
+    'sports': ['olympic', 'hockey', 'skier', 'athlete', 'games', 'sports', 'football', 'basketball', 'soccer', 'athletic'],
+    'romance': ['romance', 'love', 'relationship', 'dating', 'romantic'],
+    'family': ['family', 'kids', 'children', 'parent', 'animated'],
+    'action': ['action', 'thriller', 'explosive', 'chase', 'fight'],
+    'comedy': ['comedy', 'funny', 'humor', 'laugh', 'hilarious'],
+    'documentary': ['documentary', 'doc', 'real story', 'true story'],
+    'series': ['series', 'season', 'episode', 'renewed'],
+    'reality': ['reality', 'unscripted', 'competition']
+  };
+  
+  for (const [genre, keywords] of Object.entries(genrePatterns)) {
+    if (keywords.some(kw => messageLower.includes(kw))) {
+      analysis.genres.push(genre);
+    }
+  }
+  
+  // Extract themes
+  if (messageLower.includes('winter') || messageLower.includes('cold') || messageLower.includes('snow')) {
+    analysis.themes.push('winter');
+    analysis.setting.push('cold climate');
+  }
+  if (messageLower.includes('olympic') || messageLower.includes('competition')) {
+    analysis.themes.push('competition');
+    analysis.themes.push('achievement');
+  }
+  if (messageLower.includes('evergreen')) {
+    analysis.themes.push('evergreen');
+  }
+  if (messageLower.includes('holiday') || messageLower.includes('christmas')) {
+    analysis.themes.push('holiday');
+    analysis.themes.push('seasonal');
+  }
+  
+  // Extract price range (looking for patterns like 1.5M+, $2M, etc.)
+  const priceMatch = userMessage.match(/\$?(\d+(?:\.\d+)?)\s*M\+?/i);
+  if (priceMatch) {
+    analysis.priceRange = parseFloat(priceMatch[1]) * 1000000;
+  }
+  
+  // Extract distributor if mentioned
+  const distributorMatch = userMessage.match(/distributor:\s*([^,\n]+)/i);
+  if (distributorMatch) {
+    analysis.distributor = distributorMatch[1].trim();
+  }
+  
+  // Extract cast
+  const castMatch = userMessage.match(/cast:\s*([^\.]+)/i);
+  if (castMatch) {
+    analysis.cast = castMatch[1].split(',').map(name => name.trim());
+  }
+  
+  // Extract key product categories based on context
+  if (analysis.genres.includes('sports') || analysis.themes.includes('competition')) {
+    analysis.keywords.push('athletic', 'performance', 'energy', 'sports drink', 'equipment', 'fitness');
+  }
+  if (analysis.themes.includes('winter')) {
+    analysis.keywords.push('cold weather', 'warm', 'comfort', 'seasonal', 'thermal');
+  }
+  if (analysis.genres.includes('family')) {
+    analysis.keywords.push('family-friendly', 'kids', 'snacks', 'toys', 'entertainment');
+  }
+  if (analysis.genres.includes('reality')) {
+    analysis.keywords.push('lifestyle', 'consumer goods', 'home products');
+  }
+  
+  return analysis;
 }
 
 // Stage 1: Enhanced search function that returns structured data for Claude
@@ -370,38 +606,226 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
     const brandData = await searchAirtable(userMessage, projectId, 'brands', 100);
     const meetingData = await searchAirtable(userMessage, projectId, 'meetings', 50);
     
-    // NEW: Add HubSpot searches
+    // NEW: Add HubSpot searches with intelligent filtering
     let hubspotDeals = null;
     let hubspotContacts = null;
+    let hubspotCompanies = null;
     
     if (hubspotAccessToken) {
-      // Always search HubSpot for brand matching queries to get comprehensive data
-      console.log('🔍 HubSpot token present, searching for deals...');
-      hubspotDeals = await searchHubSpot('', 'deals', 10); // Empty query gets all deals sorted by value
+      console.log('🔍 Analyzing project for intelligent HubSpot matching...');
       
-      // Also search for contacts if specifically mentioned
-      if (userMessage.toLowerCase().includes('contact') ||
-          userMessage.toLowerCase().includes('person') ||
-          userMessage.toLowerCase().includes('people')) {
-        console.log('🔍 Also searching HubSpot contacts...');
-        hubspotContacts = await searchHubSpot(userMessage, 'contacts', 10);
+      // Analyze the project to understand what we're looking for
+      const projectAnalysis = analyzeProjectForMatching(userMessage);
+      console.log('📊 Project analysis:', projectAnalysis);
+      
+      // Build intelligent search queries based on project analysis
+      const searchQueries = [];
+      
+      // Dynamic query building based on actual project content
+      if (projectAnalysis.genres.length > 0) {
+        projectAnalysis.genres.forEach(genre => {
+          if (genre === 'sports') searchQueries.push('athletic OR sports OR energy OR fitness');
+          if (genre === 'family') searchQueries.push('family OR kids OR toys OR snacks');
+          if (genre === 'romance') searchQueries.push('lifestyle OR beauty OR dating');
+          // Add more genre mappings as needed
+        });
+      }
+      
+      if (projectAnalysis.themes.length > 0) {
+        projectAnalysis.themes.forEach(theme => {
+          searchQueries.push(theme);
+        });
+      }
+      
+      // Add keywords from analysis
+      if (projectAnalysis.keywords.length > 0) {
+        searchQueries.push(projectAnalysis.keywords.join(' OR '));
+      }
+      
+      // Search for ALL relevant deals, not just partnership pipeline
+      const dealQuery = searchQueries.length > 0 ? searchQueries.join(' OR ') : '';
+      
+      // Get deals from multiple pipelines
+      const allDeals = await searchHubSpot(dealQuery, 'deals', 100); // Get more deals for better matching
+      
+      // Also search for brand playbooks specifically
+      let playbookDeals = null;
+      if (hubspotAccessToken) {
+        // Search in Playbook Pipeline
+        const playbookFilters = [{
+          filters: [
+            {
+              propertyName: 'pipeline',
+              operator: 'EQ',
+              value: '115618560' // Your Playbook Pipeline ID
+            }
+          ]
+        }];
+        playbookDeals = await searchHubSpot('', 'deals', 50, playbookFilters);
+        console.log(`📚 Found ${playbookDeals?.records?.length || 0} playbook deals`);
+      }
+      
+      // Merge all deals and remove duplicates
+      hubspotDeals = allDeals;
+      if (playbookDeals && playbookDeals.records) {
+        const existingIds = new Set(hubspotDeals.records.map(d => d.id));
+        playbookDeals.records.forEach(deal => {
+          if (!existingIds.has(deal.id)) {
+            hubspotDeals.records.push(deal);
+          }
+        });
+      }
+      
+      // After getting deals, analyze them based on YOUR fields
+      if (hubspotDeals && hubspotDeals.records) {
+        console.log(`🔍 Analyzing ${hubspotDeals.records.length} total deals...`);
+        
+        hubspotDeals.records = hubspotDeals.records.map(deal => {
+          // Dynamic scoring based on actual data
+          deal.qualityScore = 0;
+          deal.qualityFactors = [];
+          deal.insights = [];
+          
+          // Extract actual brand name
+          const brandName = deal.properties.brand_name || 
+                           deal.properties.dealname || 
+                           'Unknown Brand';
+          
+          // Check associations (real data)
+          if (deal.hasContact) {
+            deal.qualityScore += 15;
+            deal.qualityFactors.push('Has contact');
+          }
+          
+          if (deal.hasPartner) {
+            deal.qualityScore += 15;
+            deal.qualityFactors.push('Partner attached');
+          }
+          
+          // Pipeline scoring - dynamic based on actual pipeline
+          const pipelineName = getPipelineName(deal.properties.pipeline);
+          if (deal.properties.pipeline === '115484704') { // Partnership
+            deal.qualityScore += 25;
+            deal.qualityFactors.push('Partnership deal');
+          } else if (deal.properties.pipeline === '115618560') { // Playbook
+            deal.qualityScore += 20;
+            deal.qualityFactors.push('Has playbook');
+            deal.insights.push('Brand strategy documented');
+          }
+          
+          // Stage scoring - based on actual stage progress
+          const stageInfo = getStageInfo(deal.properties.dealstage, deal.properties.pipeline);
+          if (stageInfo.isAdvanced) {
+            deal.qualityScore += stageInfo.score;
+            deal.qualityFactors.push(stageInfo.label);
+          }
+          
+          // Contract status
+          if (deal.properties.has_the_sow_msa_been_added_ === 'Yes') {
+            deal.qualityScore += 20;
+            deal.qualityFactors.push('Contract ready');
+          }
+          
+          // Budget alignment - dynamic calculation
+          const dealAmount = parseInt(deal.properties.amount || deal.properties.full_agreement_amount || 0);
+          if (projectAnalysis.priceRange && dealAmount > 0) {
+            const ratio = dealAmount / projectAnalysis.priceRange;
+            if (ratio >= 0.8 && ratio <= 1.5) {
+              deal.qualityScore += 20;
+              deal.qualityFactors.push(`Budget aligned (${Math.round(ratio * 100)}%)`);
+            }
+          }
+          
+          // Theme matching - dynamic based on actual content
+          let themeMatchCount = 0;
+          const dealContent = `${deal.properties.dealname} ${deal.properties.description || ''} ${deal.properties.brand_name || ''}`.toLowerCase();
+          
+          projectAnalysis.themes.forEach(theme => {
+            if (dealContent.includes(theme.toLowerCase())) {
+              themeMatchCount++;
+            }
+          });
+          
+          projectAnalysis.keywords.forEach(keyword => {
+            if (dealContent.includes(keyword.toLowerCase())) {
+              themeMatchCount++;
+            }
+          });
+          
+          if (themeMatchCount > 0) {
+            deal.qualityScore += (themeMatchCount * 10);
+            deal.insights.push(`Matches ${themeMatchCount} project themes`);
+          }
+          
+          // Distributor match if applicable
+          if (deal.properties.distributor && projectAnalysis.distributor) {
+            if (deal.properties.distributor.toLowerCase().includes(projectAnalysis.distributor.toLowerCase())) {
+              deal.qualityScore += 15;
+              deal.qualityFactors.push('Matching distributor');
+            }
+          }
+          
+          // Add all relevant deal info
+          deal.brandName = brandName;
+          deal.dealAmount = dealAmount;
+          deal.pipelineName = pipelineName;
+          deal.stageLabel = stageInfo.label;
+          
+          return deal;
+        });
+        
+        // Sort by quality score
+        hubspotDeals.records.sort((a, b) => b.qualityScore - a.qualityScore);
+      }
+      
+      // If we have brand names from Airtable, also search for those in HubSpot
+      if (topBrands && topBrands.length > 0) {
+        const brandNames = topBrands
+          .slice(0, 5)
+          .map(b => b.fields['Brand Name'])
+          .filter(Boolean);
+        
+        if (brandNames.length > 0) {
+          const brandQuery = brandNames.map(name => `"${name}"`).join(' OR ');
+          const brandSpecificDeals = await searchHubSpot(brandQuery, 'deals', 10);
+          
+          // Merge results intelligently
+          if (brandSpecificDeals.records.length > 0) {
+            console.log(`🎯 Found ${brandSpecificDeals.records.length} deals matching Airtable brands`);
+            // Add to existing deals but avoid duplicates
+            const existingIds = new Set(hubspotDeals.records.map(d => d.id));
+            brandSpecificDeals.records.forEach(deal => {
+              if (!existingIds.has(deal.id)) {
+                hubspotDeals.records.push(deal);
+              }
+            });
+          }
+        }
+      }
+      
+      // Search for relevant companies based on industry
+      if (projectAnalysis.keywords.length > 0) {
+        const companyQuery = projectAnalysis.keywords.slice(0, 3).join(' OR ');
+        hubspotCompanies = await searchHubSpot(companyQuery, 'companies', 10);
       }
     } else {
       console.log('❌ No HubSpot token configured');
     }
     
     // Check if we got actual data
-    if ((!brandData.records || brandData.records.length === 0) && 
-        (!meetingData.records || meetingData.records.length === 0) &&
-        (!hubspotDeals || !hubspotDeals.records || hubspotDeals.records.length === 0)) {
-      console.error('❌ No data returned from any source!');
-      return null;
+      
+      // Search for contacts if query mentions people or contacts
+      if (userMessage.toLowerCase().includes('contact') ||
+          userMessage.toLowerCase().includes('person') ||
+          userMessage.toLowerCase().includes('people')) {
+        hubspotContacts = await searchHubSpot(userMessage, 'contacts', 10);
+      }
     }
     
     // Stage 2: Narrow with OpenAI (your existing logic)
     const { topBrands, scores } = await narrowWithOpenAI(
-      brandData.records || [], 
-      meetingData.records || [], 
+      brandData.records, 
+      meetingData.records, 
       userMessage
     );
     
@@ -480,15 +904,37 @@ async function handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructi
       systemPrompt += "\n```\n\n";
     }
     
-    // Add instructions for Claude
+    // Dynamic instructions based on actual data
     systemPrompt += `
-When providing insights:
-- Cross-reference brand opportunities from Airtable with deals in HubSpot
-- Identify high-value opportunities from both systems
-- Note any connections between brands, meetings, and HubSpot deals
-- If meetings reference brands that also appear in HubSpot deals, highlight these connections
-- Include relevant deal amounts and stages when discussing opportunities
-- When referencing meetings, if a meeting has a link, include it formatted as: **Meeting: [Meeting Title]** Link: [URL]
+When providing brand matching insights:
+- Analyze the actual data from HubSpot dynamically - don't use preset examples
+- Look for brands that have documented playbooks (in Playbook Pipeline) for strategic insights
+- Score and rank brands based on multiple factors:
+  * Pipeline type and stage progress
+  * Budget alignment with production
+  * Theme/genre matches in brand descriptions
+  * Contract/legal readiness
+  * Contact and partner availability
+  * Historical success indicators
+
+- Provide insights specific to each brand:
+  * If has playbook: mention their documented strategy
+  * If in partnership pipeline: note the exact stage and what's needed
+  * If budget matches: show the percentage alignment
+  * If themes match: explain which themes connect
+
+- Be specific about next steps:
+  * Fee Approved deals: "Ready to activate, just needs final paperwork"
+  * Quote Discussion: "In active negotiation, decision expected [timeframe]"
+  * Has Playbook: "Strategy documented for [specific approach]"
+
+- Format responses with real data:
+  * Use actual brand names from brand_name field
+  * Show real amounts from amount/full_agreement_amount
+  * Reference actual pipeline stages
+  * Include any production_title matches
+
+Never use generic examples - always pull from the actual HubSpot data provided.
 `;
     
     console.log('📤 Calling Claude API with combined Airtable + HubSpot data...');
@@ -601,46 +1047,6 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
   // This now calls the enhanced version
   return handleClaudeSearchWithHubSpot(userMessage, knowledgeBaseInstructions, projectId, sessionId);
 }
-/**
- * Kick off an image-to-video job on Runway and wait until it’s done.
- * Returns { url, taskId } on success.
- */
-async function generateRunwayVideo({
-  promptText,
-  promptImage,
-  model = 'gen4_turbo',      // or 'gen3_alpha_turbo'
-  ratio = '1280:720',
-  duration = 5               // seconds
-}) {
-  if (!runwayApiKey) throw new Error('RUNWAY_API_KEY not set');
-
-  // 1️⃣  Start the job
-  const startRes = await fetch('https://api.runwayml.com/v1/image_to_video', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${runwayApiKey}`,
-      'X-Runway-Version': '2024-11-06' // current stable version:contentReference[oaicite:0]{index=0}
-    },
-    body: JSON.stringify({ promptText, promptImage, model, ratio, duration })
-  });
-  if (!startRes.ok) throw new Error(`Runway start failed ${startRes.status}`);
-  const { id: taskId } = await startRes.json();
-
-  // 2️⃣  Poll until finished
-  const poll = async () => {
-    const t = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}`, {
-      headers: { Authorization: `Bearer ${runwayApiKey}` }
-    }).then(r => r.json());
-    if (t.status === 'succeeded') return t.output?.url;
-    if (t.status === 'failed' || t.status === 'canceled')
-      throw new Error('Runway task failed');
-    await new Promise(r => setTimeout(r, 2000)); // 2 s back-off
-    return poll();
-  };
-  const url = await poll();
-  return { url, taskId };
-}
 
 export default async function handler(req, res) {
   // Set CORS headers early
@@ -725,38 +1131,6 @@ export default async function handler(req, res) {
                 details: error.message 
             });
         }
-        // ───────────────────────────────────────────────
-// B) VIDEO – Runway image-to-video
-if (req.body.generateVideo === true) {
-  const { promptText, promptImage } = req.body;
-
-  if (!promptText || !promptImage) {
-    return res.status(400).json({
-      error: 'promptText and promptImage are required'
-    });
-  }
-
-  try {
-    // helper we added earlier
-    const { url, taskId } = await generateRunwayVideo({
-      promptText,
-      promptImage
-    });
-
-    return res.status(200).json({
-      success: true,
-      videoUrl: url,
-      runwayTaskId: taskId
-    });
-  } catch (e) {
-    console.error('Runway error:', e);
-    return res.status(500).json({
-      error: 'Runway video failed',
-      details: e.message
-    });
-  }
-}
-
       }
 
       // Handle regular chat messages
