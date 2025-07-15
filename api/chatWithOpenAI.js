@@ -105,7 +105,7 @@ async function generateRunwayVideo({
   promptImage, 
   model = 'gen4_turbo',
   ratio = '1280:720',     // Gen-4 Turbo: 1280:720, 1584:672, 1104:832, 720:1280, 832:1104, 960:960
-  duration = 10           // seconds (5 or 10 are common options)
+  duration = 5            // seconds (5 or 10)
 }) {
   if (!runwayApiKey) {
     throw new Error('RUNWAY_API_KEY not configured');
@@ -120,26 +120,53 @@ async function generateRunwayVideo({
     duration
   });
   
-  // Format request based on Runway API documentation
+  // Use the correct API endpoint and format based on their REST API (not SDK)
   const requestBody = {
     model: model,
     promptText: promptText,
-    promptImage: promptImage,  // Can be URL or data URI
-    ratio: ratio,              // Must be resolution like "1280:720", not "16:9"
+    promptImage: promptImage,
+    ratio: ratio,
     duration: duration
   };
   
   console.log('Runway API Request:', JSON.stringify(requestBody, null, 2));
   
+  // Try without version header first since it's causing issues
   const startResponse = await fetch('https://api.runwayml.com/v1/image_to_video', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${runwayApiKey}`,
-      'X-Runway-Version': '2024-11-06'  // This IS required, just needs correct format
+      'Authorization': `Bearer ${runwayApiKey}`
     },
     body: JSON.stringify(requestBody)
   });
+
+  // If we get a version error, try with different headers
+  if (!startResponse.ok && startResponse.status === 400) {
+    const errorText = await startResponse.text();
+    console.log('First attempt failed:', errorText);
+    
+    // Try alternative format without underscore
+    const alternativeResponse = await fetch('https://api.runwayml.com/v1/image-to-video', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${runwayApiKey}`,
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+    
+    if (!alternativeResponse.ok) {
+      const altError = await alternativeResponse.text();
+      console.error('Alternative attempt also failed:', altError);
+      throw new Error(`Runway API error: ${alternativeResponse.status} - ${altError}`);
+    }
+    
+    const data = await alternativeResponse.json();
+    console.log('✅ Runway task created:', data);
+    return { taskId: data.id || data.task_id };
+  }
 
   if (!startResponse.ok) {
     const errorText = await startResponse.text();
@@ -151,7 +178,8 @@ async function generateRunwayVideo({
     throw new Error(`Runway API error: ${startResponse.status} - ${errorText}`);
   }
 
-  const { id: taskId } = await startResponse.json();
+  const data = await startResponse.json();
+  const taskId = data.id || data.task_id;
   console.log('✅ Runway task created:', taskId);
 
   // Poll for completion
@@ -163,7 +191,7 @@ async function generateRunwayVideo({
     const statusResponse = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}`, {
       headers: {
         'Authorization': `Bearer ${runwayApiKey}`,
-        'X-Runway-Version': '2024-11-06'  // Add it back here too
+        'Accept': 'application/json'
       }
     });
 
@@ -174,15 +202,23 @@ async function generateRunwayVideo({
     const task = await statusResponse.json();
     console.log(`🔄 Task status: ${task.status} (attempt ${attempts + 1})`);
 
-    if (task.status === 'SUCCEEDED' || task.status === 'succeeded') {
+    // Handle different possible status field names and values
+    const status = task.status || task.state;
+    
+    if (status === 'SUCCEEDED' || status === 'succeeded' || status === 'complete' || status === 'COMPLETE') {
+      // Handle different possible output formats
+      const videoUrl = task.output?.[0] || task.output || task.url || task.video_url;
+      if (!videoUrl) {
+        throw new Error('Video URL not found in response');
+      }
       return {
-        url: task.output?.[0] || task.output || task.url,  // Handle different response formats
+        url: videoUrl,
         taskId
       };
     }
 
-    if (task.status === 'FAILED' || task.status === 'failed' || task.status === 'CANCELED' || task.status === 'canceled') {
-      throw new Error(`Video generation failed: ${task.failure || task.error || 'Unknown error'}`);
+    if (status === 'FAILED' || status === 'failed' || status === 'ERROR' || status === 'error') {
+      throw new Error(`Video generation failed: ${task.failure || task.error || task.message || 'Unknown error'}`);
     }
 
     await new Promise(resolve => setTimeout(resolve, pollInterval));
