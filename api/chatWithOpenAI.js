@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
+import RunwayML from '@runwayml/sdk';
 
 dotenv.config();
 
@@ -96,7 +97,7 @@ function getCurrentTimeInPDT() {
 }
 
 /**
- * Generate a video using Runway AI's image-to-video API
+ * Generate a video using Runway AI's SDK
  * @param {Object} params - Video generation parameters
  * @returns {Promise<{url: string, taskId: string}>} - Video URL and task ID
  */
@@ -111,192 +112,85 @@ async function generateRunwayVideo({
     throw new Error('RUNWAY_API_KEY not configured');
   }
 
-  console.log('🎬 Starting Runway video generation...');
-  
-  // Option 1: Try the tasks endpoint with proper formatting
+  console.log('🎬 Starting Runway video generation with SDK...');
+  console.log('Request details:', {
+    model,
+    promptText: promptText.substring(0, 100) + '...',
+    promptImage: promptImage.substring(0, 100) + '...',
+    ratio,
+    duration
+  });
+
   try {
-    const requestBody = {
-      name: 'imageToVideo',
-      arguments: {
-        model: model,
-        promptText: promptText,
-        promptImage: promptImage,
-        ratio: ratio,
-        duration: duration
-      }
-    };
-    
-    console.log('Trying tasks endpoint with:', JSON.stringify(requestBody, null, 2));
-    
-    const response = await fetch('https://api.runwayml.com/v1/tasks', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${runwayApiKey}`,
-        'User-Agent': 'Runway-JS-SDK/1.0.0'  // Mimic SDK behavior
-      },
-      body: JSON.stringify(requestBody)
+    // Initialize Runway client
+    const client = new RunwayML({
+      apiKey: runwayApiKey
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      console.log('✅ Task created via tasks endpoint:', data);
-      const taskId = data.id || data.taskId || data.task_id;
-      
-      // Start polling for completion
-      return await pollForCompletion(taskId, runwayApiKey);
-    }
-    
-    const error1 = await response.text();
-    console.log('Tasks endpoint failed:', error1);
-  } catch (e) {
-    console.error('Tasks endpoint error:', e);
-  }
-
-  // Option 2: Try a different format that matches their internal API
-  try {
-    const requestBody = {
-      task_type: 'image_to_video',
+    // Create the image-to-video task
+    console.log('Creating video generation task...');
+    const imageToVideoTask = await client.imageToVideo.create({
       model: model,
-      options: {
-        text_prompt: promptText,
-        image_url: promptImage,
-        aspect_ratio: ratio,
-        duration: duration
-      }
-    };
-    
-    console.log('Trying alternative format:', JSON.stringify(requestBody, null, 2));
-    
-    const response = await fetch('https://api.runwayml.com/v1/tasks/run', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${runwayApiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      console.log('✅ Task created via run endpoint:', data);
-      const taskId = data.id || data.taskId || data.task_id;
-      
-      return await pollForCompletion(taskId, runwayApiKey);
-    }
-    
-    const error2 = await response.text();
-    console.log('Run endpoint failed:', error2);
-  } catch (e) {
-    console.error('Run endpoint error:', e);
-  }
-
-  // Option 3: Direct SDK-style endpoint
-  try {
-    const requestBody = {
-      model: model,
-      promptText: promptText,
       promptImage: promptImage,
+      promptText: promptText,
       ratio: ratio,
       duration: duration
-    };
-    
-    console.log('Trying SDK-style endpoint:', JSON.stringify(requestBody, null, 2));
-    
-    const response = await fetch('https://api.runwayml.com/v1/video/image-to-video', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${runwayApiKey}`
-      },
-      body: JSON.stringify(requestBody)
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      console.log('✅ Task created via video endpoint:', data);
-      const taskId = data.id || data.taskId || data.task_id;
-      
-      return await pollForCompletion(taskId, runwayApiKey);
-    }
-    
-    const error3 = await response.text();
-    console.log('Video endpoint failed:', error3);
-  } catch (e) {
-    console.error('Video endpoint error:', e);
-  }
+    console.log('✅ Task created:', imageToVideoTask.id);
 
-  // If all attempts fail, throw error
-  throw new Error('Failed to create Runway task - all endpoints returned errors. Please check API key and format.');
-}
+    // Poll for completion
+    console.log('Waiting for video generation to complete...');
+    let task = imageToVideoTask;
+    let attempts = 0;
+    const maxAttempts = 60; // 5 minutes max
 
-// Separate polling function
-async function pollForCompletion(taskId, apiKey) {
-  const pollInterval = 3000;
-  const maxAttempts = 40;
-  let attempts = 0;
+    while (attempts < maxAttempts) {
+      // Retrieve the latest task status
+      task = await client.tasks.retrieve(task.id);
+      console.log(`🔄 Task status: ${task.status} (attempt ${attempts + 1})`);
 
-  while (attempts < maxAttempts) {
-    // Try different task status endpoints
-    let statusResponse;
-    let task;
-    
-    try {
-      statusResponse = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}`, {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Accept': 'application/json'
-        }
-      });
-      
-      if (statusResponse.ok) {
-        task = await statusResponse.json();
-      } else {
-        // Try alternative endpoint
-        statusResponse = await fetch(`https://api.runwayml.com/v1/tasks/${taskId}/status`, {
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Accept': 'application/json'
-          }
-        });
+      if (task.status === 'SUCCEEDED') {
+        console.log('✅ Video generation complete!');
         
-        if (statusResponse.ok) {
-          task = await statusResponse.json();
-        } else {
-          throw new Error(`Failed to check task status: ${statusResponse.status}`);
+        // Get the video URL from the output
+        const videoUrl = task.output?.[0];
+        if (!videoUrl) {
+          throw new Error('No video URL in task output');
         }
+
+        return {
+          url: videoUrl,
+          taskId: task.id
+        };
       }
-    } catch (e) {
-      console.error('Error checking task status:', e);
-      throw e;
+
+      if (task.status === 'FAILED') {
+        throw new Error(`Video generation failed: ${task.failure || 'Unknown error'}`);
+      }
+
+      // Wait 5 seconds before checking again
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      attempts++;
     }
 
-    console.log(`🔄 Task status:`, task);
+    throw new Error('Video generation timed out after 5 minutes');
 
-    // Check various possible status fields
-    const status = task.status || task.state || task.task_status;
+  } catch (error) {
+    console.error('Runway SDK Error:', error);
     
-    if (['SUCCEEDED', 'succeeded', 'complete', 'COMPLETE', 'SUCCESS', 'success'].includes(status)) {
-      const videoUrl = task.output?.[0] || task.output || task.url || task.video_url || task.result?.url;
-      if (!videoUrl) {
-        console.error('No video URL in response:', task);
-        throw new Error('Video URL not found in response');
-      }
-      return {
-        url: videoUrl,
-        taskId
-      };
+    // Check if it's an authentication error
+    if (error.message?.includes('401') || error.message?.includes('Unauthorized')) {
+      throw new Error('Invalid Runway API key. Please check your RUNWAY_API_KEY environment variable.');
     }
-
-    if (['FAILED', 'failed', 'ERROR', 'error', 'FAILURE', 'failure'].includes(status)) {
-      throw new Error(`Video generation failed: ${task.failure || task.error || task.message || 'Unknown error'}`);
+    
+    // Check if it's a rate limit error
+    if (error.message?.includes('429')) {
+      throw new Error('Runway API rate limit exceeded. Please try again later.');
     }
-
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
-    attempts++;
+    
+    throw error;
   }
-
-  throw new Error('Video generation timed out');
 }
 
 // Stage 1: Enhanced search function that returns structured data for Claude
