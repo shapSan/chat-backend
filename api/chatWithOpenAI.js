@@ -462,6 +462,29 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
   try {
     console.log(`🧮 Stage 2: Narrowing ${airtableBrands.length + hubspotBrands.length} total brands with OpenAI...`);
     
+    // Extract distributor and production company names to exclude them
+    const excludeList = new Set();
+    const userMessageLower = userMessage.toLowerCase();
+    
+    // Look for distributor patterns
+    const distributorMatch = userMessage.match(/Distributor:\s*([^\n]+)/i);
+    if (distributorMatch && distributorMatch[1]) {
+      const distributors = distributorMatch[1].split(/[\/,]/).map(d => d.trim().toLowerCase());
+      distributors.forEach(d => excludeList.add(d));
+      console.log('🚫 Excluding distributors:', distributors);
+    }
+    
+    // Look for production company patterns
+    const productionMatch = userMessage.match(/Production Company:\s*([^\n]+)/i);
+    if (productionMatch && productionMatch[1]) {
+      const producers = productionMatch[1].split(/[\/,]/).map(p => p.trim().toLowerCase());
+      producers.forEach(p => excludeList.add(p));
+      console.log('🚫 Excluding production companies:', producers);
+    }
+    
+    // Add common distributor/studio keywords to exclude
+    const studioKeywords = ['studios', 'pictures', 'entertainment', 'films', 'productions', 'distribution'];
+    
     // Combine and deduplicate brands from both sources
     const allBrands = [];
     const brandNames = new Set();
@@ -470,7 +493,16 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
     airtableBrands.forEach(b => {
       const name = b.fields['Brand Name'];
       if (name && !brandNames.has(name.toLowerCase())) {
-        brandNames.add(name.toLowerCase());
+        const nameLower = name.toLowerCase();
+        
+        // Skip if it's a distributor or production company
+        if (excludeList.has(nameLower) || 
+            studioKeywords.some(keyword => nameLower.includes(keyword))) {
+          console.log(`⏭️ Skipping ${name} (appears to be distributor/studio)`);
+          return;
+        }
+        
+        brandNames.add(nameLower);
         allBrands.push({
           source: 'airtable',
           name: name,
@@ -487,7 +519,16 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
       // Use brand_name if available, otherwise fall back to name
       const name = b.properties.brand_name || b.properties.name;
       if (name && !brandNames.has(name.toLowerCase())) {
-        brandNames.add(name.toLowerCase());
+        const nameLower = name.toLowerCase();
+        
+        // Skip if it's a distributor or production company
+        if (excludeList.has(nameLower) || 
+            studioKeywords.some(keyword => nameLower.includes(keyword))) {
+          console.log(`⏭️ Skipping ${name} (appears to be distributor/studio)`);
+          return;
+        }
+        
+        brandNames.add(nameLower);
         
         // Determine if this is actually a brand based on available data
         const isBrand = b.properties.company_type?.includes('Brand') || 
@@ -500,8 +541,8 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
           source: 'hubspot',
           name: name,
           category: b.properties.brand_category || b.properties.industry || 'General',
-          budget: b.properties.media_spend_m_ ? `$${b.properties.media_spend_m_}M` : 
-                  b.properties.annualrevenue ? `Revenue: $${(b.properties.annualrevenue/1000000).toFixed(1)}M` : 'TBD',
+          budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 
+                  b.properties.annualrevenue ? `Revenue: ${(b.properties.annualrevenue/1000000).toFixed(1)}M` : 'TBD',
           summary: (b.properties.description || '').slice(0, 100),
           lastActivity: b.properties.notes_last_contacted || b.properties.hs_lastmodifieddate,
           hasPartner: !!b.properties.partner_agency_name,
@@ -521,15 +562,21 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
       return { topBrands: [], scores: {} };
     }
     
-    console.log(`📊 Total brands to evaluate: ${allBrands.length}`);
+    console.log(`📊 Total brands to evaluate: ${allBrands.length} (after excluding distributors/studios)`);
     
     // Create a lightweight scoring prompt
     const scoringPrompt = `
 Production details: ${userMessage}
 
-Score these brands 0-100 based on relevance to this specific production.
-Consider: genre fit, budget alignment, campaign focus match, natural integration opportunities, and partner relationships.
-Brands with partners or recent activity should score higher.
+Score these brands 0-100 based on relevance for PRODUCT PLACEMENT and BRAND INTEGRATION in this production.
+Consider: 
+- Genre fit and target audience alignment
+- Natural integration opportunities within the story
+- Budget alignment and campaign timing
+- Brand values matching the production tone
+- Previous entertainment marketing experience
+
+IMPORTANT: We are looking for consumer brands that could have their products featured in the film, NOT the distributor or production companies already involved.
 
 Return ONLY a JSON object with brand names as keys and scores as values.
 
@@ -549,7 +596,7 @@ ${allBrands.slice(0, 50).map(b =>
         messages: [
           {
             role: 'system',
-            content: 'You are a relevance scoring engine for brand-production matching. Score each brand 0-100 based on fit. Return only valid JSON.'
+            content: 'You are a product placement and brand integration expert. Score consumer brands 0-100 based on their fit for product placement in film/TV productions. Focus on brands that could naturally appear in scenes (beverages, cars, technology, fashion, etc). Exclude distributors, studios, and production companies. Return only valid JSON.'
           },
           {
             role: 'user',
