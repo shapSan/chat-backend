@@ -45,30 +45,6 @@ const PROJECT_CONFIGS = {
       style: 0.5,
       use_speaker_boost: true
     }
-  },
-  'real-estate': {
-    baseId: 'appYYYYYYYYYYYYYY',
-    chatTable: 'RealEstate_Chat',
-    knowledgeTable: 'RealEstate_Knowledge',
-    voiceId: 'EXAVITQu4vr4xnSDxMaL',
-    voiceSettings: {
-      stability: 0.6,
-      similarity_boost: 0.8,
-      style: 0.4,
-      use_speaker_boost: true
-    }
-  },
-  'healthcare': {
-    baseId: 'appZZZZZZZZZZZZZZ',
-    chatTable: 'Healthcare_Chat',
-    knowledgeTable: 'Healthcare_Knowledge',
-    voiceId: 'MF3mGyEYCl7XYWbV9V6O',
-    voiceSettings: {
-      stability: 0.7,
-      similarity_boost: 0.7,
-      style: 0.3,
-      use_speaker_boost: false
-    }
   }
 };
 
@@ -303,7 +279,6 @@ const hubspotAPI = {
 
 function getProjectConfig(projectId) {
   const config = PROJECT_CONFIGS[projectId] || PROJECT_CONFIGS['default'];
-  console.log(`Using project config for: ${projectId || 'default'}`);
   return config;
 }
 
@@ -481,7 +456,7 @@ async function searchHubSpot(query, projectId, limit = 50) {
 // Stage 2: Enhanced narrowing that includes HubSpot data
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMessage) {
   try {
-    console.log(`🧮 Stage 2: Narrowing ${airtableBrands.length + hubspotBrands.length} total brands with OpenAI...`);
+    console.log(`🧮 Stage 2: Narrowing ${airtableBrands.length + hubspotBrands.length} brands with OpenAI...`);
     
     // Extract distributor and production company names to exclude them
     const excludeList = new Set();
@@ -579,25 +554,26 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
     });
     
     if (allBrands.length === 0) {
-      console.log('⚠️ No brands found to narrow');
       return { topBrands: [], scores: {} };
     }
     
-    console.log(`📊 Total brands to evaluate: ${allBrands.length} (after excluding distributors/studios)`);
-    
-    // Create a lightweight scoring prompt
+    // Create a product placement focused scoring prompt
     const scoringPrompt = `
 Production details: ${userMessage}
 
-Score these brands 0-100 based on relevance for PRODUCT PLACEMENT and BRAND INTEGRATION in this production.
-Consider: 
-- Genre fit and target audience alignment
-- Natural integration opportunities within the story
-- Budget alignment and campaign timing
-- Brand values matching the production tone
-- Previous entertainment marketing experience
+Score these brands 0-100 based on their potential for PRODUCT PLACEMENT in this production.
 
-IMPORTANT: We are looking for consumer brands that could have their products featured in the film, NOT the distributor or production companies already involved.
+IMPORTANT RULES:
+- Only score brands whose PRODUCTS can physically appear in scenes (drinks, food, cars, phones, clothing, etc.)
+- Score 0 for streaming services (Netflix, Apple TV+, Amazon Prime, Disney+, Hulu, etc.)
+- Score 0 for distributors, studios, or production companies
+- Score 0 for digital-only services that can't have physical product placement
+
+Focus on brands that could naturally integrate their products into the story through:
+- Props that characters use (beverages, technology, vehicles)
+- Set dressing (home goods, appliances, decor)
+- Wardrobe (clothing, accessories, shoes)
+- Location branding (restaurants, stores, hotels)
 
 Return ONLY a JSON object with brand names as keys and scores as values.
 
@@ -617,7 +593,7 @@ ${allBrands.slice(0, 50).map(b =>
         messages: [
           {
             role: 'system',
-            content: 'You are a product placement and brand integration expert. Score consumer brands 0-100 based on their fit for product placement in film/TV productions. Focus on brands that could naturally appear in scenes (beverages, cars, technology, fashion, etc). Exclude distributors, studios, and production companies. Return only valid JSON.'
+            content: 'You are a product placement expert for film/TV. Score ONLY brands whose physical products can appear on screen. Streaming services, distributors, and digital platforms should always score 0. Focus on consumer goods, fashion, automotive, food/beverage, and technology brands with tangible products.'
           },
           {
             role: 'user',
