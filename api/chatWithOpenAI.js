@@ -470,7 +470,7 @@ ${allBrands.slice(0, 50).map(b =>
 }
 
 // Stage 3: Claude MCP search that ONLY gathers data (doesn't generate final response)
-async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
+async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId, conversationContext) {
   console.log('🤖 Starting Claude MCP data gathering with HubSpot integration...');
   
   if (!anthropicApiKey) {
@@ -478,17 +478,44 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     return null;
   }
   
+  // Extract the current production context from conversation history
+  let currentProduction = null;
+  if (conversationContext) {
+    // Look for production names in recent conversation
+    const productionPatterns = [
+      /(?:for|about|regarding)\s+["']?([A-Z][^"'\n]+?)["']?\s*(?:\n|Starting Fee:|Distributor:)/i,
+      /^([A-Z][^\n]+?)\s*\n\s*(?:Starting Fee:|Distributor:|Cast:|Synopsis:)/im,
+      /(?:project|production|film|show)\s+(?:called|named|titled)\s+["']?([^"'\n]+?)["']?/i
+    ];
+    
+    for (const pattern of productionPatterns) {
+      const match = conversationContext.match(pattern);
+      if (match && match[1]) {
+        currentProduction = match[1].trim();
+        console.log(`📽️ Detected current production context: "${currentProduction}"`);
+        break;
+      }
+    }
+  }
+  
+  // Enhance the user message with production context if needed
+  let enhancedMessage = userMessage;
+  if (currentProduction && !userMessage.toLowerCase().includes(currentProduction.toLowerCase())) {
+    enhancedMessage = `${userMessage} (for ${currentProduction} project)`;
+    console.log(`🎬 Enhanced query with production context: ${enhancedMessage}`);
+  }
+  
   try {
     // Stage 1: Get data from both Airtable and HubSpot
     console.log('📊 Stage 1: Fetching from Airtable and HubSpot...');
     
-    // Parallel fetch from both sources
+    // Use the enhanced message for searching
     const [airtableData, hubspotData] = await Promise.all([
-      searchAirtable(userMessage, projectId, 'brands', 100),
-      hubspotApiKey ? searchHubSpot(userMessage, projectId, 50) : { brands: [], productions: [] }
+      searchAirtable(enhancedMessage, projectId, 'brands', 100),
+      hubspotApiKey ? searchHubSpot(enhancedMessage, projectId, 50) : { brands: [], productions: [] }
     ]);
     
-    const meetingData = await searchAirtable(userMessage, projectId, 'meetings', 50);
+    const meetingData = await searchAirtable(enhancedMessage, projectId, 'meetings', 50);
     
     // Check if we got actual data
     if ((!airtableData.records || airtableData.records.length === 0) && 
@@ -503,7 +530,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       airtableData.records || [],
       hubspotData.brands || [],
       meetingData.records || [],
-      userMessage
+      enhancedMessage  // Use enhanced message here too
     );
     
     // Stage 3: Use Claude ONLY for organizing/analyzing data
@@ -512,7 +539,8 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     // Create a focused prompt for Claude to organize the data
     const dataOrgPrompt = `You are a data analyst. Organize and summarize the following brand and meeting data for a production matching request.
 
-User Query: ${userMessage}
+User Query: ${enhancedMessage}
+${currentProduction ? `Current Production: ${currentProduction}` : ''}
 
 Available Data:
 ${topBrands.length > 0 ? `
@@ -535,6 +563,7 @@ Please provide a structured JSON summary of:
 2. Key insights about why these brands match
 3. Any relevant meetings or context
 4. Contact information available
+5. Production context if mentioned
 
 Return ONLY valid JSON, no other text.`;
     
@@ -630,7 +659,8 @@ Return ONLY valid JSON, no other text.`;
         topBrands: topBrands,
         meetings: meetingData.records,
         productions: hubspotData.productions,
-        claudeSummary: organizedData
+        claudeSummary: organizedData,
+        currentProduction: currentProduction  // Pass production context
       },
       mcpThinking,
       usedMCP: true
@@ -1069,7 +1099,8 @@ export default async function handler(req, res) {
               userMessage, 
               knowledgeBaseInstructions, 
               projectId, 
-              sessionId
+              sessionId,
+              conversationContext  // Pass conversation context
             );
             
             if (claudeResult) {
@@ -1100,6 +1131,12 @@ export default async function handler(req, res) {
             // Add Claude's organized data if available
             if (claudeOrganizedData) {
               systemMessageContent += "\n\n**INTELLIGENT SEARCH RESULTS FROM YOUR DATABASE:**\n";
+              
+              // Add production context if available
+              if (claudeOrganizedData.currentProduction) {
+                systemMessageContent += `\n**CURRENT PRODUCTION CONTEXT: ${claudeOrganizedData.currentProduction}**\n`;
+                systemMessageContent += "The user is asking about brand partnerships for this specific production.\n";
+              }
               
               if (claudeOrganizedData.topBrands && claudeOrganizedData.topBrands.length > 0) {
                 systemMessageContent += "\n**TOP MATCHED BRANDS:**\n";
