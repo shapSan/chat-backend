@@ -72,12 +72,15 @@ const PROJECT_CONFIGS = {
   }
 };
 
-// HubSpot API Helper Functions
+// HubSpot API Helper Functions - FIXED VERSION
 const hubspotAPI = {
   baseUrl: 'https://api.hubapi.com',
   
   async searchBrands(filters = {}) {
     try {
+      console.log('🔍 HubSpot searchBrands called with filters:', filters);
+      
+      // More flexible search that will actually return results
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
         method: 'POST',
         headers: {
@@ -87,35 +90,69 @@ const hubspotAPI = {
         body: JSON.stringify({
           filterGroups: [{
             filters: [
-              { propertyName: 'company_type', operator: 'CONTAINS_TOKEN', value: 'Brand' },
-              { propertyName: 'lifecyclestage', operator: 'IN', values: ['customer', 'opportunity'] },
-              { propertyName: 'num_associated_contacts', operator: 'GT', value: '0' },
-              ...(filters.additionalFilters || [])
+              // Just check if company has a name (all companies should)
+              { 
+                propertyName: 'name', 
+                operator: 'HAS_PROPERTY' 
+              }
             ]
           }],
           properties: [
-            'name', 'brand_name', 'brand_category', 'lifecyclestage',
-            'media_spend_m_', 'partner_agency_name', 'notes_last_contacted',
-            'num_associated_contacts', 'description'
+            'name',
+            'brand_name',
+            'company_type',
+            'brand_category',
+            'lifecyclestage',
+            'media_spend_m_',
+            'partner_agency_name',
+            'notes_last_contacted',
+            'num_associated_contacts',
+            'description',
+            'industry',
+            'annualrevenue',
+            'numberofemployees',
+            'website',
+            'hs_lastmodifieddate'
           ],
           limit: filters.limit || 50,
-          sorts: filters.sorts || [{ propertyName: 'notes_last_contacted', direction: 'DESCENDING' }]
+          sorts: [{ 
+            propertyName: 'hs_lastmodifieddate', 
+            direction: 'DESCENDING' 
+          }]
         })
       });
       
       if (!response.ok) {
-        throw new Error(`HubSpot API error: ${response.status}`);
+        const errorBody = await response.text();
+        console.error('❌ HubSpot API error:', response.status, errorBody);
+        throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
       }
       
-      return await response.json();
+      const data = await response.json();
+      console.log(`✅ HubSpot search returned ${data.results?.length || 0} companies`);
+      
+      // Log sample data to debug
+      if (data.results && data.results.length > 0) {
+        console.log('Sample company:', {
+          name: data.results[0].properties.name,
+          brand_name: data.results[0].properties.brand_name,
+          company_type: data.results[0].properties.company_type,
+          lifecyclestage: data.results[0].properties.lifecyclestage
+        });
+      }
+      
+      return data;
     } catch (error) {
-      console.error('Error searching HubSpot brands:', error);
+      console.error('❌ Error searching HubSpot brands:', error);
+      console.error('Stack trace:', error.stack);
       return { results: [] };
     }
   },
 
   async searchDeals(filters = {}) {
     try {
+      console.log('🔍 HubSpot searchDeals called');
+      
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/deals/search`, {
         method: 'POST',
         headers: {
@@ -125,31 +162,52 @@ const hubspotAPI = {
         body: JSON.stringify({
           filterGroups: [{
             filters: [
-              { propertyName: 'dealstage', operator: 'HAS_PROPERTY' },
-              ...(filters.additionalFilters || [])
+              { 
+                propertyName: 'dealname', 
+                operator: 'HAS_PROPERTY' 
+              }
             ]
           }],
           properties: [
-            'dealname', 'content_type', 'description', 'dealstage',
-            'closedate', 'amount', 'pipeline'
+            'dealname',
+            'content_type',
+            'description',
+            'dealstage',
+            'closedate',
+            'amount',
+            'pipeline',
+            'distributor',
+            'brand_name',
+            'hs_lastmodifieddate'
           ],
-          limit: filters.limit || 30
+          limit: filters.limit || 30,
+          sorts: [{ 
+            propertyName: 'hs_lastmodifieddate', 
+            direction: 'DESCENDING' 
+          }]
         })
       });
       
       if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('❌ HubSpot Deals API error:', response.status, errorBody);
         throw new Error(`HubSpot API error: ${response.status}`);
       }
       
-      return await response.json();
+      const data = await response.json();
+      console.log(`✅ HubSpot search returned ${data.results?.length || 0} deals`);
+      
+      return data;
     } catch (error) {
-      console.error('Error searching HubSpot deals:', error);
+      console.error('❌ Error searching HubSpot deals:', error);
       return { results: [] };
     }
   },
 
   async getContactsForCompany(companyId) {
     try {
+      console.log('🔍 Getting contacts for company:', companyId);
+      
       const response = await fetch(
         `${this.baseUrl}/crm/v3/objects/companies/${companyId}/associations/contacts`,
         {
@@ -161,10 +219,13 @@ const hubspotAPI = {
       );
       
       if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('❌ HubSpot Associations API error:', response.status, errorBody);
         throw new Error(`HubSpot API error: ${response.status}`);
       }
       
       const associations = await response.json();
+      console.log(`Found ${associations.results?.length || 0} contact associations`);
       
       // Get contact details
       if (associations.results && associations.results.length > 0) {
@@ -177,7 +238,7 @@ const hubspotAPI = {
           },
           body: JSON.stringify({
             inputs: contactIds.slice(0, 10).map(id => ({ id })),
-            properties: ['firstname', 'lastname', 'email', 'jobtitle']
+            properties: ['firstname', 'lastname', 'email', 'jobtitle', 'phone']
           })
         });
         
@@ -189,8 +250,33 @@ const hubspotAPI = {
       
       return [];
     } catch (error) {
-      console.error('Error getting contacts:', error);
+      console.error('❌ Error getting contacts:', error);
       return [];
+    }
+  },
+
+  // Add a test function to verify API connectivity
+  async testConnection() {
+    try {
+      console.log('🔍 Testing HubSpot API connection...');
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies?limit=1`, {
+        headers: {
+          'Authorization': `Bearer ${hubspotApiKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('❌ HubSpot API test failed:', response.status, errorBody);
+        return false;
+      }
+      
+      console.log('✅ HubSpot API connection successful');
+      return true;
+    } catch (error) {
+      console.error('❌ HubSpot API test error:', error);
+      return false;
     }
   }
 };
@@ -311,18 +397,26 @@ async function searchHubSpot(query, projectId, limit = 50) {
   }
   
   try {
+    // Test connection first
+    const isConnected = await hubspotAPI.testConnection();
+    if (!isConnected) {
+      console.error('❌ HubSpot API connection failed');
+      return { brands: [], productions: [] };
+    }
+    
     // Parse the query to understand what's being asked
     const queryLower = query.toLowerCase();
     const needsProductions = queryLower.includes('production') || 
                            queryLower.includes('project') ||
-                           queryLower.includes('upcoming');
+                           queryLower.includes('upcoming') ||
+                           queryLower.includes('deal');
     
-    // Search for brands
+    // Search for brands/companies
     const brandsData = await hubspotAPI.searchBrands({ limit });
     
-    // Enrich brands with contact data
+    // Enrich brands with contact data (only for top brands to avoid rate limits)
     const enrichedBrands = await Promise.all(
-      brandsData.results.slice(0, 20).map(async (brand) => {
+      brandsData.results.slice(0, 10).map(async (brand) => {
         const contacts = await hubspotAPI.getContactsForCompany(brand.id);
         return {
           id: brand.id,
@@ -332,11 +426,22 @@ async function searchHubSpot(query, projectId, limit = 50) {
       })
     );
     
-    // Search for productions if needed
+    // Add remaining brands without contact enrichment
+    if (brandsData.results.length > 10) {
+      brandsData.results.slice(10).forEach(brand => {
+        enrichedBrands.push({
+          id: brand.id,
+          properties: brand.properties,
+          contacts: []
+        });
+      });
+    }
+    
+    // Search for productions/deals if needed
     let productions = [];
     if (needsProductions) {
       const dealsData = await hubspotAPI.searchDeals({ limit: 30 });
-      productions = dealsData.results;
+      productions = dealsData.results || [];
     }
     
     console.log(`✅ HubSpot search complete: ${enrichedBrands.length} brands, ${productions.length} productions`);
@@ -377,30 +482,46 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
       }
     });
     
-    // Add HubSpot brands
+    // Add HubSpot brands - with better field handling
     hubspotBrands.forEach(b => {
+      // Use brand_name if available, otherwise fall back to name
       const name = b.properties.brand_name || b.properties.name;
       if (name && !brandNames.has(name.toLowerCase())) {
         brandNames.add(name.toLowerCase());
+        
+        // Determine if this is actually a brand based on available data
+        const isBrand = b.properties.company_type?.includes('Brand') || 
+                       b.properties.brand_name || 
+                       b.properties.brand_category ||
+                       b.properties.lifecyclestage === 'customer' ||
+                       b.properties.lifecyclestage === 'opportunity';
+        
         allBrands.push({
           source: 'hubspot',
           name: name,
-          category: b.properties.brand_category || 'General',
-          budget: b.properties.media_spend_m_ ? `$${b.properties.media_spend_m_}M` : 'TBD',
+          category: b.properties.brand_category || b.properties.industry || 'General',
+          budget: b.properties.media_spend_m_ ? `$${b.properties.media_spend_m_}M` : 
+                  b.properties.annualrevenue ? `Revenue: $${(b.properties.annualrevenue/1000000).toFixed(1)}M` : 'TBD',
           summary: (b.properties.description || '').slice(0, 100),
-          lastActivity: b.properties.notes_last_contacted,
+          lastActivity: b.properties.notes_last_contacted || b.properties.hs_lastmodifieddate,
           hasPartner: !!b.properties.partner_agency_name,
           partnerAgency: b.properties.partner_agency_name,
           contactCount: b.contacts ? b.contacts.length : 0,
           primaryContact: b.contacts && b.contacts[0] ? 
-            `${b.contacts[0].properties.firstname} ${b.contacts[0].properties.lastname} (${b.contacts[0].properties.email})` : null
+            `${b.contacts[0].properties.firstname || ''} ${b.contacts[0].properties.lastname || ''} ${b.contacts[0].properties.email ? `(${b.contacts[0].properties.email})` : ''}`.trim() : null,
+          isBrand: isBrand,
+          website: b.properties.website,
+          employees: b.properties.numberofemployees
         });
       }
     });
     
     if (allBrands.length === 0) {
+      console.log('⚠️ No brands found to narrow');
       return { topBrands: [], scores: {} };
     }
+    
+    console.log(`📊 Total brands to evaluate: ${allBrands.length}`);
     
     // Create a lightweight scoring prompt
     const scoringPrompt = `
@@ -465,7 +586,8 @@ ${allBrands.slice(0, 50).map(b =>
     
   } catch (error) {
     console.error('❌ Error in OpenAI narrowing:', error);
-    return { topBrands: allBrands.slice(0, 15), scores: {} };
+    // Return all brands if scoring fails
+    return { topBrands: [...airtableBrands, ...hubspotBrands].slice(0, 15), scores: {} };
   }
 }
 
@@ -549,8 +671,8 @@ ${topBrands.map(b => `- ${b.name}: Score ${b.relevanceScore}, Budget ${b.budget}
 ` : ''}
 
 ${hubspotData.productions?.length > 0 ? `
-PRODUCTIONS (${hubspotData.productions.length} total):
-${hubspotData.productions.slice(0, 5).map(p => `- ${p.properties.dealname}: ${p.properties.content_type || 'Unknown type'}`).join('\n')}
+PRODUCTIONS/DEALS (${hubspotData.productions.length} total):
+${hubspotData.productions.slice(0, 5).map(p => `- ${p.properties.dealname}: ${p.properties.content_type || 'Unknown type'}, ${p.properties.distributor ? `Distributor: ${p.properties.distributor}` : ''}`).join('\n')}
 ` : ''}
 
 ${meetingData.records?.length > 0 ? `
