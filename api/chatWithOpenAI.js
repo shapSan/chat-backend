@@ -80,7 +80,7 @@ const hubspotAPI = {
     try {
       console.log('🔍 HubSpot searchBrands called with filters:', filters);
       
-      // More flexible search that will actually return results
+      // Search for companies that are actual brands
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
         method: 'POST',
         headers: {
@@ -88,15 +88,27 @@ const hubspotAPI = {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          filterGroups: [{
-            filters: [
-              // Just check if company has a name (all companies should)
-              { 
-                propertyName: 'name', 
-                operator: 'HAS_PROPERTY' 
-              }
-            ]
-          }],
+          filterGroups: [
+            {
+              // Look for companies that have brand_name filled
+              filters: [
+                { 
+                  propertyName: 'brand_name', 
+                  operator: 'HAS_PROPERTY' 
+                }
+              ]
+            },
+            {
+              // OR companies that are customers/opportunities (likely brands)
+              filters: [
+                { 
+                  propertyName: 'lifecyclestage', 
+                  operator: 'IN',
+                  values: ['customer', 'opportunity', 'salesqualifiedlead']
+                }
+              ]
+            }
+          ],
           properties: [
             'name',
             'brand_name',
@@ -112,7 +124,12 @@ const hubspotAPI = {
             'annualrevenue',
             'numberofemployees',
             'website',
-            'hs_lastmodifieddate'
+            'hs_lastmodifieddate',
+            // Additional fields you mentioned
+            'client_status',
+            'target_generation',
+            'target_income',
+            'playbook'
           ],
           limit: filters.limit || 50,
           sorts: [{ 
@@ -131,16 +148,6 @@ const hubspotAPI = {
       const data = await response.json();
       console.log(`✅ HubSpot search returned ${data.results?.length || 0} companies`);
       
-      // Log sample data to debug
-      if (data.results && data.results.length > 0) {
-        console.log('Sample company:', {
-          name: data.results[0].properties.name,
-          brand_name: data.results[0].properties.brand_name,
-          company_type: data.results[0].properties.company_type,
-          lifecyclestage: data.results[0].properties.lifecyclestage
-        });
-      }
-      
       return data;
     } catch (error) {
       console.error('❌ Error searching HubSpot brands:', error);
@@ -149,10 +156,11 @@ const hubspotAPI = {
     }
   },
 
-  async searchDeals(filters = {}) {
+  async searchProductions(filters = {}) {
     try {
-      console.log('🔍 HubSpot searchDeals called');
+      console.log('🔍 HubSpot searchProductions called (searching Deals)');
       
+      // Productions/Partnerships are stored as Deals
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/deals/search`, {
         method: 'POST',
         headers: {
@@ -169,16 +177,23 @@ const hubspotAPI = {
             ]
           }],
           properties: [
-            'dealname',
+            'dealname',  // This is the Production/Partnership Name
             'content_type',
-            'description',
-            'dealstage',
+            'description',  // This might be Synopsis
+            'dealstage',  // Partnership pipeline stage
             'closedate',
             'amount',
             'pipeline',
             'distributor',
             'brand_name',
-            'hs_lastmodifieddate'
+            'hs_lastmodifieddate',
+            'hubspot_owner_id',  // Owner
+            // Try to get custom fields that might exist
+            'production_scale',
+            'talent',
+            'have_contact',
+            'synopsis',
+            'partnership_overview'
           ],
           limit: filters.limit || 30,
           sorts: [{ 
@@ -190,18 +205,23 @@ const hubspotAPI = {
       
       if (!response.ok) {
         const errorBody = await response.text();
-        console.error('❌ HubSpot Deals API error:', response.status, errorBody);
+        console.error('❌ HubSpot Productions API error:', response.status, errorBody);
         throw new Error(`HubSpot API error: ${response.status}`);
       }
       
       const data = await response.json();
-      console.log(`✅ HubSpot search returned ${data.results?.length || 0} deals`);
+      console.log(`✅ HubSpot search returned ${data.results?.length || 0} productions/partnerships`);
       
       return data;
     } catch (error) {
-      console.error('❌ Error searching HubSpot deals:', error);
+      console.error('❌ Error searching HubSpot productions:', error);
       return { results: [] };
     }
+  },
+
+  async searchDeals(filters = {}) {
+    // Alias for searchProductions since they're the same thing
+    return this.searchProductions(filters);
   },
 
   async getContactsForCompany(companyId) {
@@ -409,7 +429,8 @@ async function searchHubSpot(query, projectId, limit = 50) {
     const needsProductions = queryLower.includes('production') || 
                            queryLower.includes('project') ||
                            queryLower.includes('upcoming') ||
-                           queryLower.includes('deal');
+                           queryLower.includes('deal') ||
+                           queryLower.includes('partnership');
     
     // Search for brands/companies
     const brandsData = await hubspotAPI.searchBrands({ limit });
@@ -437,11 +458,11 @@ async function searchHubSpot(query, projectId, limit = 50) {
       });
     }
     
-    // Search for productions/deals if needed
+    // Search for productions/partnerships (stored as Deals)
     let productions = [];
     if (needsProductions) {
-      const dealsData = await hubspotAPI.searchDeals({ limit: 30 });
-      productions = dealsData.results || [];
+      const productionsData = await hubspotAPI.searchProductions({ limit: 30 });
+      productions = productionsData.results || [];
     }
     
     console.log(`✅ HubSpot search complete: ${enrichedBrands.length} brands, ${productions.length} productions`);
@@ -483,7 +504,7 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
     }
     
     // Add common distributor/studio keywords to exclude
-    const studioKeywords = ['studios', 'pictures', 'entertainment', 'films', 'productions', 'distribution'];
+    const studioKeywords = ['studios', 'pictures', 'films', 'productions', 'distribution'];
     
     // Combine and deduplicate brands from both sources
     const allBrands = [];
