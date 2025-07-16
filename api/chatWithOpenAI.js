@@ -16,8 +16,9 @@ export const config = {
 const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
-const anthropicApiKey = process.env.ANTHROPIC_API_KEY; // Add this to your Vercel env vars
-const runwayApiKey = process.env.RUNWAY_API_KEY; // 🔑 Runway API key
+const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+const runwayApiKey = process.env.RUNWAY_API_KEY;
+const hubspotApiKey = process.env.HUBSPOT_API_KEY; // Add this to your Vercel env vars
 
 // Project configuration mapping - INCLUDING VOICE SETTINGS
 const PROJECT_CONFIGS = {
@@ -25,7 +26,7 @@ const PROJECT_CONFIGS = {
     baseId: 'appTYnw2qIaBIGRbR',
     chatTable: 'EagleView_Chat',
     knowledgeTable: 'Chat-KnowledgeBase',
-    voiceId: '21m00Tcm4TlvDq8ikWAM', // Default voice
+    voiceId: '21m00Tcm4TlvDq8ikWAM',
     voiceSettings: {
       stability: 0.5,
       similarity_boost: 0.75,
@@ -37,7 +38,7 @@ const PROJECT_CONFIGS = {
     baseId: 'apphslK7rslGb7Z8K',
     chatTable: 'Chat-Conversations',
     knowledgeTable: 'Chat-KnowledgeBase',
-    voiceId: 'GFj1cj74yBDgwZqlLwgS', // Professional pitch voice
+    voiceId: 'GFj1cj74yBDgwZqlLwgS',
     voiceSettings: {
       stability: 0.34,
       similarity_boost: 0.8,
@@ -46,10 +47,10 @@ const PROJECT_CONFIGS = {
     }
   },
   'real-estate': {
-    baseId: 'appYYYYYYYYYYYYYY', // Replace with actual base ID
+    baseId: 'appYYYYYYYYYYYYYY',
     chatTable: 'RealEstate_Chat',
     knowledgeTable: 'RealEstate_Knowledge',
-    voiceId: 'EXAVITQu4vr4xnSDxMaL', // Different voice for real estate
+    voiceId: 'EXAVITQu4vr4xnSDxMaL',
     voiceSettings: {
       stability: 0.6,
       similarity_boost: 0.8,
@@ -58,10 +59,10 @@ const PROJECT_CONFIGS = {
     }
   },
   'healthcare': {
-    baseId: 'appZZZZZZZZZZZZZZ', // Replace with actual base ID
+    baseId: 'appZZZZZZZZZZZZZZ',
     chatTable: 'Healthcare_Chat',
     knowledgeTable: 'Healthcare_Knowledge',
-    voiceId: 'MF3mGyEYCl7XYWbV9V6O', // Calm, professional voice for healthcare
+    voiceId: 'MF3mGyEYCl7XYWbV9V6O',
     voiceSettings: {
       stability: 0.7,
       similarity_boost: 0.7,
@@ -69,16 +70,134 @@ const PROJECT_CONFIGS = {
       use_speaker_boost: false
     }
   }
-  // Add more project configurations as needed
+};
+
+// HubSpot API Helper Functions
+const hubspotAPI = {
+  baseUrl: 'https://api.hubapi.com',
+  
+  async searchBrands(filters = {}) {
+    try {
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${hubspotApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          filterGroups: [{
+            filters: [
+              { propertyName: 'company_type', operator: 'CONTAINS_TOKEN', value: 'Brand' },
+              { propertyName: 'lifecyclestage', operator: 'IN', values: ['customer', 'opportunity'] },
+              { propertyName: 'num_associated_contacts', operator: 'GT', value: '0' },
+              ...(filters.additionalFilters || [])
+            ]
+          }],
+          properties: [
+            'name', 'brand_name', 'brand_category', 'lifecyclestage',
+            'media_spend_m_', 'partner_agency_name', 'notes_last_contacted',
+            'num_associated_contacts', 'description'
+          ],
+          limit: filters.limit || 50,
+          sorts: filters.sorts || [{ propertyName: 'notes_last_contacted', direction: 'DESCENDING' }]
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HubSpot API error: ${response.status}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error searching HubSpot brands:', error);
+      return { results: [] };
+    }
+  },
+
+  async searchDeals(filters = {}) {
+    try {
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/deals/search`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${hubspotApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          filterGroups: [{
+            filters: [
+              { propertyName: 'dealstage', operator: 'HAS_PROPERTY' },
+              ...(filters.additionalFilters || [])
+            ]
+          }],
+          properties: [
+            'dealname', 'content_type', 'description', 'dealstage',
+            'closedate', 'amount', 'pipeline'
+          ],
+          limit: filters.limit || 30
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HubSpot API error: ${response.status}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error searching HubSpot deals:', error);
+      return { results: [] };
+    }
+  },
+
+  async getContactsForCompany(companyId) {
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/crm/v3/objects/companies/${companyId}/associations/contacts`,
+        {
+          headers: {
+            'Authorization': `Bearer ${hubspotApiKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`HubSpot API error: ${response.status}`);
+      }
+      
+      const associations = await response.json();
+      
+      // Get contact details
+      if (associations.results && associations.results.length > 0) {
+        const contactIds = associations.results.map(r => r.id);
+        const batchResponse = await fetch(`${this.baseUrl}/crm/v3/objects/contacts/batch/read`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${hubspotApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            inputs: contactIds.slice(0, 10).map(id => ({ id })),
+            properties: ['firstname', 'lastname', 'email', 'jobtitle']
+          })
+        });
+        
+        if (batchResponse.ok) {
+          const contactData = await batchResponse.json();
+          return contactData.results || [];
+        }
+      }
+      
+      return [];
+    } catch (error) {
+      console.error('Error getting contacts:', error);
+      return [];
+    }
+  }
 };
 
 function getProjectConfig(projectId) {
-  // Return the config for the projectId, or default if not found
   const config = PROJECT_CONFIGS[projectId] || PROJECT_CONFIGS['default'];
-  
-  // Log which config is being used (for debugging)
   console.log(`Using project config for: ${projectId || 'default'}`);
-  
   return config;
 }
 
@@ -96,117 +215,7 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-/**
- * Generate a video from text using Runway AI's SDK
- * Uses text prompt directly with image-to-video model
- * @param {Object} params - Video generation parameters
- * @returns {Promise<{url: string, taskId: string}>} - Video URL and task ID
- */
-async function generateRunwayVideo({ 
-  promptText, 
-  promptImage, 
-  model = 'gen3_alpha_turbo',  // Cheaper model - uses fewer credits
-  ratio = '1280:720',
-  duration = 5
-}) {
-  if (!runwayApiKey) {
-    throw new Error('RUNWAY_API_KEY not configured');
-  }
-
-  console.log('🎬 Starting Runway video generation...');
-
-  try {
-    // Initialize Runway client
-    const client = new RunwayML({
-      apiKey: runwayApiKey
-    });
-
-    // For now, let's use a default cinematic image if none provided
-    // This is a temporary solution until we can properly generate images
-    let imageToUse = promptImage;
-    
-    if (!imageToUse || imageToUse.includes('dummyimage.com')) {
-      console.log('📸 Using default cinematic image for video generation...');
-      // Use a high-quality cinematic image as base
-      imageToUse = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1280&h=720&fit=crop&q=80';
-    }
-
-    // Create the video with the text prompt guiding the animation
-    console.log('🎥 Creating video...');
-    const videoTask = await client.imageToVideo.create({
-      model: model,
-      promptImage: imageToUse,
-      promptText: promptText, // This will guide how the video animates
-      ratio: ratio,
-      duration: duration
-    });
-
-    console.log('✅ Video task created:', videoTask.id);
-
-    // Poll for completion
-    console.log('⏳ Waiting for video generation...');
-    let task = videoTask;
-    let attempts = 0;
-    const maxAttempts = 60; // 5 minutes max
-
-    while (attempts < maxAttempts) {
-      task = await client.tasks.retrieve(task.id);
-      console.log(`🔄 Status: ${task.status} (${attempts + 1}/60)`);
-
-      if (task.status === 'SUCCEEDED') {
-        console.log('✅ Video ready!');
-        
-        const videoUrl = task.output?.[0];
-        if (!videoUrl) {
-          throw new Error('No video URL in output');
-        }
-
-        return {
-          url: videoUrl,
-          taskId: task.id
-        };
-      }
-
-      if (task.status === 'FAILED') {
-        console.error('Task failed:', task);
-        throw new Error(`Generation failed: ${task.failure || task.error || 'Unknown error'}`);
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      attempts++;
-    }
-
-    throw new Error('Video generation timed out');
-
-  } catch (error) {
-    console.error('Runway Error Details:', {
-      message: error.message,
-      status: error.status,
-      error: error.error
-    });
-    
-    // Better error messages
-    if (error.message?.includes('401')) {
-      throw new Error('Invalid API key. Check RUNWAY_API_KEY in Vercel settings.');
-    }
-    
-    if (error.message?.includes('429')) {
-      throw new Error('Rate limit exceeded. Try again later.');
-    }
-    
-    if (error.message?.includes('insufficient_credits') || error.status === 402) {
-      throw new Error('Runway credits exhausted. Please upgrade your plan or wait for credits to reset.');
-    }
-    
-    if (error.status === 504 || error.message?.includes('timeout')) {
-      throw new Error('Video generation timed out. This usually means the server is busy. Please try again.');
-    }
-    
-    throw error;
-  }
-}
-
-// Stage 1: Enhanced search function that returns structured data for Claude
+// Stage 1: Enhanced search function that now includes HubSpot
 async function searchAirtable(query, projectId, searchType = 'auto', limit = 100) {
   console.log('🔍 Stage 1: Searching Airtable:', { query, projectId, searchType, limit });
   
@@ -226,16 +235,16 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
     }
     
     const config = {
-      baseId: 'apphslK7rslGb7Z8K', // Your actual base ID
+      baseId: 'apphslK7rslGb7Z8K',
       searchMappings: {
         'meetings': {
-          table: 'Meeting Steam', // Your actual table name
-          view: 'ALL Meetings', // Could use a filtered view like 'Recent 30 Days'
+          table: 'Meeting Steam',
+          view: 'ALL Meetings',
           fields: ['Title', 'Date', 'Summary', 'Link']
         },
         'brands': {
-          table: 'Brands', // Your actual table name
-          view: null, // Could use 'Active Brands' view
+          table: 'Brands',
+          view: null,
           fields: ['Brand Name', 'Last Modified', 'Category', 'Budget', 'Campaign Summary']
         }
       }
@@ -280,7 +289,6 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
     const data = await response.json();
     console.log(`✅ Stage 1 complete: Got ${data.records.length} ${searchType} from Airtable`);
     
-    // Return raw data for next stage
     return {
       searchType,
       records: data.records,
@@ -293,13 +301,104 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
   }
 }
 
-// Stage 2: OpenAI narrowing function
-async function narrowWithOpenAI(brands, meetings, userMessage) {
+// New: Search HubSpot for brands and production data
+async function searchHubSpot(query, projectId, limit = 50) {
+  console.log('🔍 Searching HubSpot for brands and productions...');
+  
+  if (!hubspotApiKey) {
+    console.warn('No HubSpot API key configured, skipping HubSpot search');
+    return { brands: [], productions: [] };
+  }
+  
   try {
-    console.log(`🧮 Stage 2: Narrowing ${brands.length} brands with OpenAI...`);
+    // Parse the query to understand what's being asked
+    const queryLower = query.toLowerCase();
+    const needsProductions = queryLower.includes('production') || 
+                           queryLower.includes('project') ||
+                           queryLower.includes('upcoming');
     
-    // Only process if we have brands
-    if (!brands || brands.length === 0) {
+    // Search for brands
+    const brandsData = await hubspotAPI.searchBrands({ limit });
+    
+    // Enrich brands with contact data
+    const enrichedBrands = await Promise.all(
+      brandsData.results.slice(0, 20).map(async (brand) => {
+        const contacts = await hubspotAPI.getContactsForCompany(brand.id);
+        return {
+          id: brand.id,
+          properties: brand.properties,
+          contacts: contacts
+        };
+      })
+    );
+    
+    // Search for productions if needed
+    let productions = [];
+    if (needsProductions) {
+      const dealsData = await hubspotAPI.searchDeals({ limit: 30 });
+      productions = dealsData.results;
+    }
+    
+    console.log(`✅ HubSpot search complete: ${enrichedBrands.length} brands, ${productions.length} productions`);
+    
+    return {
+      brands: enrichedBrands,
+      productions: productions
+    };
+    
+  } catch (error) {
+    console.error('❌ Error searching HubSpot:', error);
+    return { brands: [], productions: [] };
+  }
+}
+
+// Stage 2: Enhanced narrowing that includes HubSpot data
+async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMessage) {
+  try {
+    console.log(`🧮 Stage 2: Narrowing ${airtableBrands.length + hubspotBrands.length} total brands with OpenAI...`);
+    
+    // Combine and deduplicate brands from both sources
+    const allBrands = [];
+    const brandNames = new Set();
+    
+    // Add Airtable brands
+    airtableBrands.forEach(b => {
+      const name = b.fields['Brand Name'];
+      if (name && !brandNames.has(name.toLowerCase())) {
+        brandNames.add(name.toLowerCase());
+        allBrands.push({
+          source: 'airtable',
+          name: name,
+          category: b.fields['Category'] || 'General',
+          budget: b.fields['Budget'] || 'TBD',
+          summary: (b.fields['Campaign Summary'] || '').slice(0, 100),
+          lastActivity: b.fields['Last Modified']
+        });
+      }
+    });
+    
+    // Add HubSpot brands
+    hubspotBrands.forEach(b => {
+      const name = b.properties.brand_name || b.properties.name;
+      if (name && !brandNames.has(name.toLowerCase())) {
+        brandNames.add(name.toLowerCase());
+        allBrands.push({
+          source: 'hubspot',
+          name: name,
+          category: b.properties.brand_category || 'General',
+          budget: b.properties.media_spend_m_ ? `$${b.properties.media_spend_m_}M` : 'TBD',
+          summary: (b.properties.description || '').slice(0, 100),
+          lastActivity: b.properties.notes_last_contacted,
+          hasPartner: !!b.properties.partner_agency_name,
+          partnerAgency: b.properties.partner_agency_name,
+          contactCount: b.contacts ? b.contacts.length : 0,
+          primaryContact: b.contacts && b.contacts[0] ? 
+            `${b.contacts[0].properties.firstname} ${b.contacts[0].properties.lastname} (${b.contacts[0].properties.email})` : null
+        });
+      }
+    });
+    
+    if (allBrands.length === 0) {
       return { topBrands: [], scores: {} };
     }
     
@@ -308,14 +407,14 @@ async function narrowWithOpenAI(brands, meetings, userMessage) {
 Production details: ${userMessage}
 
 Score these brands 0-100 based on relevance to this specific production.
-Consider: genre fit, budget alignment, campaign focus match, and natural integration opportunities.
-Higher scores for brands that naturally fit the production's themes, setting, and audience.
+Consider: genre fit, budget alignment, campaign focus match, natural integration opportunities, and partner relationships.
+Brands with partners or recent activity should score higher.
 
 Return ONLY a JSON object with brand names as keys and scores as values.
 
 Brands to evaluate:
-${brands.slice(0, 50).map(b => 
-  `${b.fields['Brand Name']}: ${b.fields['Category'] || 'General'}, Budget: ${b.fields['Budget'] || 'TBD'}, Focus: ${(b.fields['Campaign Summary'] || '').slice(0, 100)}`
+${allBrands.slice(0, 50).map(b => 
+  `${b.name}: ${b.category}, Budget: ${b.budget}${b.hasPartner ? ', Has Partner Agency' : ''}, ${b.summary}`
 ).join('\n')}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -325,18 +424,18 @@ ${brands.slice(0, 50).map(b =>
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo-1106', // Fast, cheap, good at JSON
+        model: 'gpt-3.5-turbo-1106',
         messages: [
           {
             role: 'system',
-            content: 'You are a relevance scoring engine for brand-production matching. Analyze the production details and score each brand based on natural fit. Return only valid JSON with brand names as keys and numeric scores 0-100 as values.'
+            content: 'You are a relevance scoring engine for brand-production matching. Score each brand 0-100 based on fit. Return only valid JSON.'
           },
           {
             role: 'user',
             content: scoringPrompt
           }
         ],
-        temperature: 0.3, // Low for consistency
+        temperature: 0.3,
         max_tokens: 800,
         response_format: { type: "json_object" }
       }),
@@ -344,38 +443,35 @@ ${brands.slice(0, 50).map(b =>
     
     if (!response.ok) {
       console.error('OpenAI scoring error:', response.status);
-      // If OpenAI fails, just return all brands
-      return { topBrands: brands.slice(0, 15), scores: {} };
+      return { topBrands: allBrands.slice(0, 15), scores: {} };
     }
     
     const data = await response.json();
     const scores = JSON.parse(data.choices[0].message.content);
     
     // Sort brands by score and take top 15
-    const topBrands = brands
-      .filter(b => b.fields['Brand Name']) // Ensure brand has a name
+    const topBrands = allBrands
       .map(b => ({
         ...b,
-        relevanceScore: scores[b.fields['Brand Name']] || 0
+        relevanceScore: scores[b.name] || 0
       }))
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .slice(0, 15);
     
     console.log(`✅ Stage 2 complete: Narrowed to ${topBrands.length} top brands`);
-    console.log(`🏆 Top 3: ${topBrands.slice(0, 3).map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`).join(', ')}`);
+    console.log(`🏆 Top 3: ${topBrands.slice(0, 3).map(b => `${b.name} (${b.relevanceScore})`).join(', ')}`);
     
     return { topBrands, scores };
     
   } catch (error) {
     console.error('❌ Error in OpenAI narrowing:', error);
-    // On error, just return first 15 brands
-    return { topBrands: brands.slice(0, 15), scores: {} };
+    return { topBrands: allBrands.slice(0, 15), scores: {} };
   }
 }
 
-// Stage 3: Claude-powered search handler for intelligent brand matching
+// Stage 3: Claude MCP search that ONLY gathers data (doesn't generate final response)
 async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId) {
-  console.log('🤖 Starting 3-stage intelligent brand-project matching...');
+  console.log('🤖 Starting Claude MCP data gathering with HubSpot integration...');
   
   if (!anthropicApiKey) {
     console.warn('No Anthropic API key found, falling back to OpenAI');
@@ -383,80 +479,66 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
   }
   
   try {
-    // Stage 1: Get data from Airtable
-    console.log('📊 Stage 1: Fetching from Airtable...');
-    const brandData = await searchAirtable(userMessage, projectId, 'brands', 100);
+    // Stage 1: Get data from both Airtable and HubSpot
+    console.log('📊 Stage 1: Fetching from Airtable and HubSpot...');
+    
+    // Parallel fetch from both sources
+    const [airtableData, hubspotData] = await Promise.all([
+      searchAirtable(userMessage, projectId, 'brands', 100),
+      hubspotApiKey ? searchHubSpot(userMessage, projectId, 50) : { brands: [], productions: [] }
+    ]);
+    
     const meetingData = await searchAirtable(userMessage, projectId, 'meetings', 50);
     
     // Check if we got actual data
-    if ((!brandData.records || brandData.records.length === 0) && 
+    if ((!airtableData.records || airtableData.records.length === 0) && 
+        (!hubspotData.brands || hubspotData.brands.length === 0) &&
         (!meetingData.records || meetingData.records.length === 0)) {
-      console.error('❌ No data returned from Airtable!');
+      console.error('❌ No data returned from either source!');
       return null;
     }
     
     // Stage 2: Narrow with OpenAI
     const { topBrands, scores } = await narrowWithOpenAI(
-      brandData.records, 
-      meetingData.records, 
+      airtableData.records || [],
+      hubspotData.brands || [],
+      meetingData.records || [],
       userMessage
     );
     
-    // Stage 3: Deep analysis with Claude
-    console.log('🧠 Stage 3: Claude deep analysis on top candidates...');
+    // Stage 3: Use Claude ONLY for organizing/analyzing data
+    console.log('🧠 Stage 3: Claude organizing data for OpenAI...');
     
-    // Start with the knowledge base instructions from Airtable - this is the primary prompt
-    let systemPrompt = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+    // Create a focused prompt for Claude to organize the data
+    const dataOrgPrompt = `You are a data analyst. Organize and summarize the following brand and meeting data for a production matching request.
+
+User Query: ${userMessage}
+
+Available Data:
+${topBrands.length > 0 ? `
+TOP BRANDS (${topBrands.length} total):
+${topBrands.map(b => `- ${b.name}: Score ${b.relevanceScore}, Budget ${b.budget}, ${b.hasPartner ? 'Has Partner' : 'No Partner'}, ${b.contactCount || 0} contacts`).join('\n')}
+` : ''}
+
+${hubspotData.productions?.length > 0 ? `
+PRODUCTIONS (${hubspotData.productions.length} total):
+${hubspotData.productions.slice(0, 5).map(p => `- ${p.properties.dealname}: ${p.properties.content_type || 'Unknown type'}`).join('\n')}
+` : ''}
+
+${meetingData.records?.length > 0 ? `
+RECENT MEETINGS (${meetingData.records.length} total):
+${meetingData.records.slice(0, 5).map(m => `- ${m.fields['Title'] || 'Untitled'}: ${(m.fields['Summary'] || '').slice(0, 50)}...`).join('\n')}
+` : ''}
+
+Please provide a structured JSON summary of:
+1. The most relevant brands for this query (top 5-10)
+2. Key insights about why these brands match
+3. Any relevant meetings or context
+4. Contact information available
+
+Return ONLY valid JSON, no other text.`;
     
-    // Add the narrowed data context
-    systemPrompt += "\n\n**PRIORITY CONTEXT FROM YOUR BUSINESS DATA:**\n\n";
-    
-    if (topBrands && topBrands.length > 0) {
-      systemPrompt += "**TOP RELEVANT BRANDS (pre-scored by relevance):**\n```json\n";
-      const brandInfo = topBrands.map(b => ({
-        brand: b.fields['Brand Name'] || 'Unknown',
-        relevance_score: b.relevanceScore || 0,
-        budget: b.fields['Budget'] || 0,
-        category: b.fields['Category'] || 'Uncategorized',
-        campaign_focus: b.fields['Campaign Summary'] || 'No campaign info',
-        last_activity: b.fields['Last Modified'] || 'Unknown'
-      }));
-      
-      systemPrompt += JSON.stringify(brandInfo, null, 2);
-      systemPrompt += "\n```\n\n";
-      
-      console.log(`📊 Sending ${brandInfo.length} top brands to Claude for deep analysis`);
-    }
-    
-    if (meetingData && meetingData.records && meetingData.records.length > 0) {
-      systemPrompt += "**RECENT MEETINGS & DISCUSSIONS:**\n```json\n";
-      const meetingInfo = meetingData.records
-        .filter(r => r.fields['Summary'] && r.fields['Summary'].length > 10) // Only meaningful meetings
-        .slice(0, 20) // Limit to most recent 20
-        .map(r => ({
-          meeting: r.fields['Title'] || 'Untitled',
-          date: r.fields['Date'] || 'No date',
-          key_points: r.fields['Summary'] || 'No summary',
-          link: r.fields['Link'] || null
-        }));
-      
-      systemPrompt += JSON.stringify(meetingInfo, null, 2);
-      systemPrompt += "\n```\n\n";
-      
-      console.log(`📅 Sending ${meetingInfo.length} relevant meetings to Claude`);
-    }
-    
-    // Add instructions for Claude to include meeting links in the response
-    systemPrompt += `
-When referencing meetings in your response:
-- If a meeting has a link, include it in your response formatted as: **Meeting: [Meeting Title]** Link: [URL]
-- This allows the frontend to create clickable hyperlinks for meeting references
-- Maintain the exact meeting titles from the data provided
-`;
-    
-    console.log('📤 Calling Claude API with focused data...');
-    
-    // Call Claude API
+    // Call Claude API for data organization
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -465,14 +547,13 @@ When referencing meetings in your response:
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022', // Most capable and cost-effective
-        max_tokens: 2000,
-        temperature: 0.7,
-        system: systemPrompt,
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1500,
+        temperature: 0.3, // Lower temperature for data organization
         messages: [
           {
             role: 'user',
-            content: userMessage
+            content: dataOrgPrompt
           }
         ]
       })
@@ -491,119 +572,173 @@ When referencing meetings in your response:
     }
     
     const data = await response.json();
-    console.log('✅ Claude API response received');
+    console.log('✅ Claude data organization complete');
     
+    let organizedData = {};
     if (data.content && data.content.length > 0) {
-      const reply = data.content[0].text;
-      
-      // Extract meaningful thinking steps based on actual data
-      const mcpThinking = [];
-      
-      // Add pipeline insights FIRST
-      mcpThinking.push(`Filtered ${brandData.total} brands → ${topBrands.length} top candidates`);
-      
-      // Show actual top brands from scoring
-      if (topBrands.length > 0 && scores) {
-        const topThree = topBrands
-          .slice(0, 3)
-          .map(b => `${b.fields['Brand Name']} (${b.relevanceScore})`)
-          .filter(Boolean);
-        mcpThinking.push(`Highest relevance: ${topThree.join(', ')}`);
+      try {
+        organizedData = JSON.parse(data.content[0].text);
+      } catch (e) {
+        console.error('Failed to parse Claude JSON response, using raw data');
+        organizedData = {
+          brands: topBrands,
+          meetings: meetingData.records,
+          productions: hubspotData.productions
+        };
       }
-      
-      // Analyze actual brand data from what Claude is seeing
-      if (topBrands && topBrands.length > 0) {
-        const hotBrands = [];
-        const highValueBrands = [];
-        const activeCategories = new Set();
-        
-        topBrands.forEach(record => {
-          const fields = record.fields;
-          if (!fields['Brand Name']) return;
-          
-          const brandName = fields['Brand Name'];
-          
-          // Track hot brands (active in last 7 days)
-          if (fields['Last Modified']) {
-            const daysSince = Math.floor((Date.now() - new Date(fields['Last Modified'])) / (1000 * 60 * 60 * 24));
-            if (daysSince < 7) {
-              hotBrands.push(brandName);
-            }
-          }
-          
-          // Track high-value opportunities
-          if (fields['Budget'] >= 5000000) {
-            highValueBrands.push(brandName);
-          }
-          
-          // Track categories
-          if (fields['Category']) {
-            if (Array.isArray(fields['Category'])) {
-              fields['Category'].forEach(cat => activeCategories.add(cat));
-            } else {
-              activeCategories.add(fields['Category']);
-            }
-          }
-        });
-        
-        // Add actual insights to thinking based on the narrowed data
-        if (hotBrands.length > 0) {
-          mcpThinking.push(`HOT brands (active this week): ${hotBrands.join(', ')}`);
-        }
-        if (highValueBrands.length > 0) {
-          mcpThinking.push(`High-value opportunities ($5M+): ${highValueBrands.join(', ')}`);
-        }
-        if (activeCategories.size > 0) {
-          mcpThinking.push(`Categories in play: ${Array.from(activeCategories).slice(0, 5).join(', ')}`);
-        }
-      }
-      
-      // Analyze meeting insights for the brands Claude is actually analyzing
-      if (meetingData && meetingData.records && topBrands) {
-        const brandsInMeetings = new Set();
-        const opportunities = [];
-        
-        meetingData.records.forEach(record => {
-          const summary = record.fields['Summary'] || '';
-          const title = record.fields['Title'] || '';
-          
-          // Only look for mentions of the top brands that Claude is analyzing
-          topBrands.forEach(brandRecord => {
-            const brandName = brandRecord.fields['Brand Name'];
-            if (brandName && summary.toLowerCase().includes(brandName.toLowerCase())) {
-              brandsInMeetings.add(brandName);
-            }
-          });
-          
-          // Find opportunities
-          if (summary.toLowerCase().includes('pulled out') || 
-              summary.toLowerCase().includes('budget available') ||
-              summary.toLowerCase().includes('looking for')) {
-            opportunities.push(title);
-          }
-        });
-        
-        if (brandsInMeetings.size > 0) {
-          mcpThinking.push(`Brands with recent meetings: ${Array.from(brandsInMeetings).join(', ')}`);
-        }
-        if (opportunities.length > 0) {
-          mcpThinking.push(`Meeting opportunities: ${opportunities.slice(0, 3).join(', ')}`);
-        }
-      }
-      
-      return {
-        reply,
-        mcpThinking,
-        usedMCP: true
-      };
     }
     
-    return null;
+    // Extract MCP thinking insights
+    const mcpThinking = [];
+    
+    // Add pipeline insights
+    mcpThinking.push(`Searched ${airtableData.total} Airtable + ${hubspotData.brands.length} HubSpot brands → ${topBrands.length} matches`);
+    
+    // Show data sources
+    const hubspotCount = topBrands.filter(b => b.source === 'hubspot').length;
+    const airtableCount = topBrands.filter(b => b.source === 'airtable').length;
+    mcpThinking.push(`Sources: ${hubspotCount} from HubSpot, ${airtableCount} from Airtable`);
+    
+    // Show top brands from scoring
+    if (topBrands.length > 0 && scores) {
+      const topThree = topBrands
+        .slice(0, 3)
+        .map(b => `${b.name} (${b.relevanceScore})`)
+        .filter(Boolean);
+      mcpThinking.push(`Top matches: ${topThree.join(', ')}`);
+    }
+    
+    // Analyze brand characteristics
+    const partneredBrands = topBrands.filter(b => b.hasPartner);
+    if (partneredBrands.length > 0) {
+      mcpThinking.push(`${partneredBrands.length} brands with agency partners (easier outreach)`);
+    }
+    
+    // Recent activity
+    const recentBrands = topBrands.filter(b => {
+      if (!b.lastActivity) return false;
+      const daysSince = Math.floor((Date.now() - new Date(b.lastActivity)) / (1000 * 60 * 60 * 24));
+      return daysSince < 30;
+    });
+    if (recentBrands.length > 0) {
+      mcpThinking.push(`${recentBrands.length} brands active in last 30 days`);
+    }
+    
+    // Return the organized data for OpenAI to format
+    return {
+      organizedData: {
+        topBrands: topBrands,
+        meetings: meetingData.records,
+        productions: hubspotData.productions,
+        claudeSummary: organizedData
+      },
+      mcpThinking,
+      usedMCP: true
+    };
     
   } catch (error) {
-    console.error('❌ Error in Claude search:', error);
+    console.error('❌ Error in Claude MCP search:', error);
     console.error('Error details:', error.stack);
     return null;
+  }
+}
+
+// Generate a video from text using Runway AI's SDK
+async function generateRunwayVideo({ 
+  promptText, 
+  promptImage, 
+  model = 'gen3_alpha_turbo',
+  ratio = '1280:720',
+  duration = 5
+}) {
+  if (!runwayApiKey) {
+    throw new Error('RUNWAY_API_KEY not configured');
+  }
+
+  console.log('🎬 Starting Runway video generation...');
+
+  try {
+    const client = new RunwayML({
+      apiKey: runwayApiKey
+    });
+
+    let imageToUse = promptImage;
+    
+    if (!imageToUse || imageToUse.includes('dummyimage.com')) {
+      console.log('📸 Using default cinematic image for video generation...');
+      imageToUse = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1280&h=720&fit=crop&q=80';
+    }
+
+    console.log('🎥 Creating video...');
+    const videoTask = await client.imageToVideo.create({
+      model: model,
+      promptImage: imageToUse,
+      promptText: promptText,
+      ratio: ratio,
+      duration: duration
+    });
+
+    console.log('✅ Video task created:', videoTask.id);
+
+    // Poll for completion
+    console.log('⏳ Waiting for video generation...');
+    let task = videoTask;
+    let attempts = 0;
+    const maxAttempts = 60;
+
+    while (attempts < maxAttempts) {
+      task = await client.tasks.retrieve(task.id);
+      console.log(`🔄 Status: ${task.status} (${attempts + 1}/60)`);
+
+      if (task.status === 'SUCCEEDED') {
+        console.log('✅ Video ready!');
+        
+        const videoUrl = task.output?.[0];
+        if (!videoUrl) {
+          throw new Error('No video URL in output');
+        }
+
+        return {
+          url: videoUrl,
+          taskId: task.id
+        };
+      }
+
+      if (task.status === 'FAILED') {
+        console.error('Task failed:', task);
+        throw new Error(`Generation failed: ${task.failure || task.error || 'Unknown error'}`);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      attempts++;
+    }
+
+    throw new Error('Video generation timed out');
+
+  } catch (error) {
+    console.error('Runway Error Details:', {
+      message: error.message,
+      status: error.status,
+      error: error.error
+    });
+    
+    if (error.message?.includes('401')) {
+      throw new Error('Invalid API key. Check RUNWAY_API_KEY in Vercel settings.');
+    }
+    
+    if (error.message?.includes('429')) {
+      throw new Error('Rate limit exceeded. Try again later.');
+    }
+    
+    if (error.message?.includes('insufficient_credits') || error.status === 402) {
+      throw new Error('Runway credits exhausted. Please upgrade your plan or wait for credits to reset.');
+    }
+    
+    if (error.status === 504 || error.message?.includes('timeout')) {
+      throw new Error('Video generation timed out. This usually means the server is busy. Please try again.');
+    }
+    
+    throw error;
   }
 }
 
@@ -714,7 +849,6 @@ export default async function handler(req, res) {
         }
 
         try {
-          // Validate inputs
           if (!promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
             return res.status(400).json({
               error: 'Invalid image format',
@@ -722,7 +856,6 @@ export default async function handler(req, res) {
             });
           }
           
-          // Use a default test image if the provided one is from dummyimage.com
           let imageToUse = promptImage;
           if (promptImage.includes('dummyimage.com')) {
             console.log('⚠️ Replacing dummyimage.com with a proper test image');
@@ -734,7 +867,7 @@ export default async function handler(req, res) {
             promptImage: imageToUse,
             model: model || 'gen4_turbo',
             ratio: ratio || '1280:720',
-            duration: duration || 5  // Reduce from 10 to 5 seconds
+            duration: duration || 5
           });
 
           console.log('✅ Video generated successfully:', taskId);
@@ -825,21 +958,18 @@ export default async function handler(req, res) {
         console.error(`Error fetching conversation history:`, error);
       }
 
-      // IMPROVED Search Query Detection - only for brand matching requests
+      // Enhanced search query detection
       const isBrandMatchingQuery = userMessage && (
-        // Direct brand requests
         userMessage.toLowerCase().includes('brand') ||
         userMessage.toLowerCase().includes('match') ||
         userMessage.toLowerCase().includes('integration') ||
         userMessage.toLowerCase().includes('partnership') ||
-        // Suggestion button phrases
         userMessage.toLowerCase().includes('easy money') ||
         userMessage.toLowerCase().includes('wildcard') ||
         userMessage.toLowerCase().includes('audience match') ||
         userMessage.toLowerCase().includes('hot new brands') ||
         userMessage.toLowerCase().includes('fits the story') ||
         userMessage.toLowerCase().includes('save production money') ||
-        // Production context phrases
         userMessage.toLowerCase().includes('for this project') ||
         userMessage.toLowerCase().includes('for this production') ||
         userMessage.toLowerCase().includes('upcoming') ||
@@ -926,10 +1056,14 @@ export default async function handler(req, res) {
           let mcpThinking = [];
           let usedMCP = false;
 
-          // Try Claude for brand matching queries
+          // Try Claude MCP for data gathering on brand matching queries
+          let claudeOrganizedData = null;
           if (isBrandMatchingQuery && anthropicApiKey) {
-            console.log('🎯 Brand matching query detected - attempting Claude...');
-            console.log('🔑 Anthropic API key:', anthropicApiKey ? 'Present' : 'MISSING!');
+            console.log('🎯 Brand matching query detected - attempting Claude MCP data gathering...');
+            console.log('🔑 API keys:', {
+              anthropic: anthropicApiKey ? 'Present' : 'MISSING!',
+              hubspot: hubspotApiKey ? 'Present' : 'MISSING!'
+            });
             
             const claudeResult = await handleClaudeSearch(
               userMessage, 
@@ -939,29 +1073,79 @@ export default async function handler(req, res) {
             );
             
             if (claudeResult) {
-              aiReply = claudeResult.reply;
+              claudeOrganizedData = claudeResult.organizedData;
               mcpThinking = claudeResult.mcpThinking;
               usedMCP = true;
-              console.log('✅ Used Claude for intelligent brand matching');
+              console.log('✅ Claude MCP successfully gathered and organized data');
               console.log('🧠 MCP Thinking:', mcpThinking);
             } else {
-              console.log('⚠️ Claude failed or returned null, falling back to OpenAI');
+              console.log('⚠️ Claude MCP failed or returned null, using standard OpenAI');
             }
           } else {
             if (!isBrandMatchingQuery) {
-              console.log('❌ Not a brand matching query - using OpenAI');
+              console.log('❌ Not a brand matching query - using standard OpenAI');
             }
             if (!anthropicApiKey) {
-              console.log('❌ No Anthropic API key - using OpenAI');
+              console.log('❌ No Anthropic API key - using standard OpenAI');
             }
           }
           
-          // Fall back to OpenAI if Claude didn't handle it
+          // Use OpenAI to generate the final response
           if (!aiReply) {
-            console.log('📝 Using OpenAI for response');
+            console.log('📝 Using OpenAI for response generation');
             
-            // Build system message
+            // Build enhanced system message with Claude's organized data
             let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+            
+            // Add Claude's organized data if available
+            if (claudeOrganizedData) {
+              systemMessageContent += "\n\n**INTELLIGENT SEARCH RESULTS FROM YOUR DATABASE:**\n";
+              
+              if (claudeOrganizedData.topBrands && claudeOrganizedData.topBrands.length > 0) {
+                systemMessageContent += "\n**TOP MATCHED BRANDS:**\n";
+                claudeOrganizedData.topBrands.slice(0, 10).forEach((brand, index) => {
+                  systemMessageContent += `${index + 1}. ${brand.name}\n`;
+                  systemMessageContent += `   - Relevance Score: ${brand.relevanceScore}/100\n`;
+                  systemMessageContent += `   - Budget: ${brand.budget}\n`;
+                  systemMessageContent += `   - Category: ${brand.category}\n`;
+                  if (brand.hasPartner) {
+                    systemMessageContent += `   - Partner Agency: ${brand.partnerAgency}\n`;
+                  }
+                  if (brand.primaryContact) {
+                    systemMessageContent += `   - Primary Contact: ${brand.primaryContact}\n`;
+                  }
+                  systemMessageContent += `   - Last Activity: ${brand.lastActivity || 'Unknown'}\n`;
+                  systemMessageContent += `   - Summary: ${brand.summary}\n\n`;
+                });
+              }
+              
+              if (claudeOrganizedData.meetings && claudeOrganizedData.meetings.length > 0) {
+                systemMessageContent += "\n**RELEVANT MEETINGS:**\n";
+                claudeOrganizedData.meetings.slice(0, 10).forEach(meeting => {
+                  systemMessageContent += `- ${meeting.fields['Title'] || 'Untitled'} (${meeting.fields['Date'] || 'No date'})\n`;
+                  if (meeting.fields['Link']) {
+                    systemMessageContent += `  Meeting: ${meeting.fields['Title']} Link: ${meeting.fields['Link']}\n`;
+                  }
+                  if (meeting.fields['Summary']) {
+                    systemMessageContent += `  Summary: ${meeting.fields['Summary'].slice(0, 200)}...\n`;
+                  }
+                  systemMessageContent += "\n";
+                });
+              }
+              
+              if (claudeOrganizedData.claudeSummary) {
+                systemMessageContent += "\n**ANALYSIS INSIGHTS:**\n";
+                systemMessageContent += JSON.stringify(claudeOrganizedData.claudeSummary, null, 2);
+                systemMessageContent += "\n";
+              }
+              
+              systemMessageContent += "\n**INSTRUCTIONS:**\n";
+              systemMessageContent += "- Use the above data to provide specific brand recommendations\n";
+              systemMessageContent += "- Include meeting references with their links in the format: Meeting: [Title] Link: [URL]\n";
+              systemMessageContent += "- Prioritize brands with partners and recent activity\n";
+              systemMessageContent += "- Suggest integration ideas for each brand\n";
+            }
+            
             if (conversationContext) {
               systemMessageContent += `\n\nConversation history: ${conversationContext}`;
             }
