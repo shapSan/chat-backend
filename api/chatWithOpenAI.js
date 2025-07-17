@@ -18,9 +18,9 @@ const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 const runwayApiKey = process.env.RUNWAY_API_KEY;
-const hubspotApiKey = process.env.HUBSPOT_API_KEY; // Add this to your Vercel env vars
+const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 
-// Project configuration mapping - INCLUDING VOICE SETTINGS
+// Project configuration mapping
 const PROJECT_CONFIGS = {
   'default': {
     baseId: 'appTYnw2qIaBIGRbR',
@@ -48,7 +48,7 @@ const PROJECT_CONFIGS = {
   }
 };
 
-// HubSpot API Helper Functions - FIXED VERSION
+// HubSpot API Helper Functions
 const hubspotAPI = {
   baseUrl: 'https://api.hubapi.com',
   
@@ -537,8 +537,8 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
           source: 'hubspot',
           name: name,
           category: b.properties.brand_category || b.properties.industry || 'General',
-          budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 
-                  b.properties.annualrevenue ? `Revenue: ${(b.properties.annualrevenue/1000000).toFixed(1)}M` : 'TBD',
+          budget: b.properties.media_spend_m_ ? `$${b.properties.media_spend_m_}M` : 
+                  b.properties.annualrevenue ? `Revenue: $${(b.properties.annualrevenue/1000000).toFixed(1)}M` : 'TBD',
           summary: (b.properties.description || '').slice(0, 100),
           lastActivity: b.properties.notes_last_contacted || b.properties.hs_lastmodifieddate,
           hasPartner: !!b.properties.partner_agency_name,
@@ -548,7 +548,12 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
             `${b.contacts[0].properties.firstname || ''} ${b.contacts[0].properties.lastname || ''} ${b.contacts[0].properties.email ? `(${b.contacts[0].properties.email})` : ''}`.trim() : null,
           isBrand: isBrand,
           website: b.properties.website,
-          employees: b.properties.numberofemployees
+          employees: b.properties.numberofemployees,
+          // Additional fields
+          clientStatus: b.properties.client_status,
+          targetGeneration: b.properties.target_generation,
+          targetIncome: b.properties.target_income,
+          playbook: b.properties.playbook
         });
       }
     });
@@ -715,7 +720,7 @@ ${topBrands.map(b => `- ${b.name}: Score ${b.relevanceScore}, Budget ${b.budget}
 ` : ''}
 
 ${hubspotData.productions?.length > 0 ? `
-PRODUCTIONS/DEALS (${hubspotData.productions.length} total):
+PRODUCTIONS (${hubspotData.productions.length} total):
 ${hubspotData.productions.slice(0, 5).map(p => `- ${p.properties.dealname}: ${p.properties.content_type || 'Unknown type'}, ${p.properties.distributor ? `Distributor: ${p.properties.distributor}` : ''}`).join('\n')}
 ` : ''}
 
@@ -788,11 +793,6 @@ Return ONLY valid JSON, no other text.`;
     
     // Add pipeline insights
     mcpThinking.push(`Searched ${airtableData.total} Airtable + ${hubspotData.brands.length} HubSpot brands → ${topBrands.length} matches`);
-    
-    // Show data sources
-    const hubspotCount = topBrands.filter(b => b.source === 'hubspot').length;
-    const airtableCount = topBrands.filter(b => b.source === 'airtable').length;
-    mcpThinking.push(`Sources: ${hubspotCount} from HubSpot, ${airtableCount} from Airtable`);
     
     // Show top brands from scoring
     if (topBrands.length > 0 && scores) {
