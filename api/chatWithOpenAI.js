@@ -54,62 +54,41 @@ const hubspotAPI = {
   
   async searchBrands(filters = {}) {
     try {
-      console.log('🔍 HubSpot searchBrands called with filters:', filters);
+      console.log('🔍 HubSpot searchBrands called - searching BRANDS custom object');
       
-      // Search for companies that are actual brands
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
+      // Search the BRANDS custom object directly
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/brands/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          filterGroups: [
-            {
-              // Look for companies that have brand_name filled
-              filters: [
-                { 
-                  propertyName: 'brand_name', 
-                  operator: 'HAS_PROPERTY' 
-                }
-              ]
-            },
-            {
-              // OR companies that are customers/opportunities (likely brands)
-              filters: [
-                { 
-                  propertyName: 'lifecyclestage', 
-                  operator: 'IN',
-                  values: ['customer', 'opportunity', 'salesqualifiedlead']
-                }
-              ]
-            }
-          ],
+          filterGroups: [{
+            filters: [
+              // Just get all brands - we'll filter by relevance later
+              { 
+                propertyName: 'brand_name', 
+                operator: 'HAS_PROPERTY' 
+              }
+            ]
+          }],
           properties: [
-            'name',
             'brand_name',
-            'company_type',
-            'brand_category',
-            'lifecyclestage',
-            'media_spend_m_',
-            'partner_agency_name',
-            'notes_last_contacted',
-            'num_associated_contacts',
-            'description',
-            'industry',
-            'annualrevenue',
-            'numberofemployees',
-            'website',
-            'hs_lastmodifieddate',
-            // Additional fields you mentioned
-            'client_status',
+            'product_main_category',
             'target_generation',
             'target_income',
-            'playbook'
+            'client_status',
+            'playbook',
+            'object_last_modified_date_time_pdt',
+            'media_spend_m_',
+            'partner_agency_name',
+            'description',
+            'record_id'
           ],
-          limit: filters.limit || 50,
+          limit: filters.limit || 100,
           sorts: [{ 
-            propertyName: 'hs_lastmodifieddate', 
+            propertyName: 'object_last_modified_date_time_pdt', 
             direction: 'DESCENDING' 
           }]
         })
@@ -122,7 +101,7 @@ const hubspotAPI = {
       }
       
       const data = await response.json();
-      console.log(`✅ HubSpot search returned ${data.results?.length || 0} companies`);
+      console.log(`✅ HubSpot search returned ${data.results?.length || 0} brands`);
       
       return data;
     } catch (error) {
@@ -132,12 +111,12 @@ const hubspotAPI = {
     }
   },
 
-  async searchProductions(filters = {}) {
+  async searchPartnerships(filters = {}) {
     try {
-      console.log('🔍 HubSpot searchProductions called (searching Deals)');
+      console.log('🔍 HubSpot searchPartnerships called - searching PARTNERSHIPS custom object');
       
-      // Productions/Partnerships are stored as Deals
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/deals/search`, {
+      // Search the PARTNERSHIPS custom object for productions
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/partnerships/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -147,33 +126,27 @@ const hubspotAPI = {
           filterGroups: [{
             filters: [
               { 
-                propertyName: 'dealname', 
+                propertyName: 'production_name', 
                 operator: 'HAS_PROPERTY' 
               }
             ]
           }],
           properties: [
-            'dealname',  // This is the Production/Partnership Name
-            'content_type',
-            'description',  // This might be Synopsis
-            'dealstage',  // Partnership pipeline stage
-            'closedate',
-            'amount',
-            'pipeline',
-            'distributor',
-            'brand_name',
-            'hs_lastmodifieddate',
-            'hubspot_owner_id',  // Owner
-            // Try to get custom fields that might exist
-            'production_scale',
+            'production_name',  // The actual production/movie/show name
+            'partnership_pipeline_stage',  // Status of the partnership
+            'partners_pipeline_status',  // Important for stage tracking
+            'owner_name',
             'talent',
+            'production_scale',
+            'synopsis',  // or partnership_overview
+            'partnership_overview',
             'have_contact',
-            'synopsis',
-            'partnership_overview'
+            'object_last_modified_date_time_pdt',
+            'record_id'
           ],
           limit: filters.limit || 30,
           sorts: [{ 
-            propertyName: 'hs_lastmodifieddate', 
+            propertyName: 'object_last_modified_date_time_pdt', 
             direction: 'DESCENDING' 
           }]
         })
@@ -181,23 +154,58 @@ const hubspotAPI = {
       
       if (!response.ok) {
         const errorBody = await response.text();
-        console.error('❌ HubSpot Productions API error:', response.status, errorBody);
+        console.error('❌ HubSpot Partnerships API error:', response.status, errorBody);
         throw new Error(`HubSpot API error: ${response.status}`);
       }
       
       const data = await response.json();
-      console.log(`✅ HubSpot search returned ${data.results?.length || 0} productions/partnerships`);
+      console.log(`✅ HubSpot search returned ${data.results?.length || 0} partnerships/productions`);
       
       return data;
     } catch (error) {
-      console.error('❌ Error searching HubSpot productions:', error);
+      console.error('❌ Error searching HubSpot partnerships:', error);
       return { results: [] };
     }
   },
 
+  async searchProductions(filters = {}) {
+    // Alias for searchPartnerships since productions are stored there
+    return this.searchPartnerships(filters);
+  },
+
   async searchDeals(filters = {}) {
-    // Alias for searchProductions since they're the same thing
-    return this.searchProductions(filters);
+    // Keep this for backward compatibility but productions are in Partnerships
+    return this.searchPartnerships(filters);
+  },
+
+  async getBrandAssociations(brandId) {
+    try {
+      console.log('🔍 Getting partnerships associated with brand:', brandId);
+      
+      const response = await fetch(
+        `${this.baseUrl}/crm/v3/objects/brands/${brandId}/associations/partnerships`,
+        {
+          headers: {
+            'Authorization': `Bearer ${hubspotApiKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('❌ HubSpot Associations API error:', response.status, errorBody);
+        throw new Error(`HubSpot API error: ${response.status}`);
+      }
+      
+      const associations = await response.json();
+      console.log(`Found ${associations.results?.length || 0} partnership associations`);
+      
+      return associations.results || [];
+    } catch (error) {
+      console.error('❌ Error getting brand associations:', error);
+      return [];
+    }
   },
 
   async getContactsForCompany(companyId) {
@@ -384,7 +392,7 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
 
 // New: Search HubSpot for brands and production data
 async function searchHubSpot(query, projectId, limit = 50) {
-  console.log('🔍 Searching HubSpot for brands and productions...');
+  console.log('🔍 Searching HubSpot for brands and partnerships...');
   
   if (!hubspotApiKey) {
     console.warn('No HubSpot API key configured, skipping HubSpot search');
@@ -399,48 +407,37 @@ async function searchHubSpot(query, projectId, limit = 50) {
       return { brands: [], productions: [] };
     }
     
-    // Parse the query to understand what's being asked
-    const queryLower = query.toLowerCase();
-    const needsProductions = queryLower.includes('production') || 
-                           queryLower.includes('project') ||
-                           queryLower.includes('upcoming') ||
-                           queryLower.includes('deal') ||
-                           queryLower.includes('partnership');
-    
-    // Search for brands/companies
+    // Search for brands from the Brands custom object
     const brandsData = await hubspotAPI.searchBrands({ limit });
     
-    // Enrich brands with contact data (only for top brands to avoid rate limits)
+    // Enrich brands with their associated partnerships count
     const enrichedBrands = await Promise.all(
-      brandsData.results.slice(0, 10).map(async (brand) => {
-        const contacts = await hubspotAPI.getContactsForCompany(brand.id);
+      brandsData.results.slice(0, 20).map(async (brand) => {
+        const partnerships = await hubspotAPI.getBrandAssociations(brand.id);
         return {
           id: brand.id,
           properties: brand.properties,
-          contacts: contacts
+          associatedPartnerships: partnerships
         };
       })
     );
     
-    // Add remaining brands without contact enrichment
-    if (brandsData.results.length > 10) {
-      brandsData.results.slice(10).forEach(brand => {
+    // Add remaining brands without enrichment
+    if (brandsData.results.length > 20) {
+      brandsData.results.slice(20).forEach(brand => {
         enrichedBrands.push({
           id: brand.id,
           properties: brand.properties,
-          contacts: []
+          associatedPartnerships: []
         });
       });
     }
     
-    // Search for productions/partnerships (stored as Deals)
-    let productions = [];
-    if (needsProductions) {
-      const productionsData = await hubspotAPI.searchProductions({ limit: 30 });
-      productions = productionsData.results || [];
-    }
+    // Search for productions/partnerships
+    const productionsData = await hubspotAPI.searchPartnerships({ limit: 30 });
+    const productions = productionsData.results || [];
     
-    console.log(`✅ HubSpot search complete: ${enrichedBrands.length} brands, ${productions.length} productions`);
+    console.log(`✅ HubSpot search complete: ${enrichedBrands.length} brands, ${productions.length} partnerships`);
     
     return {
       brands: enrichedBrands,
@@ -458,30 +455,7 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
   try {
     console.log(`🧮 Stage 2: Narrowing ${airtableBrands.length + hubspotBrands.length} brands with OpenAI...`);
     
-    // Extract distributor and production company names to exclude them
-    const excludeList = new Set();
-    const userMessageLower = userMessage.toLowerCase();
-    
-    // Look for distributor patterns
-    const distributorMatch = userMessage.match(/Distributor:\s*([^\n]+)/i);
-    if (distributorMatch && distributorMatch[1]) {
-      const distributors = distributorMatch[1].split(/[\/,]/).map(d => d.trim().toLowerCase());
-      distributors.forEach(d => excludeList.add(d));
-      console.log('🚫 Excluding distributors:', distributors);
-    }
-    
-    // Look for production company patterns
-    const productionMatch = userMessage.match(/Production Company:\s*([^\n]+)/i);
-    if (productionMatch && productionMatch[1]) {
-      const producers = productionMatch[1].split(/[\/,]/).map(p => p.trim().toLowerCase());
-      producers.forEach(p => excludeList.add(p));
-      console.log('🚫 Excluding production companies:', producers);
-    }
-    
-    // Add common distributor/studio keywords to exclude
-    const studioKeywords = ['studios', 'pictures', 'films', 'productions', 'distribution'];
-    
-    // Combine and deduplicate brands from both sources
+    // No need to exclude distributors - we're only looking at Brands!
     const allBrands = [];
     const brandNames = new Set();
     
@@ -489,16 +463,7 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
     airtableBrands.forEach(b => {
       const name = b.fields['Brand Name'];
       if (name && !brandNames.has(name.toLowerCase())) {
-        const nameLower = name.toLowerCase();
-        
-        // Skip if it's a distributor or production company
-        if (excludeList.has(nameLower) || 
-            studioKeywords.some(keyword => nameLower.includes(keyword))) {
-          console.log(`⏭️ Skipping ${name} (appears to be distributor/studio)`);
-          return;
-        }
-        
-        brandNames.add(nameLower);
+        brandNames.add(name.toLowerCase());
         allBrands.push({
           source: 'airtable',
           name: name,
@@ -510,50 +475,28 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
       }
     });
     
-    // Add HubSpot brands - with better field handling
+    // Add HubSpot brands - now from the Brands custom object
     hubspotBrands.forEach(b => {
-      // Use brand_name if available, otherwise fall back to name
-      const name = b.properties.brand_name || b.properties.name;
+      const name = b.properties.brand_name;
       if (name && !brandNames.has(name.toLowerCase())) {
-        const nameLower = name.toLowerCase();
-        
-        // Skip if it's a distributor or production company
-        if (excludeList.has(nameLower) || 
-            studioKeywords.some(keyword => nameLower.includes(keyword))) {
-          console.log(`⏭️ Skipping ${name} (appears to be distributor/studio)`);
-          return;
-        }
-        
-        brandNames.add(nameLower);
-        
-        // Determine if this is actually a brand based on available data
-        const isBrand = b.properties.company_type?.includes('Brand') || 
-                       b.properties.brand_name || 
-                       b.properties.brand_category ||
-                       b.properties.lifecyclestage === 'customer' ||
-                       b.properties.lifecyclestage === 'opportunity';
+        brandNames.add(name.toLowerCase());
         
         allBrands.push({
           source: 'hubspot',
           name: name,
-          category: b.properties.brand_category || b.properties.industry || 'General',
-          budget: b.properties.media_spend_m_ ? `$${b.properties.media_spend_m_}M` : 
-                  b.properties.annualrevenue ? `Revenue: $${(b.properties.annualrevenue/1000000).toFixed(1)}M` : 'TBD',
+          category: b.properties.product_main_category || 'General',
+          budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 'TBD',
           summary: (b.properties.description || '').slice(0, 100),
-          lastActivity: b.properties.notes_last_contacted || b.properties.hs_lastmodifieddate,
+          lastActivity: b.properties.object_last_modified_date_time_pdt,
           hasPartner: !!b.properties.partner_agency_name,
           partnerAgency: b.properties.partner_agency_name,
-          contactCount: b.contacts ? b.contacts.length : 0,
-          primaryContact: b.contacts && b.contacts[0] ? 
-            `${b.contacts[0].properties.firstname || ''} ${b.contacts[0].properties.lastname || ''} ${b.contacts[0].properties.email ? `(${b.contacts[0].properties.email})` : ''}`.trim() : null,
-          isBrand: isBrand,
-          website: b.properties.website,
-          employees: b.properties.numberofemployees,
-          // Additional fields
           clientStatus: b.properties.client_status,
           targetGeneration: b.properties.target_generation,
           targetIncome: b.properties.target_income,
-          playbook: b.properties.playbook
+          playbook: b.properties.playbook,
+          recordId: b.properties.record_id,
+          // Count of associated partnerships could be added here
+          partnershipCount: b.associatedPartnerships ? b.associatedPartnerships.length : 0
         });
       }
     });
@@ -568,23 +511,24 @@ Production details: ${userMessage}
 
 Score these brands 0-100 based on their potential for PRODUCT PLACEMENT in this production.
 
-IMPORTANT RULES:
-- Only score brands whose PRODUCTS can physically appear in scenes (drinks, food, cars, phones, clothing, etc.)
-- Score 0 for streaming services (Netflix, Apple TV+, Amazon Prime, Disney+, Hulu, etc.)
-- Score 0 for distributors, studios, or production companies
-- Score 0 for digital-only services that can't have physical product placement
-
 Focus on brands that could naturally integrate their products into the story through:
 - Props that characters use (beverages, technology, vehicles)
 - Set dressing (home goods, appliances, decor)
 - Wardrobe (clothing, accessories, shoes)
 - Location branding (restaurants, stores, hotels)
+- Digital products shown on screens (apps, services)
+
+Consider:
+- Target generation/demographic match
+- Budget availability
+- Previous partnership experience (has partnerships)
+- Client status (active clients score higher)
 
 Return ONLY a JSON object with brand names as keys and scores as values.
 
 Brands to evaluate:
 ${allBrands.slice(0, 50).map(b => 
-  `${b.name}: ${b.category}, Budget: ${b.budget}${b.hasPartner ? ', Has Partner Agency' : ''}, ${b.summary}`
+  `${b.name}: ${b.category}, Budget: ${b.budget}, Target: ${b.targetGeneration || 'Unknown'}, Status: ${b.clientStatus || 'Unknown'}${b.hasPartner ? ', Has Partner Agency' : ''}`
 ).join('\n')}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -598,7 +542,7 @@ ${allBrands.slice(0, 50).map(b =>
         messages: [
           {
             role: 'system',
-            content: 'You are a product placement expert for film/TV. Score ONLY brands whose physical products can appear on screen. Streaming services, distributors, and digital platforms should always score 0. Focus on consumer goods, fashion, automotive, food/beverage, and technology brands with tangible products.'
+            content: 'You are a product placement expert for film/TV. Score brands based on their fit for product placement. Consider physical products, digital products, and services that can be shown on screen. Higher scores for brands with clear placement opportunities and matching demographics.'
           },
           {
             role: 'user',
@@ -635,8 +579,7 @@ ${allBrands.slice(0, 50).map(b =>
     
   } catch (error) {
     console.error('❌ Error in OpenAI narrowing:', error);
-    // Return all brands if scoring fails
-    return { topBrands: [...airtableBrands, ...hubspotBrands].slice(0, 15), scores: {} };
+    return { topBrands: allBrands.slice(0, 15), scores: {} };
   }
 }
 
@@ -716,12 +659,12 @@ ${currentProduction ? `Current Production: ${currentProduction}` : ''}
 Available Data:
 ${topBrands.length > 0 ? `
 TOP BRANDS (${topBrands.length} total):
-${topBrands.map(b => `- ${b.name}: Score ${b.relevanceScore}, Budget ${b.budget}, ${b.hasPartner ? 'Has Partner' : 'No Partner'}, ${b.contactCount || 0} contacts`).join('\n')}
+${topBrands.map(b => `- ${b.name}: Score ${b.relevanceScore}, Budget ${b.budget}, Target: ${b.targetGeneration || 'All'}, Status: ${b.clientStatus || 'Unknown'}, ${b.hasPartner ? 'Has Partner' : 'No Partner'}`).join('\n')}
 ` : ''}
 
 ${hubspotData.productions?.length > 0 ? `
-PRODUCTIONS (${hubspotData.productions.length} total):
-${hubspotData.productions.slice(0, 5).map(p => `- ${p.properties.dealname}: ${p.properties.content_type || 'Unknown type'}, ${p.properties.distributor ? `Distributor: ${p.properties.distributor}` : ''}`).join('\n')}
+PARTNERSHIPS/PRODUCTIONS (${hubspotData.productions.length} total):
+${hubspotData.productions.slice(0, 5).map(p => `- ${p.properties.production_name}: Stage: ${p.properties.partnership_pipeline_stage || 'Unknown'}, Scale: ${p.properties.production_scale || 'Unknown'}`).join('\n')}
 ` : ''}
 
 ${meetingData.records?.length > 0 ? `
