@@ -839,6 +839,8 @@ Return ONLY valid JSON, no other text.`;
   }
 }
 
+
+
 // Generate a video from text using Runway AI's SDK
 async function generateRunwayVideo({ 
   promptText, 
@@ -1084,6 +1086,100 @@ export default async function handler(req, res) {
         }
       }
 
+      // Add this after the video generation check (around line 845)
+// Check if this is an image generation request
+if (req.body.generateImage === true) {
+  console.log('Processing image generation request');
+  
+  const { prompt, projectId, sessionId } = req.body;
+
+  if (!prompt) {
+    return res.status(400).json({ 
+      error: 'Missing required fields',
+      details: 'prompt is required'
+    });
+  }
+
+  if (!openAIApiKey) {
+    console.error('OpenAI API key not configured');
+    return res.status(500).json({ 
+      error: 'Image generation service not configured',
+      details: 'Please configure OPENAI_API_KEY'
+    });
+  }
+
+  try {
+    console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
+    
+    const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openAIApiKey}`
+      },
+      body: JSON.stringify({
+        model: 'dall-e-3',  // Using DALL-E 3 instead of gpt-image-1
+        prompt: prompt,
+        n: 1,
+        size: '1792x1024',  // 16:9 landscape format
+        quality: 'standard',
+        response_format: 'url'
+      })
+    });
+
+    if (!imageResponse.ok) {
+      const errorData = await imageResponse.text();
+      console.error('OpenAI Image API error:', imageResponse.status, errorData);
+      
+      if (imageResponse.status === 401) {
+        return res.status(401).json({ 
+          error: 'Invalid API key',
+          details: 'Check your OpenAI API key configuration'
+        });
+      }
+      
+      if (imageResponse.status === 429) {
+        return res.status(429).json({ 
+          error: 'Rate limit exceeded',
+          details: 'Too many requests. Please try again later.'
+        });
+      }
+      
+      if (imageResponse.status === 400) {
+        const errorJson = JSON.parse(errorData);
+        return res.status(400).json({ 
+          error: 'Invalid request',
+          details: errorJson.error?.message || 'Invalid image generation parameters'
+        });
+      }
+      
+      return res.status(imageResponse.status).json({ 
+        error: 'Failed to generate image',
+        details: errorData
+      });
+    }
+
+    const data = await imageResponse.json();
+    console.log('✅ Image generated successfully');
+
+    if (data.data && data.data.length > 0 && data.data[0].url) {
+      return res.status(200).json({
+        success: true,
+        imageUrl: data.data[0].url,
+        revisedPrompt: data.data[0].revised_prompt || prompt
+      });
+    } else {
+      throw new Error('No image URL in response');
+    }
+    
+  } catch (error) {
+    console.error('Error in image generation:', error);
+    return res.status(500).json({ 
+      error: 'Failed to generate image',
+      details: error.message 
+    });
+  }
+}
       // Handle regular chat messages
       let { userMessage, sessionId, audioData, projectId } = req.body;
 
