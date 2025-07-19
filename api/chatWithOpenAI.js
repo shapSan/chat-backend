@@ -1118,7 +1118,7 @@ if (req.body.generateImage === true) {
         'Authorization': `Bearer ${openAIApiKey}`
       },
       body: JSON.stringify({
-        model: 'dall-e-3',  // Using DALL-E 3 instead of gpt-image-1
+        model: 'gpt-image-1',  // Using DALL-E 3 instead of gpt-image-1
         prompt: prompt,
         n: 1,
         size: '1792x1024',  // 16:9 landscape format
