@@ -1185,17 +1185,35 @@ if (req.body.generateImage === true) {
     }
 
     const data = await imageResponse.json();
-    console.log('✅ Image generated successfully');
+    console.log('✅ Image generation response:', JSON.stringify(data, null, 2));
 
-    if (data.data && data.data.length > 0 && data.data[0].url) {
+    // Check for different possible response structures
+    let imageUrl = null;
+    
+    // Standard structure: data.data[0].url
+    if (data.data && data.data.length > 0) {
+      imageUrl = data.data[0].url || data.data[0].b64_json;
+    }
+    // Alternative structure: data.url
+    else if (data.url) {
+      imageUrl = data.url;
+    }
+    // Another alternative: data.images[0].url
+    else if (data.images && data.images.length > 0) {
+      imageUrl = data.images[0].url;
+    }
+    
+    if (imageUrl) {
       return res.status(200).json({
         success: true,
-        imageUrl: data.data[0].url,
-        revisedPrompt: data.data[0].revised_prompt || prompt,
-        model: model
+        imageUrl: imageUrl,
+        revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
+        model: model,
+        rawResponse: data // Include for debugging
       });
     } else {
-      throw new Error('No image URL in response');
+      console.error('Unexpected response structure:', data);
+      throw new Error('No image URL found in response');
     }
     
   } catch (error) {
