@@ -1119,9 +1119,17 @@ if (req.body.generateImage === true) {
     const requestBody = {
       model: model,
       prompt: prompt,
-      n: 1,
-      size: '1792x1024'  // 16:9 landscape format
+      n: 1
     };
+    
+    // Set size based on model capabilities
+    if (model === 'gpt-image-1') {
+      // gpt-image-1 supports: 1024x1024, 1024x1536, 1536x1024, auto
+      requestBody.size = '1536x1024'; // Landscape 3:2 ratio
+    } else {
+      // dall-e-3 supports: 1024x1024, 1024x1792, 1792x1024
+      requestBody.size = '1792x1024'; // Landscape 16:9 ratio
+    }
     
     // Only add these parameters for dall-e-3
     if (model === 'dall-e-3') {
