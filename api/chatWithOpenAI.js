@@ -1185,22 +1185,25 @@ if (req.body.generateImage === true) {
     }
 
     const data = await imageResponse.json();
-    console.log('✅ Image generation response:', JSON.stringify(data, null, 2));
+    console.log('✅ Image generation response received');
 
     // Check for different possible response structures
     let imageUrl = null;
     
-    // Standard structure: data.data[0].url
+    // Standard structure: data.data[0].url or data.data[0].b64_json
     if (data.data && data.data.length > 0) {
-      imageUrl = data.data[0].url || data.data[0].b64_json;
+      if (data.data[0].url) {
+        imageUrl = data.data[0].url;
+      } else if (data.data[0].b64_json) {
+        // Convert base64 to data URL
+        const base64Image = data.data[0].b64_json;
+        imageUrl = `data:image/png;base64,${base64Image}`;
+        console.log('Converted base64 to data URL');
+      }
     }
     // Alternative structure: data.url
     else if (data.url) {
       imageUrl = data.url;
-    }
-    // Another alternative: data.images[0].url
-    else if (data.images && data.images.length > 0) {
-      imageUrl = data.images[0].url;
     }
     
     if (imageUrl) {
@@ -1208,8 +1211,7 @@ if (req.body.generateImage === true) {
         success: true,
         imageUrl: imageUrl,
         revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
-        model: model,
-        rawResponse: data // Include for debugging
+        model: model
       });
     } else {
       console.error('Unexpected response structure:', data);
