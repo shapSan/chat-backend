@@ -1122,20 +1122,20 @@ if (req.body.generateImage === true) {
       n: 1
     };
     
-    // Set size based on model capabilities
-    if (model === 'gpt-image-1') {
-      // gpt-image-1 supports: 1024x1024, 1024x1536, 1536x1024, auto
-      requestBody.size = '1536x1024'; // Landscape 3:2 ratio
-    } else {
-      // dall-e-3 supports: 1024x1024, 1024x1792, 1792x1024
-      requestBody.size = '1792x1024'; // Landscape 16:9 ratio
-    }
-    
-    // Only add these parameters for dall-e-3
-    if (model === 'dall-e-3') {
-      requestBody.quality = 'standard';
-      requestBody.response_format = 'url';
-    }
+   // Set size based on model capabilities and dimensions parameter
+if (dimensions) {
+  // Use the dimensions passed from frontend
+  requestBody.size = dimensions;
+} else {
+  // Default sizes based on model
+  if (model === 'gpt-image-1') {
+    // gpt-image-1 supports: 1024x1024, 1024x1536, 1536x1024, auto
+    requestBody.size = '1536x1024'; // Landscape 3:2 ratio
+  } else {
+    // dall-e-3 supports: 1024x1024, 1024x1792, 1792x1024
+    requestBody.size = '1792x1024'; // Landscape 16:9 ratio
+  }
+}
     
     const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
