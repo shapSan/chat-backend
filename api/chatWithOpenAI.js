@@ -1086,12 +1086,12 @@ export default async function handler(req, res) {
         }
       }
 
-      // Add this after the video generation check (around line 845)
+// Add this after the video generation check (around line 845)
 // Check if this is an image generation request
 if (req.body.generateImage === true) {
   console.log('Processing image generation request');
   
-  const { prompt, projectId, sessionId } = req.body;
+  const { prompt, projectId, sessionId, imageModel } = req.body;
 
   if (!prompt) {
     return res.status(400).json({ 
@@ -1111,20 +1111,31 @@ if (req.body.generateImage === true) {
   try {
     console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
     
+    // Use gpt-image-1 if specified, otherwise default to dall-e-3
+    const model = imageModel || 'dall-e-3';
+    console.log('Using model:', model);
+    
+    // Build request body based on model
+    const requestBody = {
+      model: model,
+      prompt: prompt,
+      n: 1,
+      size: '1792x1024'  // 16:9 landscape format
+    };
+    
+    // Only add these parameters for dall-e-3
+    if (model === 'dall-e-3') {
+      requestBody.quality = 'standard';
+      requestBody.response_format = 'url';
+    }
+    
     const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${openAIApiKey}`
       },
-      body: JSON.stringify({
-        model: 'gpt-image-1',  // Using DALL-E 3 instead of gpt-image-1
-        prompt: prompt,
-        n: 1,
-        size: '1792x1024',  // 16:9 landscape format
-        quality: 'standard',
-        response_format: 'url'
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!imageResponse.ok) {
@@ -1146,10 +1157,16 @@ if (req.body.generateImage === true) {
       }
       
       if (imageResponse.status === 400) {
-        const errorJson = JSON.parse(errorData);
+        let errorDetails = errorData;
+        try {
+          const errorJson = JSON.parse(errorData);
+          errorDetails = errorJson.error?.message || errorData;
+        } catch (e) {
+          // If parsing fails, use raw error data
+        }
         return res.status(400).json({ 
           error: 'Invalid request',
-          details: errorJson.error?.message || 'Invalid image generation parameters'
+          details: errorDetails
         });
       }
       
@@ -1166,7 +1183,8 @@ if (req.body.generateImage === true) {
       return res.status(200).json({
         success: true,
         imageUrl: data.data[0].url,
-        revisedPrompt: data.data[0].revised_prompt || prompt
+        revisedPrompt: data.data[0].revised_prompt || prompt,
+        model: model
       });
     } else {
       throw new Error('No image URL in response');
