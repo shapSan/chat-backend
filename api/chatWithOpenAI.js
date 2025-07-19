@@ -947,11 +947,9 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Max-Age", "86400");
-
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
-
   if (req.method === 'POST') {
     try {
       // Check if this is an audio generation request
@@ -959,14 +957,12 @@ export default async function handler(req, res) {
         console.log('Processing audio generation request');
         
         const { prompt, projectId, sessionId } = req.body;
-
         if (!prompt) {
           return res.status(400).json({ 
             error: 'Missing required fields',
             details: 'prompt is required'
           });
         }
-
         if (!elevenLabsApiKey) {
           console.error('ElevenLabs API key not configured');
           return res.status(500).json({ 
@@ -974,12 +970,9 @@ export default async function handler(req, res) {
             details: 'Please configure ELEVENLABS_API_KEY'
           });
         }
-
         const projectConfig = getProjectConfig(projectId);
         const { voiceId, voiceSettings } = projectConfig;
-
         console.log('Generating audio for project:', projectId, 'using voice:', voiceId);
-
         try {
             const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
             
@@ -996,7 +989,6 @@ export default async function handler(req, res) {
                     voice_settings: voiceSettings
                 })
             });
-
             if (!elevenLabsResponse.ok) {
                 const errorText = await elevenLabsResponse.text();
                 console.error('ElevenLabs API error:', elevenLabsResponse.status, errorText);
@@ -1005,11 +997,9 @@ export default async function handler(req, res) {
                     details: errorText
                 });
             }
-
             const audioBuffer = await elevenLabsResponse.buffer();
             const base64Audio = audioBuffer.toString('base64');
             const audioDataUrl = `data:audio/mpeg;base64,${base64Audio}`;
-
             return res.status(200).json({
                 success: true,
                 audioUrl: audioDataUrl,
