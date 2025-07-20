@@ -1090,42 +1090,41 @@ if (req.body.generateImage === true) {
     });
   }
 
-  if (!openAIApiKey) {
-    console.error('OpenAI API key not configured');
-    return res.status(500).json({ 
-      error: 'Image generation service not configured',
-      details: 'Please configure OPENAI_API_KEY'
-    });
-  }
+// Extract dimensions from request body
+const { generateImage, prompt, projectId, sessionId, userMessage, imageModel, dimensions } = req.body;
 
-  try {
-    console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
-    
-    // Use gpt-image-1 if specified, otherwise default to dall-e-3
-    const model = imageModel || 'dall-e-3';
-    console.log('Using model:', model);
-    
-    // Build request body based on model
-    const requestBody = {
-      model: model,
-      prompt: prompt,
-      n: 1
-    };
-    
-// Set size based on model capabilities and dimensions parameter
-if (dimensions) {
-  // Use the dimensions passed from frontend
-  requestBody.size = dimensions;
-} else {
-  // Default sizes based on model
-  if (model === 'gpt-image-1') {
-    // gpt-image-1 supports: 1024x1024, 1024x1536, 1536x1024, auto
-    requestBody.size = '1536x1024'; // Landscape 3:2 ratio
-  } else {
-    // dall-e-3 supports: 1024x1024, 1024x1792, 1792x1024
-    requestBody.size = '1792x1024'; // Landscape 16:9 ratio
-  }
+if (!openAIApiKey) {
+  console.error('OpenAI API key not configured');
+  return res.status(500).json({ 
+    error: 'Image generation service not configured',
+    details: 'Please configure OPENAI_API_KEY'
+  });
 }
+
+try {
+  console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
+  
+  // Always use gpt-image-1
+  const model = 'gpt-image-1';
+  console.log('Using model:', model);
+  
+  // Build request body
+  const requestBody = {
+    model: model,
+    prompt: prompt,
+    n: 1
+  };
+  
+  // Set size based on dimensions parameter from frontend
+  if (dimensions) {
+    // Use the dimensions passed from frontend
+    requestBody.size = dimensions;
+    console.log('Using dimensions from frontend:', dimensions);
+  } else {
+    // Default to landscape if no dimensions specified
+    requestBody.size = '1536x1024';
+    console.log('Using default landscape dimensions');
+  }
     
     const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
