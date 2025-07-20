@@ -1090,9 +1090,6 @@ if (req.body.generateImage === true) {
     });
   }
 
-// Extract dimensions from request body
-const { generateImage, prompt, projectId, sessionId, userMessage, imageModel, dimensions } = req.body;
-
 if (!openAIApiKey) {
   console.error('OpenAI API key not configured');
   return res.status(500).json({ 
@@ -1125,7 +1122,6 @@ try {
     requestBody.size = '1536x1024';
     console.log('Using default landscape dimensions');
   }
-    
     const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: {
