@@ -1081,7 +1081,7 @@ export default async function handler(req, res) {
 if (req.body.generateImage === true) {
   console.log('Processing image generation request');
   
-  const { prompt, projectId, sessionId, imageModel } = req.body;
+  const { prompt, projectId, sessionId, imageModel, dimensions } = req.body;
 
   if (!prompt) {
     return res.status(400).json({ 
@@ -1113,6 +1113,7 @@ try {
   };
   
   // Set size based on dimensions parameter from frontend
+// Set size based on dimensions parameter from frontend
   if (dimensions) {
     // Use the dimensions passed from frontend
     requestBody.size = dimensions;
@@ -1122,14 +1123,15 @@ try {
     requestBody.size = '1536x1024';
     console.log('Using default landscape dimensions');
   }
-    const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openAIApiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    });
+  
+  const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${openAIApiKey}`
+    },
+    body: JSON.stringify(requestBody)
+  });
 
     if (!imageResponse.ok) {
       const errorData = await imageResponse.text();
