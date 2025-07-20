@@ -1112,7 +1112,7 @@ if (req.body.generateImage === true) {
       n: 1
     };
     
-   // Set size based on model capabilities and dimensions parameter
+// Set size based on model capabilities and dimensions parameter
 if (dimensions) {
   // Use the dimensions passed from frontend
   requestBody.size = dimensions;
