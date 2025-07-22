@@ -279,6 +279,247 @@ const hubspotAPI = {
   }
 };
 
+
+// Fireflies API Helper Functions (ENHANCED VERSION)
+const firefliesApiKey = process.env.FIREFLIES_API_KEY || 'e88b1a60-3390-4dca-9605-20e533727717';
+
+const firefliesAPI = {
+  baseUrl: 'https://api.fireflies.ai/graphql',
+  
+  async searchTranscripts(filters = {}) {
+    try {
+      console.log('🔍 Fireflies searchTranscripts called with filters:', filters);
+      
+      // Build the GraphQL query with ALL the fields I have access to
+      const graphqlQuery = `
+        query SearchTranscripts($keyword: String, $limit: Int, $fromDate: String, $toDate: String, $organizer_email: String, $participant_email: String) {
+          transcripts(
+            keyword: $keyword, 
+            limit: $limit,
+            fromDate: $fromDate,
+            toDate: $toDate,
+            organizer_email: $organizer_email,
+            participant_email: $participant_email
+          ) {
+            id
+            title
+            date
+            dateString
+            duration
+            host_email
+            organizer_email
+            participants
+            meeting_attendees {
+              email
+            }
+            transcript_url
+            audio_url
+            video_url
+            summary {
+              keywords
+              action_items
+              outline
+              shorthand_bullet
+              overview
+              bullet_gist
+              gist
+              short_summary
+              short_overview
+              meeting_type
+              topics_discussed
+              transcript_chapters
+            }
+            sentences {
+              index
+              speaker_name
+              text
+              start_time
+            }
+          }
+        }
+      `;
+      
+      const response = await fetch(this.baseUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${firefliesApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: graphqlQuery,
+          variables: {
+            keyword: filters.keyword || '',
+            limit: filters.limit || 10,
+            fromDate: filters.fromDate,
+            toDate: filters.toDate,
+            organizer_email: filters.organizer_email,
+            participant_email: filters.participant_email
+          }
+        })
+      });
+      
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('❌ Fireflies API error:', response.status, errorBody);
+        throw new Error(`Fireflies API error: ${response.status} - ${errorBody}`);
+      }
+      
+      const data = await response.json();
+      console.log(`✅ Fireflies search returned ${data.data?.transcripts?.length || 0} transcripts`);
+      
+      return data.data?.transcripts || [];
+    } catch (error) {
+      console.error('❌ Error searching Fireflies transcripts:', error);
+      return [];
+    }
+  },
+  
+  async getTranscript(transcriptId) {
+    try {
+      console.log('🔍 Fetching specific Fireflies transcript:', transcriptId);
+      
+      const graphqlQuery = `
+        query GetTranscript($transcriptId: String!) {
+          transcript(id: $transcriptId) {
+            id
+            title
+            date
+            dateString
+            duration
+            host_email
+            organizer_email
+            participants
+            meeting_attendees {
+              email
+            }
+            transcript_url
+            audio_url
+            video_url
+            summary {
+              keywords
+              action_items
+              outline
+              shorthand_bullet
+              overview
+              bullet_gist
+              gist
+              short_summary
+              short_overview
+              meeting_type
+              topics_discussed
+              transcript_chapters
+            }
+            sentences {
+              index
+              speaker_name
+              text
+              start_time
+            }
+          }
+        }
+      `;
+      
+      const response = await fetch(this.baseUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${firefliesApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: graphqlQuery,
+          variables: { transcriptId }
+        })
+      });
+      
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('❌ Fireflies API error:', response.status, errorBody);
+        throw new Error(`Fireflies API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      return data.data?.transcript || null;
+    } catch (error) {
+      console.error('❌ Error fetching Fireflies transcript:', error);
+      return null;
+    }
+  },
+  
+  async testConnection() {
+    try {
+      console.log('🔍 Testing Fireflies API connection...');
+      const response = await fetch(this.baseUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${firefliesApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `query { user { email name } }`
+        })
+      });
+      
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('❌ Fireflies API test failed:', response.status, errorBody);
+        return false;
+      }
+      
+      console.log('✅ Fireflies API connection successful');
+      return true;
+    } catch (error) {
+      console.error('❌ Fireflies API test error:', error);
+      return false;
+    }
+  }
+};
+
+// Enhanced search function with date filtering
+async function searchFireflies(query, options = {}) {
+  console.log('🔍 Searching Fireflies for transcripts...');
+  
+  if (!firefliesApiKey) {
+    console.warn('No Fireflies API key configured, skipping Fireflies search');
+    return { transcripts: [] };
+  }
+  
+  try {
+    // Test connection first
+    const isConnected = await firefliesAPI.testConnection();
+    if (!isConnected) {
+      console.error('❌ Fireflies API connection failed');
+      return { transcripts: [] };
+    }
+    
+    // Parse query for special searches
+    const queryLower = query.toLowerCase();
+    const filters = {
+      keyword: query,
+      limit: options.limit || 10
+    };
+    
+    // Auto-detect time-based queries
+    if (queryLower.includes('last 3 months') || queryLower.includes('past 3 months')) {
+      const threeMonthsAgo = new Date();
+      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+      filters.fromDate = threeMonthsAgo.toISOString().split('T')[0];
+    }
+    
+    // Search for transcripts
+    const transcripts = await firefliesAPI.searchTranscripts(filters);
+    
+    console.log(`✅ Fireflies search complete: ${transcripts.length} transcripts`);
+    
+    return {
+      transcripts: transcripts
+    };
+    
+  } catch (error) {
+    console.error('❌ Error searching Fireflies:', error);
+    return { transcripts: [] };
+  }
+}
+
 function getProjectConfig(projectId) {
   const config = PROJECT_CONFIGS[projectId] || PROJECT_CONFIGS['default'];
   return config;
@@ -456,7 +697,7 @@ async function searchHubSpot(query, projectId, limit = 50) {
 }
 
 // Stage 2: Enhanced narrowing that includes HubSpot data
-async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMessage) {
+async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
   try {
     console.log(`🧮 Stage 2: Narrowing ${airtableBrands.length + hubspotBrands.length} brands with OpenAI...`);
     
@@ -525,6 +766,8 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
           console.log(`⏭️ Skipping ${name} (appears to be distributor/studio)`);
           return;
         }
+
+      
         
         brandNames.add(nameLower);
         
@@ -559,10 +802,27 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, userMes
         });
       }
     });
-    
+
+    // Add Fireflies meeting insights
+    if (firefliesTranscripts && firefliesTranscripts.length > 0) {
+      allBrands.push({
+        source: 'fireflies_context',
+        name: `Meeting Insights (${firefliesTranscripts.length} transcripts)`,
+        category: 'Meeting Intelligence',
+        budget: 'N/A',
+        summary: firefliesTranscripts.slice(0, 3).map(t => 
+          `${t.title}: ${(t.summary?.overview || '').slice(0, 100)}...`
+        ).join(' | '),
+        lastActivity: firefliesTranscripts[0]?.date,
+        transcriptCount: firefliesTranscripts.length
+      });
+    }
+
     if (allBrands.length === 0) {
       return { topBrands: [], scores: {} };
     }
+
+    
     
     // Create a product placement focused scoring prompt
     const scoringPrompt = `
@@ -683,9 +943,10 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     console.log('📊 Stage 1: Fetching from Airtable and HubSpot...');
     
     // Use the enhanced message for searching
-    const [airtableData, hubspotData] = await Promise.all([
+const [airtableData, hubspotData, firefliesData] = await Promise.all([
       searchAirtable(enhancedMessage, projectId, 'brands', 100),
-      hubspotApiKey ? searchHubSpot(enhancedMessage, projectId, 50) : { brands: [], productions: [] }
+      hubspotApiKey ? searchHubSpot(enhancedMessage, projectId, 50) : { brands: [], productions: [] },
+      firefliesApiKey ? searchFireflies(enhancedMessage, 10) : { transcripts: [] }
     ]);
     
     const meetingData = await searchAirtable(enhancedMessage, projectId, 'meetings', 50);
@@ -699,11 +960,12 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     }
     
     // Stage 2: Narrow with OpenAI
-    const { topBrands, scores } = await narrowWithOpenAI(
+const { topBrands, scores } = await narrowWithOpenAI(
       airtableData.records || [],
       hubspotData.brands || [],
       meetingData.records || [],
-      enhancedMessage  // Use enhanced message here too
+      firefliesData.transcripts || [],
+      enhancedMessage
     );
     
     // Stage 3: Use Claude ONLY for organizing/analyzing data
