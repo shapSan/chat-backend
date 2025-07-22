@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
 import RunwayML from '@runwayml/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 dotenv.config();
 
@@ -19,6 +20,7 @@ const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 const runwayApiKey = process.env.RUNWAY_API_KEY;
 const hubspotApiKey = process.env.HUBSPOT_API_KEY;
+const googleGeminiApiKey = process.env.GOOGLE_GEMINI_API_KEY;
 
 // Project configuration mapping
 const PROJECT_CONFIGS = {
@@ -937,6 +939,184 @@ async function generateRunwayVideo({
     }
     
     throw error;
+  }
+}
+
+async function generateVeo3Video({
+  promptText,
+  aspectRatio = '16:9',
+  duration = 5
+}) {
+  if (!googleGeminiApiKey) {
+    throw new Error('GOOGLE_GEMINI_API_KEY not configured');
+  }
+
+  console.log('🎬 Starting Veo3 video generation...');
+
+  try {
+    const genAI = new GoogleGenerativeAI(googleGeminiApiKey);
+    
+    console.log('🎥 Creating video with Veo3...');
+    let operation = await genAI.models.generateVideos({
+      model: "veo-3.0-generate-preview",
+      prompt: promptText,
+      config: {
+        personGeneration: "allow_all",
+        aspectRatio: aspectRatio,
+      },
+    });
+
+    console.log('✅ Video task created:', operation.name);
+
+    // Poll for completion
+    console.log('⏳ Waiting for video generation...');
+    let attempts = 0;
+    const maxAttempts = 60; // 10 minutes max wait time
+
+    while (!operation.done && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+      
+      operation = await genAI.operations.getVideosOperation({
+        operation: operation,
+      });
+      
+      console.log(`🔄 Status: ${operation.done ? 'COMPLETED' : 'PROCESSING'} (${attempts + 1}/${maxAttempts})`);
+      attempts++;
+    }
+
+    if (!operation.done) {
+      throw new Error('Video generation timed out');
+    }
+
+    // Get the first generated video
+    const generatedVideo = operation.response?.generatedVideos?.[0];
+    if (!generatedVideo?.video?.uri) {
+      throw new Error('No video URL in response');
+    }
+
+    // The video URI from Google needs the API key appended
+    const videoUrl = `${generatedVideo.video.uri}&key=${googleGeminiApiKey}`;
+    
+    console.log('✅ Video ready!');
+    
+    return {
+      url: videoUrl,
+      taskId: operation.name,
+      metadata: generatedVideo.video
+    };
+
+  } catch (error) {
+    console.error('Veo3 Error Details:', {
+      message: error.message,
+      status: error.status,
+      error: error.error
+    });
+    
+    if (error.message?.includes('401')) {
+      throw new Error('Invalid API key. Check GOOGLE_GEMINI_API_KEY in environment variables.');
+    }
+    
+    if (error.message?.includes('429')) {
+      throw new Error('Rate limit exceeded. Try again later.');
+    }
+    
+    if (error.message?.includes('quota')) {
+      throw new Error('Veo3 quota exceeded. Please check your Google Cloud quota.');
+    }
+    
+    throw error;
+  }
+}
+
+// Update your video generation handler in the main handler function
+// Replace the existing video generation section with this:
+
+if (req.body.generateVideo === true) {
+  console.log('Processing video generation request');
+  
+  const { promptText, promptImage, projectId, model, ratio, duration, videoModel } = req.body;
+
+  if (!promptText) {
+    return res.status(400).json({ 
+      error: 'Missing required fields',
+      details: 'promptText is required'
+    });
+  }
+
+  try {
+    let result;
+    
+    if (videoModel === 'veo3') {
+      // Use Veo3 for video generation
+      if (!googleGeminiApiKey) {
+        console.error('Google Gemini API key not configured');
+        return res.status(500).json({ 
+          error: 'Veo3 video generation service not configured',
+          details: 'Please configure GOOGLE_GEMINI_API_KEY in environment variables'
+        });
+      }
+      
+      // Convert ratio format from Runway to Veo3 format
+      let veo3AspectRatio = '16:9'; // default
+      if (ratio === '1104:832') veo3AspectRatio = '4:3';
+      else if (ratio === '832:1104') veo3AspectRatio = '9:16';
+      else if (ratio === '1920:1080') veo3AspectRatio = '16:9';
+      
+      result = await generateVeo3Video({
+        promptText,
+        aspectRatio: veo3AspectRatio,
+        duration
+      });
+      
+    } else {
+      // Use Runway for video generation (default)
+      if (!runwayApiKey) {
+        console.error('Runway API key not configured');
+        return res.status(500).json({ 
+          error: 'Runway video generation service not configured',
+          details: 'Please configure RUNWAY_API_KEY in environment variables'
+        });
+      }
+      
+      // For Runway, validate promptImage
+      if (promptImage && !promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
+        return res.status(400).json({
+          error: 'Invalid image format',
+          details: 'promptImage must be a valid URL or base64 data URL'
+        });
+      }
+      
+      let imageToUse = promptImage;
+      if (!promptImage || promptImage.includes('dummyimage.com')) {
+        console.log('⚠️ Using default image for Runway');
+        imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
+      }
+      
+      result = await generateRunwayVideo({
+        promptText,
+        promptImage: imageToUse,
+        model: model || 'gen4_turbo',
+        ratio: ratio || '1104:832',
+        duration: duration || 5
+      });
+    }
+
+    console.log(`✅ Video generated successfully with ${videoModel || 'runway'}:`, result.taskId);
+
+    return res.status(200).json({
+      success: true,
+      videoUrl: result.url,
+      taskId: result.taskId,
+      model: videoModel || 'runway',
+      metadata: result.metadata
+    });
+
+  } catch (error) {
+    console.error('Error in video generation:', error);
+    return res.status(500).json({ 
+      error: 'Failed to generate video',
+      details: error.message 
+    });
   }
 }
 
