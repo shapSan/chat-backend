@@ -14,6 +14,7 @@
     "dotenv": "^16.0.3",
     "node-fetch": "^3.3.0",
     "ws": "^8.13.0",
-    "@runwayml/sdk": "latest"
+    "@runwayml/sdk": "latest",
+    "@google/generative-ai": "^0.21.0"
   }
 }
