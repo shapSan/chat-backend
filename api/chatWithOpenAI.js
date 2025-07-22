@@ -841,8 +841,6 @@ Return ONLY valid JSON, no other text.`;
   }
 }
 
-
-
 // Generate a video from text using Runway AI's SDK
 async function generateRunwayVideo({ 
   promptText, 
@@ -942,6 +940,7 @@ async function generateRunwayVideo({
   }
 }
 
+// Add the Veo3 video generation function
 async function generateVeo3Video({
   promptText,
   aspectRatio = '16:9',
@@ -1028,98 +1027,6 @@ async function generateVeo3Video({
   }
 }
 
-// Update your video generation handler in the main handler function
-// Replace the existing video generation section with this:
-
-if (req.body.generateVideo === true) {
-  console.log('Processing video generation request');
-  
-  const { promptText, promptImage, projectId, model, ratio, duration, videoModel } = req.body;
-
-  if (!promptText) {
-    return res.status(400).json({ 
-      error: 'Missing required fields',
-      details: 'promptText is required'
-    });
-  }
-
-  try {
-    let result;
-    
-    if (videoModel === 'veo3') {
-      // Use Veo3 for video generation
-      if (!googleGeminiApiKey) {
-        console.error('Google Gemini API key not configured');
-        return res.status(500).json({ 
-          error: 'Veo3 video generation service not configured',
-          details: 'Please configure GOOGLE_GEMINI_API_KEY in environment variables'
-        });
-      }
-      
-      // Convert ratio format from Runway to Veo3 format
-      let veo3AspectRatio = '16:9'; // default
-      if (ratio === '1104:832') veo3AspectRatio = '4:3';
-      else if (ratio === '832:1104') veo3AspectRatio = '9:16';
-      else if (ratio === '1920:1080') veo3AspectRatio = '16:9';
-      
-      result = await generateVeo3Video({
-        promptText,
-        aspectRatio: veo3AspectRatio,
-        duration
-      });
-      
-    } else {
-      // Use Runway for video generation (default)
-      if (!runwayApiKey) {
-        console.error('Runway API key not configured');
-        return res.status(500).json({ 
-          error: 'Runway video generation service not configured',
-          details: 'Please configure RUNWAY_API_KEY in environment variables'
-        });
-      }
-      
-      // For Runway, validate promptImage
-      if (promptImage && !promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
-        return res.status(400).json({
-          error: 'Invalid image format',
-          details: 'promptImage must be a valid URL or base64 data URL'
-        });
-      }
-      
-      let imageToUse = promptImage;
-      if (!promptImage || promptImage.includes('dummyimage.com')) {
-        console.log('⚠️ Using default image for Runway');
-        imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
-      }
-      
-      result = await generateRunwayVideo({
-        promptText,
-        promptImage: imageToUse,
-        model: model || 'gen4_turbo',
-        ratio: ratio || '1104:832',
-        duration: duration || 5
-      });
-    }
-
-    console.log(`✅ Video generated successfully with ${videoModel || 'runway'}:`, result.taskId);
-
-    return res.status(200).json({
-      success: true,
-      videoUrl: result.url,
-      taskId: result.taskId,
-      model: videoModel || 'runway',
-      metadata: result.metadata
-    });
-
-  } catch (error) {
-    console.error('Error in video generation:', error);
-    return res.status(500).json({ 
-      error: 'Failed to generate video',
-      details: error.message 
-    });
-  }
-}
-
 export default async function handler(req, res) {
   // Set CORS headers early
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1199,7 +1106,7 @@ export default async function handler(req, res) {
       if (req.body.generateVideo === true) {
         console.log('Processing video generation request');
         
-        const { promptText, promptImage, projectId, model, ratio, duration } = req.body;
+        const { promptText, promptImage, projectId, model, ratio, duration, videoModel } = req.body;
 
         if (!promptText) {
           return res.status(400).json({ 
@@ -1208,43 +1115,72 @@ export default async function handler(req, res) {
           });
         }
 
-        if (!runwayApiKey) {
-          console.error('Runway API key not configured');
-          return res.status(500).json({ 
-            error: 'Video generation service not configured',
-            details: 'Please configure RUNWAY_API_KEY in Vercel environment variables'
-          });
-        }
-
         try {
-          if (!promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
-            return res.status(400).json({
-              error: 'Invalid image format',
-              details: 'promptImage must be a valid URL or base64 data URL'
+          let result;
+          
+          if (videoModel === 'veo3') {
+            // Use Veo3 for video generation
+            if (!googleGeminiApiKey) {
+              console.error('Google Gemini API key not configured');
+              return res.status(500).json({ 
+                error: 'Veo3 video generation service not configured',
+                details: 'Please configure GOOGLE_GEMINI_API_KEY in environment variables'
+              });
+            }
+            
+            // Convert ratio format from Runway to Veo3 format
+            let veo3AspectRatio = '16:9'; // default
+            if (ratio === '1104:832') veo3AspectRatio = '4:3';
+            else if (ratio === '832:1104') veo3AspectRatio = '9:16';
+            else if (ratio === '1920:1080') veo3AspectRatio = '16:9';
+            
+            result = await generateVeo3Video({
+              promptText,
+              aspectRatio: veo3AspectRatio,
+              duration
+            });
+            
+          } else {
+            // Use Runway for video generation (default)
+            if (!runwayApiKey) {
+              console.error('Runway API key not configured');
+              return res.status(500).json({ 
+                error: 'Runway video generation service not configured',
+                details: 'Please configure RUNWAY_API_KEY in environment variables'
+              });
+            }
+            
+            // For Runway, validate promptImage
+            if (promptImage && !promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
+              return res.status(400).json({
+                error: 'Invalid image format',
+                details: 'promptImage must be a valid URL or base64 data URL'
+              });
+            }
+            
+            let imageToUse = promptImage;
+            if (!promptImage || promptImage.includes('dummyimage.com')) {
+              console.log('⚠️ Using default image for Runway');
+              imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
+            }
+            
+            result = await generateRunwayVideo({
+              promptText,
+              promptImage: imageToUse,
+              model: model || 'gen4_turbo',
+              ratio: ratio || '1104:832',
+              duration: duration || 5
             });
           }
-          
-          let imageToUse = promptImage;
-          if (promptImage.includes('dummyimage.com')) {
-            console.log('⚠️ Replacing dummyimage.com with a proper test image');
-            imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
-          }
-          
-          const { url, taskId } = await generateRunwayVideo({
-            promptText,
-            promptImage: imageToUse,
-            model: model || 'gen4_turbo',
-            ratio: ratio || '1104:832',
-            duration: duration || 5
-          });
 
-          console.log('✅ Video generated successfully:', taskId);
+          console.log(`✅ Video generated successfully with ${videoModel || 'runway'}:`, result.taskId);
 
           return res.status(200).json({
             success: true,
-            videoUrl: url,
-            taskId,
-            model: model || 'gen4_turbo'
+            videoUrl: result.url,
+            taskId: result.taskId,
+            model: videoModel || 'runway',
+            metadata: result.metadata
           });
 
         } catch (error) {
