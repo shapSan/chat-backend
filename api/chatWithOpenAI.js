@@ -846,7 +846,7 @@ async function generateRunwayVideo({
   promptText, 
   promptImage, 
   model = 'gen3_alpha_turbo',
-  ratio = '1280:720',
+  ratio = '1104:832',
   duration = 5
 }) {
   if (!runwayApiKey) {
@@ -1054,7 +1054,7 @@ export default async function handler(req, res) {
             promptText,
             promptImage: imageToUse,
             model: model || 'gen4_turbo',
-            ratio: ratio || '1280:720',
+            ratio: ratio || '1104:832',
             duration: duration || 5
           });
 
