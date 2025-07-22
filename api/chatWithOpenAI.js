@@ -951,79 +951,119 @@ async function generateVeo3Video({
   }
 
   console.log('🎬 Starting Veo3 video generation...');
+  console.log('Using Google Gemini API key:', googleGeminiApiKey.substring(0, 10) + '...');
 
   try {
-    const genAI = new GoogleGenerativeAI(googleGeminiApiKey);
+    // Make direct API call to Google's endpoint
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:generateVideo?key=${googleGeminiApiKey}`;
     
     console.log('🎥 Creating video with Veo3...');
-    let operation = await genAI.models.generateVideos({
-      model: "veo-3.0-generate-preview",
-      prompt: promptText,
-      config: {
-        personGeneration: "allow_all",
-        aspectRatio: aspectRatio,
+    console.log('Request details:', { promptText, aspectRatio });
+    
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify({
+        prompt: promptText,
+        config: {
+          personGeneration: "allow_all",
+          aspectRatio: aspectRatio,
+          duration: `${duration}s`
+        }
+      })
     });
 
-    console.log('✅ Video task created:', operation.name);
-
-    // Poll for completion
-    console.log('⏳ Waiting for video generation...');
-    let attempts = 0;
-    const maxAttempts = 60; // 10 minutes max wait time
-
-    while (!operation.done && attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Veo3 API error:', response.status, errorText);
       
-      operation = await genAI.operations.getVideosOperation({
-        operation: operation,
-      });
+      if (response.status === 401) {
+        throw new Error('Invalid API key. Check GOOGLE_GEMINI_API_KEY in environment variables.');
+      }
+      if (response.status === 404) {
+        throw new Error('Veo3 API endpoint not found. The API may not be available in your region or your API key may not have access.');
+      }
+      if (response.status === 429) {
+        throw new Error('Rate limit exceeded. Try again later.');
+      }
       
-      console.log(`🔄 Status: ${operation.done ? 'COMPLETED' : 'PROCESSING'} (${attempts + 1}/${maxAttempts})`);
-      attempts++;
+      throw new Error(`Veo3 API error: ${response.status} - ${errorText}`);
     }
 
-    if (!operation.done) {
+    const operation = await response.json();
+    console.log('✅ Video task created:', operation);
+
+    // If the API returns the operation name, we need to poll for completion
+    if (operation.name) {
+      console.log('⏳ Waiting for video generation...');
+      let attempts = 0;
+      const maxAttempts = 60; // 10 minutes max wait time
+      
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+        
+        // Poll the operation status
+        const statusUrl = `https://generativelanguage.googleapis.com/v1beta/${operation.name}?key=${googleGeminiApiKey}`;
+        const statusResponse = await fetch(statusUrl);
+        
+        if (!statusResponse.ok) {
+          console.error('Failed to check operation status:', statusResponse.status);
+          throw new Error('Failed to check video generation status');
+        }
+        
+        const statusData = await statusResponse.json();
+        console.log(`🔄 Status check ${attempts + 1}/${maxAttempts}:`, statusData.done ? 'COMPLETED' : 'PROCESSING');
+        
+        if (statusData.done) {
+          if (statusData.error) {
+            throw new Error(`Video generation failed: ${statusData.error.message}`);
+          }
+          
+          // Get the video URL from the response
+          const videoUrl = statusData.response?.video?.uri || statusData.response?.videoUrl;
+          if (!videoUrl) {
+            console.error('No video URL in response:', statusData);
+            throw new Error('No video URL in response');
+          }
+          
+          return {
+            url: videoUrl,
+            taskId: operation.name,
+            metadata: statusData.response
+          };
+        }
+        
+        attempts++;
+      }
+      
       throw new Error('Video generation timed out');
+    } else {
+      // If the API returns the video directly (unlikely for video generation)
+      const videoUrl = operation.video?.uri || operation.videoUrl;
+      if (!videoUrl) {
+        console.error('No video URL in response:', operation);
+        throw new Error('No video URL in response');
+      }
+      
+      return {
+        url: videoUrl,
+        taskId: 'direct-response',
+        metadata: operation
+      };
     }
-
-    // Get the first generated video
-    const generatedVideo = operation.response?.generatedVideos?.[0];
-    if (!generatedVideo?.video?.uri) {
-      throw new Error('No video URL in response');
-    }
-
-    // The video URI from Google needs the API key appended
-    const videoUrl = `${generatedVideo.video.uri}&key=${googleGeminiApiKey}`;
-    
-    console.log('✅ Video ready!');
-    
-    return {
-      url: videoUrl,
-      taskId: operation.name,
-      metadata: generatedVideo.video
-    };
 
   } catch (error) {
     console.error('Veo3 Error Details:', {
       message: error.message,
       status: error.status,
-      error: error.error
+      error: error.error,
+      stack: error.stack
     });
     
-    if (error.message?.includes('401')) {
-      throw new Error('Invalid API key. Check GOOGLE_GEMINI_API_KEY in environment variables.');
-    }
-    
-    if (error.message?.includes('429')) {
-      throw new Error('Rate limit exceeded. Try again later.');
-    }
-    
-    if (error.message?.includes('quota')) {
-      throw new Error('Veo3 quota exceeded. Please check your Google Cloud quota.');
-    }
-    
-    throw error;
+    // For now, return a friendly error message
+    throw new Error(`Veo3 is currently in preview and may not be available. ${error.message}`);
   }
 }
 
