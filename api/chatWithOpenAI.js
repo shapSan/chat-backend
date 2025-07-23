@@ -1933,11 +1933,15 @@ try {
         claudeOrganizedData.firefliesTranscripts.slice(0, 5).forEach(transcript => {
           systemMessageContent += `- ${transcript.title} (${transcript.date})\n`;
           systemMessageContent += `  Participants: ${transcript.participants?.join(', ') || 'Unknown'}\n`;
-          if (transcript.summary?.overview) {
+         if (transcript.summary?.overview) {
             systemMessageContent += `  Summary: ${transcript.summary.overview.slice(0, 200)}...\n`;
           }
-          if (transcript.summary?.action_items && transcript.summary.action_items.length > 0) {
-            systemMessageContent += `  Action Items: ${transcript.summary.action_items.slice(0, 3).join('; ')}\n`;
+          if (transcript.summary?.action_items) {
+            if (Array.isArray(transcript.summary.action_items) && transcript.summary.action_items.length > 0) {
+              systemMessageContent += `  Action Items: ${transcript.summary.action_items.slice(0, 3).join('; ')}\n`;
+            } else if (typeof transcript.summary.action_items === 'string') {
+              systemMessageContent += `  Action Items: ${transcript.summary.action_items}\n`;
+            }
           }
           systemMessageContent += "\n";
         });
