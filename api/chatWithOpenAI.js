@@ -860,7 +860,16 @@ ${allBrands.slice(0, 50).map(b =>
     }
     
     const data = await response.json();
-    const scores = JSON.parse(data.choices[0].message.content);
+   let scores = {};
+try {
+  scores = JSON.parse(data.choices[0].message.content);
+} catch (parseError) {
+  console.error('Failed to parse OpenAI scores, using fallback scoring');
+  // Fallback: give all brands a default score
+  allBrands.forEach(b => {
+    scores[b.name] = 50; // Default middle score
+  });
+}
     
     // Sort brands by score and take top 15
     const topBrands = allBrands
