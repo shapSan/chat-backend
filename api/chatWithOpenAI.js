@@ -924,10 +924,14 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     console.log('📊 Stage 1: Fetching from Airtable and HubSpot...');
     
     // Use the enhanced message for searching
+// Extract keyword intelligently for Fireflies
+const firefliesKeyword = await extractSearchKeyword(userMessage);
+
+// Use the enhanced message for searching
 const [airtableData, hubspotData, firefliesData] = await Promise.all([
   searchAirtable(enhancedMessage, projectId, 'brands', 100),
   hubspotApiKey ? searchHubSpot(enhancedMessage, projectId, 50) : { brands: [], productions: [] },
-  firefliesApiKey ? searchFireflies(userMessage, { limit: 20 }) : { transcripts: [] }
+  firefliesApiKey ? searchFireflies(firefliesKeyword, { limit: 20 }) : { transcripts: [] }
 ]);
     
     const meetingData = await searchAirtable(enhancedMessage, projectId, 'meetings', 50);
