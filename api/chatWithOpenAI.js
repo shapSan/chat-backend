@@ -1725,7 +1725,7 @@ try {
       
       console.log('🔍 Search detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
       
-      console.log('🔍 Brand matching detection:', { isBrandMatchingQuery, userMessage: userMessage?.slice(0, 50) });
+      console.log('🔍 Brand matching detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
 
       // Process audio or text
       if (audioData) {
