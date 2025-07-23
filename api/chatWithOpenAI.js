@@ -882,6 +882,41 @@ ${allBrands.slice(0, 50).map(b =>
     return { topBrands: [...airtableBrands, ...hubspotBrands].slice(0, 15), scores: {} };
   }
 }
+// AI-powered keyword extraction for Fireflies searches
+async function extractSearchKeyword(query) {
+  if (!openAIApiKey) return '';
+  
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [{
+          role: 'system',
+          content: 'Extract the search keyword from this query about meetings. If asking about "latest meeting" with no specific topic, return empty string. If asking about a specific brand/person/topic, return just that term. Return ONLY the keyword or empty string, nothing else.'
+        }, {
+          role: 'user',
+          content: query
+        }],
+        temperature: 0,
+        max_tokens: 20
+      }),
+    });
+    
+    const data = await response.json();
+    const keyword = data.choices[0].message.content.trim();
+    console.log(`🔍 AI extracted keyword: "${keyword}" from query: "${query}"`);
+    return keyword;
+    
+  } catch (error) {
+    console.error('Error extracting keyword:', error);
+    return ''; // Default to no keyword
+  }
+}
 
 // Stage 3: Claude MCP search that ONLY gathers data (doesn't generate final response)
 async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId, conversationContext) {
