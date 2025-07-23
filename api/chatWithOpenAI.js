@@ -803,25 +803,6 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefli
       }
     });
 
-    // Add Fireflies meeting insights
-    if (firefliesTranscripts && firefliesTranscripts.length > 0) {
-      allBrands.push({
-        source: 'fireflies_context',
-        name: `Meeting Insights (${firefliesTranscripts.length} transcripts)`,
-        category: 'Meeting Intelligence',
-        budget: 'N/A',
-        summary: firefliesTranscripts.slice(0, 3).map(t => 
-          `${t.title}: ${(t.summary?.overview || '').slice(0, 100)}...`
-        ).join(' | '),
-        lastActivity: firefliesTranscripts[0]?.date,
-        transcriptCount: firefliesTranscripts.length
-      });
-    }
-
-    if (allBrands.length === 0) {
-      return { topBrands: [], scores: {} };
-    }
-
     
     
     // Create a product placement focused scoring prompt
@@ -1084,13 +1065,14 @@ Return ONLY valid JSON, no other text.`;
     }
     
     // Return the organized data for OpenAI to format
-    return {
+return {
       organizedData: {
         topBrands: topBrands,
         meetings: meetingData.records,
         productions: hubspotData.productions,
+        firefliesTranscripts: firefliesData.transcripts || [],  // ADD THIS
         claudeSummary: organizedData,
-        currentProduction: currentProduction  // Pass production context
+        currentProduction: currentProduction
       },
       mcpThinking,
       usedMCP: true
@@ -1882,6 +1864,21 @@ try {
                   systemMessageContent += "\n";
                 });
               }
+
+              if (claudeOrganizedData.firefliesTranscripts && claudeOrganizedData.firefliesTranscripts.length > 0) {
+        systemMessageContent += "\n**FIREFLIES MEETING TRANSCRIPTS:**\n";
+        claudeOrganizedData.firefliesTranscripts.slice(0, 5).forEach(transcript => {
+          systemMessageContent += `- ${transcript.title} (${transcript.date})\n`;
+          systemMessageContent += `  Participants: ${transcript.participants?.join(', ') || 'Unknown'}\n`;
+          if (transcript.summary?.overview) {
+            systemMessageContent += `  Summary: ${transcript.summary.overview.slice(0, 200)}...\n`;
+          }
+          if (transcript.summary?.action_items && transcript.summary.action_items.length > 0) {
+            systemMessageContent += `  Action Items: ${transcript.summary.action_items.slice(0, 3).join('; ')}\n`;
+          }
+          systemMessageContent += "\n";
+        });
+      }
               
               if (claudeOrganizedData.claudeSummary) {
                 systemMessageContent += "\n**ANALYSIS INSIGHTS:**\n";
