@@ -292,7 +292,7 @@ const firefliesAPI = {
       
       // Build the GraphQL query with ALL the fields I have access to
       const graphqlQuery = `
-        query SearchTranscripts($keyword: String, $limit: Int, $fromDate: String, $toDate: String, $organizer_email: String, $participant_email: String) {
+        query SearchTranscripts($keyword: String, $limit: Int, $fromDate: DateTime, $toDate: DateTime, $organizer_email: String, $participant_email: String) {
           transcripts(
             keyword: $keyword, 
             limit: $limit,
