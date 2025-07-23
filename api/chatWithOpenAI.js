@@ -648,24 +648,25 @@ async function searchHubSpot(query, projectId, limit = 50) {
     
     // Build smart filters based on the search
     let filterGroups = [];
-    
+
     if (searchTerm) {
-      // Specific search - like MCP does
-      filterGroups = [{
-        filters: [{
-          propertyName: 'name',
-          operator: 'CONTAINS_TOKEN',
-          value: searchTerm
-        }]
-      }, {
-        filters: [{
-          propertyName: 'brand_name',
-          operator: 'CONTAINS_TOKEN', 
-          value: searchTerm
-        }]
-      }];
+      filterGroups = [
+        {
+          filters: [{
+            propertyName: 'name',
+            operator: 'CONTAINS_TOKEN',
+            value: searchTerm
+          }]
+        },
+        {
+          filters: [{
+            propertyName: 'brand_name',
+            operator: 'CONTAINS_TOKEN',
+            value: searchTerm
+          }]
+        }
+      ];
     } else {
-      // Broad search - your existing filters
       filterGroups = [
         {
           filters: [{ 
@@ -682,78 +683,24 @@ async function searchHubSpot(query, projectId, limit = 50) {
         }
       ];
     }
-    
-async searchBrands(filters = {}) {
-    try {
-      console.log('🔍 HubSpot searchBrands called with filters:', filters);
-      
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${hubspotApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          filterGroups: filters.filterGroups || [
-            {
-              filters: [{ 
-                propertyName: 'brand_name', 
-                operator: 'HAS_PROPERTY' 
-              }]
-            },
-            {
-              filters: [{ 
-                propertyName: 'lifecyclestage', 
-                operator: 'IN',
-                values: ['customer', 'opportunity', 'salesqualifiedlead']
-              }]
-            }
-          ],
-          properties: [
-            'name',
-            'brand_name',
-            'company_type',
-            'brand_category',
-            'lifecyclestage',
-            'media_spend_m_',
-            'partner_agency_name',
-            'notes_last_contacted',
-            'num_associated_contacts',
-            'description',
-            'industry',
-            'annualrevenue',
-            'numberofemployees',
-            'website',
-            'hs_lastmodifieddate',
-            'client_status',
-            'target_generation',
-            'target_income',
-            'playbook'
-          ],
-          limit: filters.limit || 50,
-          sorts: [{ 
-            propertyName: 'hs_lastmodifieddate', 
-            direction: 'DESCENDING' 
-          }]
-        })
-      });
-      
-      if (!response.ok) {
-        const errorBody = await response.text();
-        console.error('❌ HubSpot API error:', response.status, errorBody);
-        throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
-      }
-      
-      const data = await response.json();
-      console.log(`✅ HubSpot search returned ${data.results?.length || 0} companies`);
-      
-      return data;
-    } catch (error) {
-      console.error('❌ Error searching HubSpot brands:', error);
-      console.error('Stack trace:', error.stack);
-      return { results: [] };
-    }
-  },
+
+    const brandsData = await hubspotAPI.searchBrands({
+      filterGroups: filterGroups,
+      limit
+    });
+
+    const productionsData = await hubspotAPI.searchProductions({ limit });
+
+    return {
+      brands: brandsData.results || [],
+      productions: productionsData.results || []
+    };
+
+  } catch (error) {
+    console.error('❌ Error searching HubSpot:', error);
+    return { brands: [], productions: [] };
+  }
+}
 
 // Stage 2: Enhanced narrowing that includes HubSpot data
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
