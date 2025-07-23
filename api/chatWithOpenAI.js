@@ -1311,6 +1311,43 @@ async function generateVeo3Video({
   }
 }
 
+// Intelligent query classification using AI
+async function shouldUseSearch(userMessage, conversationContext) {
+  if (!openAIApiKey) return false;
+  
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [{
+          role: 'system',
+          content: 'You are a query classifier. Determine if this query needs to search databases (Airtable/HubSpot/Fireflies). Return ONLY "true" or "false".'
+        }, {
+          role: 'user',
+          content: `Query: "${userMessage}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, or any business data? Consider context clues like dates, names, projects.`
+        }],
+        temperature: 0,
+        max_tokens: 10
+      }),
+    });
+    
+    const data = await response.json();
+    const result = data.choices[0].message.content.toLowerCase().trim();
+    console.log(`🤖 AI classified query "${userMessage.slice(0,50)}..." as needing search: ${result}`);
+    return result === 'true';
+    
+  } catch (error) {
+    console.error('Error classifying query:', error);
+    // Fallback to keyword detection
+    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent)/);
+  }
+}
+
 export default async function handler(req, res) {
   // Set CORS headers early
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1683,23 +1720,10 @@ try {
         console.error(`Error fetching conversation history:`, error);
       }
 
-      // Enhanced search query detection
-      const isBrandMatchingQuery = userMessage && (
-        userMessage.toLowerCase().includes('brand') ||
-        userMessage.toLowerCase().includes('match') ||
-        userMessage.toLowerCase().includes('integration') ||
-        userMessage.toLowerCase().includes('partnership') ||
-        userMessage.toLowerCase().includes('easy money') ||
-        userMessage.toLowerCase().includes('wildcard') ||
-        userMessage.toLowerCase().includes('audience match') ||
-        userMessage.toLowerCase().includes('hot new brands') ||
-        userMessage.toLowerCase().includes('fits the story') ||
-        userMessage.toLowerCase().includes('save production money') ||
-        userMessage.toLowerCase().includes('for this project') ||
-        userMessage.toLowerCase().includes('for this production') ||
-        userMessage.toLowerCase().includes('upcoming') ||
-        userMessage.toLowerCase().includes('synopsis')
-      );
+// Intelligent search query detection
+      const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
+      
+      console.log('🔍 Search detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
       
       console.log('🔍 Brand matching detection:', { isBrandMatchingQuery, userMessage: userMessage?.slice(0, 50) });
 
@@ -1783,7 +1807,7 @@ try {
 
           // Try Claude MCP for data gathering on brand matching queries
           let claudeOrganizedData = null;
-          if (isBrandMatchingQuery && anthropicApiKey) {
+          if (shouldSearchDatabases && anthropicApiKey) {
             console.log('🎯 Brand matching query detected - attempting Claude MCP data gathering...');
             console.log('🔑 API keys:', {
               anthropic: anthropicApiKey ? 'Present' : 'MISSING!',
@@ -1808,8 +1832,8 @@ try {
               console.log('⚠️ Claude MCP failed or returned null, using standard OpenAI');
             }
           } else {
-            if (!isBrandMatchingQuery) {
-              console.log('❌ Not a brand matching query - using standard OpenAI');
+           if (!shouldSearchDatabases) {
+              console.log('❌ AI determined no search needed - using standard OpenAI');
             }
             if (!anthropicApiKey) {
               console.log('❌ No Anthropic API key - using standard OpenAI');
