@@ -383,7 +383,8 @@ const o365API = {
             },
             from: 0,
             size: options.limit || 25,
-            fields: ['subject', 'from', 'toRecipients', 'receivedDateTime', 'bodyPreview', 'webLink']
+            fields: ['subject', 'from', 'toRecipients', 'receivedDateTime', 'bodyPreview', 'webLink'],
+            region: 'NAM' // North America region - required for application permissions
           }]
         })
       });
