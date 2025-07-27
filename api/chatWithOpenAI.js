@@ -1669,10 +1669,10 @@ async function shouldUseSearch(userMessage, conversationContext) {
         model: 'gpt-3.5-turbo',
         messages: [{
           role: 'system',
-          content: 'You are a query classifier. Determine if this query needs to search databases (Airtable/HubSpot/Fireflies). Return ONLY "true" or "false".'
+          content: 'You are a query classifier. Determine if this query needs to search databases (Airtable/HubSpot/Fireflies/Emails). Return ONLY "true" or "false".'
         }, {
           role: 'user',
-          content: `Query: "${userMessage}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, or any business data? Consider context clues like dates, names, projects.`
+          content: `Query: "${userMessage}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, emails, or any business data? Consider context clues like dates, names, projects, and email mentions.`
         }],
         temperature: 0,
         max_tokens: 10
@@ -1686,8 +1686,8 @@ async function shouldUseSearch(userMessage, conversationContext) {
     
   } catch (error) {
     console.error('Error classifying query:', error);
-    // Fallback to keyword detection
-    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent)/);
+    // Fallback to keyword detection - UPDATED to include email
+    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message)/);
   }
 }
 
@@ -2066,7 +2066,13 @@ try {
 // Intelligent search query detection
       const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
       
-      console.log('🔍 Search detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
+      console.log('🔍 Search detection:', { 
+        shouldSearchDatabases, 
+        userMessage: userMessage?.slice(0, 50),
+        hasO365: !!msftClientId,
+        hasHubSpot: !!hubspotApiKey,
+        hasFireflies: !!firefliesApiKey
+      });
       
       console.log('🔍 Brand matching detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
 
