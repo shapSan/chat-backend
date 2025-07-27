@@ -280,6 +280,225 @@ const hubspotAPI = {
 };
 
 
+// Microsoft Graph API Helper Functions (O365 Integration)
+const microsoftTenantId = process.env.MICROSOFT_TENANT_ID;
+const microsoftClientId = process.env.MICROSOFT_CLIENT_ID;
+const microsoftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
+
+const o365API = {
+  accessToken: null,
+  tokenExpiry: null,
+  
+  async getAccessToken() {
+    try {
+      // Check if we have a valid cached token
+      if (this.accessToken && this.tokenExpiry && new Date() < this.tokenExpiry) {
+        return this.accessToken;
+      }
+      
+      console.log('🔐 Getting new Microsoft Graph access token...');
+      
+      const tokenUrl = `https://login.microsoftonline.com/${microsoftTenantId}/oauth2/v2.0/token`;
+      
+      const params = new URLSearchParams({
+        client_id: microsoftClientId,
+        client_secret: microsoftClientSecret,
+        scope: 'https://graph.microsoft.com/.default',
+        grant_type: 'client_credentials'
+      });
+      
+      const response = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: params.toString()
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Microsoft auth error:', response.status, errorText);
+        throw new Error(`Microsoft auth failed: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      this.accessToken = data.access_token;
+      // Set expiry to 5 minutes before actual expiry for safety
+      this.tokenExpiry = new Date(Date.now() + (data.expires_in - 300) * 1000);
+      
+      console.log('✅ Microsoft Graph access token obtained');
+      return this.accessToken;
+    } catch (error) {
+      console.error('❌ Error getting Microsoft access token:', error);
+      throw error;
+    }
+  },
+  
+  async searchEmails(query, options = {}) {
+    try {
+      console.log('📧 Searching O365 emails for:', query);
+      
+      if (!microsoftClientId || !microsoftClientSecret || !microsoftTenantId) {
+        console.warn('Microsoft credentials not configured, skipping email search');
+        return [];
+      }
+      
+      const accessToken = await this.getAccessToken();
+      
+      // Build the search query
+      const days = options.days || 30;
+      const fromDate = new Date();
+      fromDate.setDate(fromDate.getDate() - days);
+      
+      // KQL query for searching emails
+      let searchQuery = `(body:"${query}" OR subject:"${query}")`;
+      
+      // Add date filter
+      searchQuery += ` AND received>=${fromDate.toISOString()}`;
+      
+      // Add domain filter if searching for brands
+      if (options.brandDomains && options.brandDomains.length > 0) {
+        const domainFilters = options.brandDomains.map(d => `from:${d}`).join(' OR ');
+        searchQuery = `(${searchQuery}) AND (${domainFilters})`;
+      }
+      
+      const searchUrl = `https://graph.microsoft.com/v1.0/search/query`;
+      
+      const response = await fetch(searchUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          requests: [{
+            entityTypes: ['message'],
+            query: {
+              queryString: searchQuery
+            },
+            from: 0,
+            size: options.limit || 25,
+            fields: ['subject', 'from', 'toRecipients', 'receivedDateTime', 'bodyPreview', 'webLink']
+          }]
+        })
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Microsoft Graph search error:', response.status, errorText);
+        
+        if (response.status === 401) {
+          // Token might be expired, clear it
+          this.accessToken = null;
+          this.tokenExpiry = null;
+        }
+        
+        throw new Error(`Email search failed: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const emails = data.value?.[0]?.hitsContainers?.[0]?.hits || [];
+      
+      console.log(`✅ Found ${emails.length} relevant emails`);
+      
+      // Format the results
+      return emails.map(hit => ({
+        id: hit.resource.id,
+        subject: hit.resource.subject,
+        from: hit.resource.from?.emailAddress?.address,
+        fromName: hit.resource.from?.emailAddress?.name,
+        receivedDate: hit.resource.receivedDateTime,
+        preview: hit.resource.bodyPreview,
+        webLink: hit.resource.webLink,
+        relevanceScore: hit.rank || 0
+      }));
+      
+    } catch (error) {
+      console.error('❌ Error searching O365 emails:', error);
+      // Return empty array instead of throwing - don't break the flow
+      return [];
+    }
+  },
+  
+  async createDraft(subject, body, to, options = {}) {
+    try {
+      console.log('✉️ Creating email draft...');
+      
+      const accessToken = await this.getAccessToken();
+      
+      const draftData = {
+        subject: subject,
+        body: {
+          contentType: options.isHtml ? 'HTML' : 'Text',
+          content: body
+        },
+        toRecipients: Array.isArray(to) ? 
+          to.map(email => ({ emailAddress: { address: email } })) : 
+          [{ emailAddress: { address: to } }]
+      };
+      
+      // Add CC if provided
+      if (options.cc) {
+        draftData.ccRecipients = Array.isArray(options.cc) ?
+          options.cc.map(email => ({ emailAddress: { address: email } })) :
+          [{ emailAddress: { address: options.cc } }];
+      }
+      
+      const response = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(draftData)
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Failed to create draft:', response.status, errorText);
+        throw new Error(`Draft creation failed: ${response.status}`);
+      }
+      
+      const draft = await response.json();
+      console.log('✅ Email draft created:', draft.id);
+      
+      return {
+        id: draft.id,
+        webLink: draft.webLink
+      };
+      
+    } catch (error) {
+      console.error('❌ Error creating email draft:', error);
+      throw error;
+    }
+  },
+  
+  async testConnection() {
+    try {
+      console.log('🔍 Testing O365 connection...');
+      const token = await this.getAccessToken();
+      
+      // Test with a simple API call
+      const response = await fetch('https://graph.microsoft.com/v1.0/me', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        console.error('❌ O365 test failed:', response.status);
+        return false;
+      }
+      
+      console.log('✅ O365 connection successful');
+      return true;
+    } catch (error) {
+      console.error('❌ O365 connection test error:', error);
+      return false;
+    }
+  }
+};
+
 // Fireflies API Helper Functions (ENHANCED VERSION)
 const firefliesApiKey = process.env.FIREFLIES_API_KEY || 'e88b1a60-3390-4dca-9605-20e533727717';
 
@@ -978,10 +1197,15 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
 const firefliesKeyword = await extractSearchKeyword(userMessage);
 
 // Use the enhanced message for searching
-const [airtableData, hubspotData, firefliesData] = await Promise.all([
+const [airtableData, hubspotData, firefliesData, o365Data] = await Promise.all([
   searchAirtable(enhancedMessage, projectId, 'brands', 100),
   hubspotApiKey ? searchHubSpot(enhancedMessage, projectId, 50) : { brands: [], productions: [] },
-  firefliesApiKey ? searchFireflies(firefliesKeyword, { limit: 20 }) : { transcripts: [] }
+  firefliesApiKey ? searchFireflies(firefliesKeyword, { limit: 20 }) : { transcripts: [] },
+  microsoftClientId ? o365API.searchEmails(enhancedMessage, { 
+    days: 30, 
+    limit: 20,
+    brandDomains: [] // We'll populate this with brand domains if needed
+  }) : []
 ]);
     
     const meetingData = await searchAirtable(enhancedMessage, projectId, 'meetings', 50);
@@ -1124,7 +1348,8 @@ return {
         topBrands: topBrands,
         meetings: meetingData.records,
         productions: hubspotData.productions,
-        firefliesTranscripts: firefliesData.transcripts || [],  // ADD THIS
+        firefliesTranscripts: firefliesData.transcripts || [],
+        o365Emails: o365Data || [],  // ADD THIS
         claudeSummary: organizedData,
         currentProduction: currentProduction
       },
