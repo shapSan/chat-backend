@@ -363,22 +363,33 @@ const o365API = {
       // Build a more intelligent filter
       let filter = `receivedDateTime ge ${dateFilter}`;
       
+      // Helper function to escape single quotes for OData filters
+      const escapeOData = (str) => {
+        if (!str) return '';
+        // Replace single quotes with two single quotes for OData
+        return str.replace(/'/g, "''");
+      };
+      
       // Search for production mentions or brand domains
       const searchTerms = [];
       
-      // Add main query term
+      // Add main query term - but limit length and escape
       if (query) {
-        searchTerms.push(`contains(subject,'${query}') or contains(body/content,'${query}')`);
+        // Truncate very long queries and escape
+        const searchQuery = escapeOData(query.slice(0, 100));
+        searchTerms.push(`contains(subject,'${searchQuery}') or contains(body/content,'${searchQuery}')`);
       }
       
       // Add production-related terms if found
       if (options.productionTitle) {
-        searchTerms.push(`contains(subject,'${options.productionTitle}') or contains(body/content,'${options.productionTitle}')`);
+        const escapedTitle = escapeOData(options.productionTitle);
+        searchTerms.push(`contains(subject,'${escapedTitle}') or contains(body/content,'${escapedTitle}')`);
       }
       
       // Add genre if specified
       if (options.genre) {
-        searchTerms.push(`contains(body/content,'${options.genre}')`);
+        const escapedGenre = escapeOData(options.genre);
+        searchTerms.push(`contains(body/content,'${escapedGenre}')`);
       }
       
       // Combine all search terms with OR
@@ -1222,18 +1233,37 @@ const firefliesKeyword = await extractSearchKeyword(userMessage);
 let productionTitle = currentProduction;
 let genre = null;
 
-// Simple genre detection
-const genreMatch = enhancedMessage.match(/\b(action|comedy|drama|thriller|horror|romance|sci-fi|documentary|reality)\b/i);
-if (genreMatch) {
-  genre = genreMatch[1];
+// Better genre detection from synopsis or description
+const genrePatterns = {
+  action: /\b(action|fight|chase|explosion|battle|war|combat)\b/i,
+  comedy: /\b(comedy|funny|humor|hilarious|laugh|comic)\b/i,
+  drama: /\b(drama|emotional|family|relationship|struggle)\b/i,
+  thriller: /\b(thriller|suspense|mystery|detective|crime)\b/i,
+  horror: /\b(horror|scary|terror|ghost|supernatural)\b/i,
+  romance: /\b(romance|love|romantic|relationship|dating)\b/i,
+  scifi: /\b(sci-fi|science fiction|future|space|alien|technology)\b/i,
+  documentary: /\b(documentary|true story|real|factual)\b/i
+};
+
+// Check for genre in the message
+for (const [genreName, pattern] of Object.entries(genrePatterns)) {
+  if (pattern.test(enhancedMessage)) {
+    genre = genreName;
+    console.log(`🎬 Detected genre: ${genre}`);
+    break;
+  }
 }
+
+// Also extract any synopsis for keyword extraction
+const synopsisMatch = enhancedMessage.match(/synopsis[:\s]+([^.!?]+)/i);
+const synopsis = synopsisMatch ? synopsisMatch[1].trim() : null;
 
 // Use the enhanced message for searching
 const [airtableData, hubspotData, firefliesData, o365Data] = await Promise.all([
   searchAirtable(enhancedMessage, projectId, 'brands', 100),
   hubspotApiKey ? searchHubSpot(enhancedMessage, projectId, 50) : { brands: [], productions: [] },
   firefliesApiKey ? searchFireflies(firefliesKeyword, { limit: 20 }) : { transcripts: [] },
-  msftClientId ? o365API.searchEmails(enhancedMessage, { 
+  msftClientId ? o365API.searchEmails(productionTitle || synopsis?.slice(0, 50) || enhancedMessage.slice(0, 50), { 
     days: 30, 
     limit: 20,
     userEmail: process.env.O365_SEARCH_EMAIL || 'stacy@hollywoodbranded.com',
