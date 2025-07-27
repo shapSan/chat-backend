@@ -22,8 +22,6 @@ const runwayApiKey = process.env.RUNWAY_API_KEY;
 const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 const googleGeminiApiKey = process.env.GOOGLE_GEMINI_API_KEY;
 const firefliesApiKey = process.env.FIREFLIES_API_KEY || 'e88b1a60-3390-4dca-9605-20e533727717';
-
-// Microsoft Graph API Helper Functions (O365 Integration)
 const microsoftTenantId = process.env.MICROSOFT_TENANT_ID;
 const microsoftClientId = process.env.MICROSOFT_CLIENT_ID;
 const microsoftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
@@ -291,6 +289,7 @@ const microsoftTenantId = process.env.MICROSOFT_TENANT_ID;
 const microsoftClientId = process.env.MICROSOFT_CLIENT_ID;
 const microsoftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
+// Microsoft Graph API Helper Functions (O365 Integration)
 const o365API = {
   accessToken: null,
   tokenExpiry: null,
