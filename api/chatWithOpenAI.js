@@ -22,9 +22,9 @@ const runwayApiKey = process.env.RUNWAY_API_KEY;
 const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 const googleGeminiApiKey = process.env.GOOGLE_GEMINI_API_KEY;
 const firefliesApiKey = process.env.FIREFLIES_API_KEY || 'e88b1a60-3390-4dca-9605-20e533727717';
-const microsoftTenantId = process.env.MICROSOFT_TENANT_ID;
-const microsoftClientId = process.env.MICROSOFT_CLIENT_ID;
-const microsoftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
+const msftTenantId = process.env.MICROSOFT_TENANT_ID;
+const msftClientId = process.env.MICROSOFT_CLIENT_ID;
+const msftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
 // Project configuration mapping
 const PROJECT_CONFIGS = {
@@ -303,11 +303,11 @@ const o365API = {
       
       console.log('🔐 Getting new Microsoft Graph access token...');
       
-      const tokenUrl = `https://login.microsoftonline.com/${microsoftTenantId}/oauth2/v2.0/token`;
+      const tokenUrl = `https://login.microsoftonline.com/${msftTenantId}/oauth2/v2.0/token`;
       
       const params = new URLSearchParams({
-        client_id: microsoftClientId,
-        client_secret: microsoftClientSecret,
+        client_id: msftClientId,
+        client_secret: msftClientSecret,
         scope: 'https://graph.microsoft.com/.default',
         grant_type: 'client_credentials'
       });
@@ -343,7 +343,7 @@ const o365API = {
     try {
       console.log('📧 Searching O365 emails for:', query);
       
-      if (!microsoftClientId || !microsoftClientSecret || !microsoftTenantId) {
+      if (!msftClientId || !msftClientSecret || !msftTenantId) {
         console.warn('Microsoft credentials not configured, skipping email search');
         return [];
       }
@@ -1196,9 +1196,9 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     
     // Debug O365 credentials
     console.log('🔑 O365 credentials check:', {
-      tenant: microsoftTenantId ? 'Present' : 'MISSING!',
-      client: microsoftClientId ? 'Present' : 'MISSING!',
-      secret: microsoftClientSecret ? 'Present' : 'MISSING!'
+      tenant: msftTenantId ? 'Present' : 'MISSING!',
+      client: msftClientId ? 'Present' : 'MISSING!',
+      secret: msftClientSecret ? 'Present' : 'MISSING!'
     });
     
     // Use the enhanced message for searching
@@ -1210,7 +1210,7 @@ const [airtableData, hubspotData, firefliesData, o365Data] = await Promise.all([
   searchAirtable(enhancedMessage, projectId, 'brands', 100),
   hubspotApiKey ? searchHubSpot(enhancedMessage, projectId, 50) : { brands: [], productions: [] },
   firefliesApiKey ? searchFireflies(firefliesKeyword, { limit: 20 }) : { transcripts: [] },
-  microsoftClientId ? o365API.searchEmails(enhancedMessage, { 
+  msftClientId ? o365API.searchEmails(enhancedMessage, { 
     days: 30, 
     limit: 20,
     brandDomains: [] // We'll populate this with brand domains if needed
@@ -2100,7 +2100,7 @@ try {
             console.log('🔑 API keys:', {
               anthropic: anthropicApiKey ? 'Present' : 'MISSING!',
               hubspot: hubspotApiKey ? 'Present' : 'MISSING!',
-              microsoft: microsoftClientId ? 'Present' : 'MISSING!'
+              microsoft: msftClientId ? 'Present' : 'MISSING!'
             });
             
             const claudeResult = await handleClaudeSearch(
