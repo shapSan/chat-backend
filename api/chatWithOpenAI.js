@@ -350,48 +350,59 @@ const o365API = {
       
       const accessToken = await this.getAccessToken();
       
-      // Build the search query
+      // For application permissions, we need to specify a user to search
+      // For now, we'll use a specific mailbox - you'll need to specify this
+      const userEmail = options.userEmail || 'stacy@hollywoodbranded.com'; // Default mailbox to search
+      
+      // Build date filter
       const days = options.days || 30;
       const fromDate = new Date();
       fromDate.setDate(fromDate.getDate() - days);
+      const dateFilter = fromDate.toISOString();
       
-      // KQL query for searching emails
-      let searchQuery = `(body:"${query}" OR subject:"${query}")`;
+      // Build a more intelligent filter
+      let filter = `receivedDateTime ge ${dateFilter}`;
       
-      // Add date filter
-      searchQuery += ` AND received>=${fromDate.toISOString()}`;
+      // Search for production mentions or brand domains
+      const searchTerms = [];
       
-      // Add domain filter if searching for brands
-      if (options.brandDomains && options.brandDomains.length > 0) {
-        const domainFilters = options.brandDomains.map(d => `from:${d}`).join(' OR ');
-        searchQuery = `(${searchQuery}) AND (${domainFilters})`;
+      // Add main query term
+      if (query) {
+        searchTerms.push(`contains(subject,'${query}') or contains(body/content,'${query}')`);
       }
       
-      const searchUrl = `https://graph.microsoft.com/v1.0/search/query`;
+      // Add production-related terms if found
+      if (options.productionTitle) {
+        searchTerms.push(`contains(subject,'${options.productionTitle}') or contains(body/content,'${options.productionTitle}')`);
+      }
       
-      const response = await fetch(searchUrl, {
-        method: 'POST',
+      // Add genre if specified
+      if (options.genre) {
+        searchTerms.push(`contains(body/content,'${options.genre}')`);
+      }
+      
+      // Combine all search terms with OR
+      if (searchTerms.length > 0) {
+        filter += ` and (${searchTerms.join(' or ')})`;
+      }
+      
+      // For brand domains, we'll need to do a separate search or filter by sender
+      const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=${options.limit || 25}&$select=subject,from,toRecipients,receivedDateTime,bodyPreview,webLink,sender&$orderby=receivedDateTime desc`;
+      
+      const response = await fetch(messagesUrl, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          requests: [{
-            entityTypes: ['message'],
-            query: {
-              queryString: searchQuery
-            },
-            from: 0,
-            size: options.limit || 25,
-            fields: ['subject', 'from', 'toRecipients', 'receivedDateTime', 'bodyPreview', 'webLink'],
-            region: 'NAM' // North America region - required for application permissions
-          }]
-        })
+        }
       });
       
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('❌ Microsoft Graph search error:', response.status, errorText);
+        console.error('❌ Microsoft Graph messages error:', response.status, errorText);
+        
+        if (response.status === 404) {
+          console.error(`User ${userEmail} not found or no access`);
+        }
         
         if (response.status === 401) {
           // Token might be expired, clear it
@@ -399,24 +410,25 @@ const o365API = {
           this.tokenExpiry = null;
         }
         
-        throw new Error(`Email search failed: ${response.status}`);
+        // Return empty array instead of throwing
+        return [];
       }
       
       const data = await response.json();
-      const emails = data.value?.[0]?.hitsContainers?.[0]?.hits || [];
+      const emails = data.value || [];
       
       console.log(`✅ Found ${emails.length} relevant emails`);
       
       // Format the results
-      return emails.map(hit => ({
-        id: hit.resource.id,
-        subject: hit.resource.subject,
-        from: hit.resource.from?.emailAddress?.address,
-        fromName: hit.resource.from?.emailAddress?.name,
-        receivedDate: hit.resource.receivedDateTime,
-        preview: hit.resource.bodyPreview,
-        webLink: hit.resource.webLink,
-        relevanceScore: hit.rank || 0
+      return emails.map(email => ({
+        id: email.id,
+        subject: email.subject,
+        from: email.from?.emailAddress?.address,
+        fromName: email.from?.emailAddress?.name,
+        receivedDate: email.receivedDateTime,
+        preview: email.bodyPreview,
+        webLink: email.webLink,
+        relevanceScore: 50 // Fixed score since we're not using search ranking
       }));
       
     } catch (error) {
@@ -1206,6 +1218,16 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
 // Extract keyword intelligently for Fireflies
 const firefliesKeyword = await extractSearchKeyword(userMessage);
 
+// Try to extract production title and genre for better email search
+let productionTitle = currentProduction;
+let genre = null;
+
+// Simple genre detection
+const genreMatch = enhancedMessage.match(/\b(action|comedy|drama|thriller|horror|romance|sci-fi|documentary|reality)\b/i);
+if (genreMatch) {
+  genre = genreMatch[1];
+}
+
 // Use the enhanced message for searching
 const [airtableData, hubspotData, firefliesData, o365Data] = await Promise.all([
   searchAirtable(enhancedMessage, projectId, 'brands', 100),
@@ -1214,7 +1236,9 @@ const [airtableData, hubspotData, firefliesData, o365Data] = await Promise.all([
   msftClientId ? o365API.searchEmails(enhancedMessage, { 
     days: 30, 
     limit: 20,
-    brandDomains: [] // We'll populate this with brand domains if needed
+    userEmail: process.env.O365_SEARCH_EMAIL || 'stacy@hollywoodbranded.com',
+    productionTitle: productionTitle,
+    genre: genre
   }) : []
 ]);
     
