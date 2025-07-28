@@ -370,35 +370,16 @@ const o365API = {
         return str.replace(/'/g, "''");
       };
       
-      // Search for production mentions or brand domains
-      const searchTerms = [];
-      
-      // Add main query term - but limit length and escape
+      // Simplify search - just use the main term to avoid timeouts
       if (query) {
-        // Truncate very long queries and escape
-        const searchQuery = escapeOData(query.slice(0, 100));
-        searchTerms.push(`contains(subject,'${searchQuery}') or contains(body/content,'${searchQuery}')`);
+        // Take first few words only to avoid complex queries
+        const searchWords = query.split(' ').slice(0, 3).join(' ');
+        const searchQuery = escapeOData(searchWords.slice(0, 50));
+        filter += ` and contains(subject,'${searchQuery}')`;
       }
       
-      // Add production-related terms if found
-      if (options.productionTitle) {
-        const escapedTitle = escapeOData(options.productionTitle);
-        searchTerms.push(`contains(subject,'${escapedTitle}') or contains(body/content,'${escapedTitle}')`);
-      }
-      
-      // Add genre if specified
-      if (options.genre) {
-        const escapedGenre = escapeOData(options.genre);
-        searchTerms.push(`contains(body/content,'${escapedGenre}')`);
-      }
-      
-      // Combine all search terms with OR
-      if (searchTerms.length > 0) {
-        filter += ` and (${searchTerms.join(' or ')})`;
-      }
-      
-      // For brand domains, we'll need to do a separate search or filter by sender
-      const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=${options.limit || 25}&$select=subject,from,toRecipients,receivedDateTime,bodyPreview,webLink,sender&$orderby=receivedDateTime desc`;
+      // Limit results to avoid timeout
+      const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=10&$select=subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
       
       const response = await fetch(messagesUrl, {
         headers: {
