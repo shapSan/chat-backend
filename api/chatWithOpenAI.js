@@ -1272,13 +1272,7 @@ const [airtableData, hubspotData, firefliesData, o365Data] = await Promise.all([
   searchAirtable(enhancedMessage, projectId, 'brands', 100),
   hubspotApiKey ? searchHubSpot(enhancedMessage, projectId, 50) : { brands: [], productions: [] },
   firefliesApiKey ? searchFireflies(firefliesKeyword, { limit: 20 }) : { transcripts: [] },
-  msftClientId ? o365API.searchEmails(productionTitle || synopsis?.slice(0, 50) || enhancedMessage.slice(0, 50), { 
-    days: 30, 
-    limit: 20,
-    userEmail: process.env.O365_SEARCH_EMAIL || 'stacy@hollywoodbranded.com',
-    productionTitle: productionTitle,
-    genre: genre
-  }) : []
+  [] // O365 disabled for now
 ]);
     
     const meetingData = await searchAirtable(enhancedMessage, projectId, 'meetings', 50);
