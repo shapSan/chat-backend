@@ -765,7 +765,95 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-// Removed Airtable search - only used for knowledge base and conversation history now
+// Stage 1: Enhanced search function (DISABLED AIRTABLE BRAND SEARCH)
+async function searchAirtable(query, projectId, searchType = 'auto', limit = 100) {
+  console.log('🔍 Airtable search called:', { query, projectId, searchType, limit });
+  
+  // DISABLED: Airtable brand search per requirements
+  // Only allow meeting searches for now
+  if (searchType === 'brands') {
+    console.log('⏭️ Skipping Airtable brand search (disabled)');
+    return { searchType: 'brands', records: [], total: 0 };
+  }
+  
+  try {
+    // Auto-detect search type if not specified
+    if (searchType === 'auto') {
+      const queryLower = query.toLowerCase();
+      if (queryLower.includes('meeting') || 
+          queryLower.includes('call') || 
+          queryLower.includes('discussion') ||
+          queryLower.includes('talked') ||
+          queryLower.includes('spoke')) {
+        searchType = 'meetings';
+      } else {
+        // Default to skipping since brands are disabled
+        console.log('⏭️ Skipping Airtable search (brands disabled)');
+        return { searchType: 'brands', records: [], total: 0 };
+      }
+    }
+    
+    const config = {
+      baseId: 'apphslK7rslGb7Z8K',
+      searchMappings: {
+        'meetings': {
+          table: 'Meeting Steam',
+          view: 'ALL Meetings',
+          fields: ['Title', 'Date', 'Summary', 'Link']
+        }
+      }
+    };
+    
+    const searchConfig = config.searchMappings[searchType];
+    if (!searchConfig) {
+      console.error('Invalid search type:', searchType);
+      return { error: 'Invalid search type', records: [], total: 0 };
+    }
+    
+    // Build Airtable URL
+    let url = `https://api.airtable.com/v0/${config.baseId}/${encodeURIComponent(searchConfig.table)}`;
+    const params = [`maxRecords=${limit}`];
+    
+    if (searchConfig.view) {
+      params.push(`view=${encodeURIComponent(searchConfig.view)}`);
+    }
+    
+    searchConfig.fields.forEach(field => {
+      params.push(`fields[]=${encodeURIComponent(field)}`);
+    });
+    
+    url += '?' + params.join('&');
+    
+    console.log('📡 Fetching from Airtable URL:', url);
+    
+    // Fetch from Airtable
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${airtableApiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Airtable API error:', response.status, errorText);
+      throw new Error(`Airtable API error: ${response.status} - ${errorText}`);
+    }
+    
+    const data = await response.json();
+    console.log(`✅ Got ${data.records.length} ${searchType} from Airtable`);
+    
+    return {
+      searchType,
+      records: data.records,
+      total: data.records.length
+    };
+    
+  } catch (error) {
+    console.error('❌ Error searching Airtable:', error);
+    return { error: error.message, records: [], total: 0 };
+  }
+}
 
 // New: Search HubSpot for brands and production data
 async function searchHubSpot(query, projectId, limit = 50) {
@@ -1149,8 +1237,10 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       ) : []
     ]);
     
-    // No more Airtable searches - meetings come from Fireflies
-    const meetingData = { records: [] };
+    // No need for Airtable brand search anymore - just get meetings if needed
+    const meetingData = userMessage.toLowerCase().includes('meeting') ? 
+      await searchAirtable(enhancedMessage, projectId, 'meetings', 50) : 
+      { records: [] };
     
     // Update status with results
     if (firefliesData.transcripts?.length > 0) {
@@ -1168,6 +1258,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     
     const { topBrands, taggedBrands } = await narrowWithIntelligentTags(
       hubspotData.brands || [],
+      meetingData.records || [],
       firefliesData.transcripts || [],
       o365Data || [],
       enhancedMessage
@@ -1202,6 +1293,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       organizedData: {
         topBrands: topBrands,
         brandSuggestions: brandSuggestions,
+        meetings: meetingData.records,
         productions: hubspotData.productions,
         firefliesTranscripts: firefliesData.transcripts || [],
         o365Emails: o365Data || [],
@@ -1854,7 +1946,7 @@ try {
         console.error(`Error fetching conversation history:`, error);
       }
 
-      // Intelligent search query detection
+// Intelligent search query detection
       const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
       
       console.log('🔍 Search detection:', { 
@@ -2018,27 +2110,38 @@ try {
               }
               }
               
-              if (claudeOrganizedData.firefliesTranscripts && claudeOrganizedData.firefliesTranscripts.length > 0) {
-                systemMessageContent += "\n**MEETING TRANSCRIPTS (via Fireflies):**\n";
-                claudeOrganizedData.firefliesTranscripts.slice(0, 5).forEach(transcript => {
-                  systemMessageContent += `- ${transcript.title} (${transcript.date})\n`;
-                  systemMessageContent += `  Participants: ${transcript.participants?.join(', ') || 'Unknown'}\n`;
-                  if (transcript.summary?.overview) {
-                    systemMessageContent += `  Summary: ${transcript.summary.overview.slice(0, 200)}...\n`;
+              if (claudeOrganizedData.meetings && claudeOrganizedData.meetings.length > 0) {
+                systemMessageContent += "\n**RELEVANT MEETINGS:**\n";
+                claudeOrganizedData.meetings.slice(0, 10).forEach(meeting => {
+                  systemMessageContent += `- ${meeting.fields['Title'] || 'Untitled'} (${meeting.fields['Date'] || 'No date'})\n`;
+                  if (meeting.fields['Link']) {
+                    systemMessageContent += `  Meeting: ${meeting.fields['Title']} Link: ${meeting.fields['Link']}\n`;
                   }
-                  if (transcript.summary?.action_items) {
-                    if (Array.isArray(transcript.summary.action_items) && transcript.summary.action_items.length > 0) {
-                      systemMessageContent += `  Action Items: ${transcript.summary.action_items.slice(0, 3).join('; ')}\n`;
-                    } else if (typeof transcript.summary.action_items === 'string') {
-                      systemMessageContent += `  Action Items: ${transcript.summary.action_items}\n`;
-                    }
-                  }
-                  if (transcript.transcript_url) {
-                    systemMessageContent += `  Meeting Link: ${transcript.transcript_url}\n`;
+                  if (meeting.fields['Summary']) {
+                    systemMessageContent += `  Summary: ${meeting.fields['Summary'].slice(0, 200)}...\n`;
                   }
                   systemMessageContent += "\n";
                 });
               }
+
+              if (claudeOrganizedData.firefliesTranscripts && claudeOrganizedData.firefliesTranscripts.length > 0) {
+        systemMessageContent += "\n**FIREFLIES MEETING TRANSCRIPTS:**\n";
+        claudeOrganizedData.firefliesTranscripts.slice(0, 5).forEach(transcript => {
+          systemMessageContent += `- ${transcript.title} (${transcript.date})\n`;
+          systemMessageContent += `  Participants: ${transcript.participants?.join(', ') || 'Unknown'}\n`;
+         if (transcript.summary?.overview) {
+            systemMessageContent += `  Summary: ${transcript.summary.overview.slice(0, 200)}...\n`;
+          }
+          if (transcript.summary?.action_items) {
+            if (Array.isArray(transcript.summary.action_items) && transcript.summary.action_items.length > 0) {
+              systemMessageContent += `  Action Items: ${transcript.summary.action_items.slice(0, 3).join('; ')}\n`;
+            } else if (typeof transcript.summary.action_items === 'string') {
+              systemMessageContent += `  Action Items: ${transcript.summary.action_items}\n`;
+            }
+          }
+          systemMessageContent += "\n";
+        });
+      }
               
               if (claudeOrganizedData.o365Emails && claudeOrganizedData.o365Emails.length > 0) {
                 systemMessageContent += "\n**RECENT EMAIL COMMUNICATIONS:**\n";
