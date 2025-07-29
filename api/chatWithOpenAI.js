@@ -1150,7 +1150,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     ]);
     
     // No more Airtable searches - meetings come from Fireflies
-    const meetingData = { records: [] };
+    // meetingData removed completely since we use Fireflies
     
     // Update status with results
     if (firefliesData.transcripts?.length > 0) {
