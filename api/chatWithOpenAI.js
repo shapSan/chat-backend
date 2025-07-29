@@ -767,6 +767,12 @@ function getCurrentTimeInPDT() {
 
 // Removed Airtable search - only used for knowledge base and conversation history now
 
+// Airtable search disabled - only returns empty results
+async function searchAirtable(query, projectId, searchType = 'auto', limit = 100) {
+  console.log('⏭️ Airtable search disabled, returning empty results');
+  return { searchType, records: [], total: 0 };
+}
+
 // New: Search HubSpot for brands and production data
 async function searchHubSpot(query, projectId, limit = 50) {
   console.log('🔍 Searching HubSpot for brands and productions...');
