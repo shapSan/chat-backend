@@ -1854,7 +1854,7 @@ try {
         console.error(`Error fetching conversation history:`, error);
       }
 
-// Intelligent search query detection
+      // Intelligent search query detection
       const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
       
       console.log('🔍 Search detection:', { 
