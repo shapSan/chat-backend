@@ -1655,7 +1655,6 @@ export default async function handler(req, res) {
         }
       }
 
-// Add this after the video generation check (around line 845)
 // Check if this is an image generation request
 if (req.body.generateImage === true) {
   console.log('Processing image generation request');
@@ -1669,15 +1668,15 @@ if (req.body.generateImage === true) {
     });
   }
 
-if (!openAIApiKey) {
-  console.error('OpenAI API key not configured');
-  return res.status(500).json({ 
-    error: 'Image generation service not configured',
-    details: 'Please configure OPENAI_API_KEY'
-  });
-}
+  if (!openAIApiKey) {
+    console.error('OpenAI API key not configured');
+    return res.status(500).json({ 
+      error: 'Image generation service not configured',
+      details: 'Please configure OPENAI_API_KEY'
+    });
+  }
 
-try {
+  try {
   console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
   
   // Always use gpt-image-1
