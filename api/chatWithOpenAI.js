@@ -1239,11 +1239,11 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     mcpThinking.push('🧠 Analyzing brand relevance and pipeline status...');
     
     // Call the wrapper function that maintains compatibility
-    const { topBrands, taggedBrands } = await narrowWithIntelligentTags(
+    const { topBrands, taggedBrands } = await narrowWithOpenAI(
+      [],  // empty airtable brands
       hubspotData.brands || [],
       [],  // empty meetings array since we use Fireflies
       firefliesData.transcripts || [],
-      o365Data || [],
       enhancedMessage
     );
     
