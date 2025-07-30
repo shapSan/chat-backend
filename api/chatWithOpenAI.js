@@ -873,19 +873,44 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       
       // Check if brand was mentioned in recent meetings
       const brandNameLower = brand.name.toLowerCase();
+      let meetingMention = null;
+      let emailMention = null;
       
       const mentionedInFireflies = firefliesTranscripts && firefliesTranscripts.some(t => {
         const overview = t.summary?.overview || '';
         const title = t.title || '';
-        return overview.toLowerCase().includes(brandNameLower) || 
-               title.toLowerCase().includes(brandNameLower);
+        const topics = t.summary?.topics_discussed || '';
+        const searchText = `${overview} ${title} ${topics}`.toLowerCase();
+        
+        if (searchText.includes(brandNameLower)) {
+          // Capture the specific mention
+          meetingMention = {
+            title: t.title,
+            url: t.transcript_url,
+            context: overview.slice(0, 100),
+            date: t.dateString
+          };
+          return true;
+        }
+        return false;
       });
       
       const mentionedInEmails = emails && emails.some(e => {
         const subject = e.subject || '';
         const preview = e.preview || '';
-        return subject.toLowerCase().includes(brandNameLower) || 
-               preview.toLowerCase().includes(brandNameLower);
+        const searchText = `${subject} ${preview}`.toLowerCase();
+        
+        if (searchText.includes(brandNameLower)) {
+          // Capture the specific mention
+          emailMention = {
+            subject: e.subject,
+            preview: preview.slice(0, 100),
+            from: e.fromName || e.from,
+            date: e.receivedDate
+          };
+          return true;
+        }
+        return false;
       });
       
       // Tag assignment logic based on lifecycle stage
@@ -903,17 +928,23 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         primaryReason = 'Sales qualified lead';
       }
       
-      // Recent activity tagging
-      if (mentionedInFireflies) {
+      // Recent activity tagging with specific context
+      if (mentionedInFireflies && meetingMention) {
         tags.push('Recent Meeting');
         score += 30;
-        if (!primaryReason) primaryReason = 'Discussed in recent meetings';
+        if (!primaryReason) {
+          primaryReason = `Discussed in "${meetingMention.title}" on ${meetingMention.date}`;
+        }
+        brand.meetingContext = meetingMention; // Store for later use
       }
       
-      if (mentionedInEmails) {
+      if (mentionedInEmails && emailMention) {
         tags.push('Email Thread');
         score += 20;
-        if (!primaryReason) primaryReason = 'Active email communication';
+        if (!primaryReason) {
+          primaryReason = `Email thread: "${emailMention.subject}" from ${emailMention.from}`;
+        }
+        brand.emailContext = emailMention; // Store for later use
       }
       
       if (brand.hasPartner) {
@@ -1225,12 +1256,15 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       userMessage
     );
     
-    // Create dropdown data
+    // Create dropdown data with enhanced context
     const brandSuggestions = topBrands.slice(0, 10).map(brand => ({
       name: brand.name,
       score: brand.relevanceScore,
       tag: brand.tags[0] || 'Potential Match',
-      reason: brand.reason
+      reason: brand.reason,
+      meetingUrl: brand.meetingContext?.url || null,
+      meetingTitle: brand.meetingContext?.title || null,
+      emailSubject: brand.emailContext?.subject || null
     }));
     
     mcpThinking.push(`✨ Prepared ${brandSuggestions.length} recommendations`);
@@ -1501,6 +1535,17 @@ async function shouldUseSearch(userMessage, conversationContext) {
       return true;
     }
     
+    // Always search for context queries
+    if (messageClues.includes('email') || 
+        messageClues.includes('meeting') || 
+        messageClues.includes('discussed') ||
+        messageClues.includes('context') ||
+        messageClues.includes('insights') ||
+        messageClues.includes('low hanging fruit')) {
+      console.log('📧 Context query detected - search needed');
+      return true;
+    }
+    
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -1529,7 +1574,7 @@ async function shouldUseSearch(userMessage, conversationContext) {
   } catch (error) {
     console.error('Error classifying query:', error);
     // Fallback to keyword detection - UPDATED to include more patterns
-    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership)/) ||
+    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership|insights|context)/) ||
            conversationContext?.toLowerCase().match(/(synopsis:|distributor:|cast:|starting fee:|production|film|show)/);
   }
 }
@@ -2062,34 +2107,72 @@ export default async function handler(req, res) {
               }
               // Handle context-only queries
               else if (claudeOrganizedData.contextOnly) {
-                systemMessageContent += "\n\n**RECENT CONTEXT:**\n";
+                systemMessageContent += "\n\n**RECENT CONTEXT AND INSIGHTS:**\n";
                 
                 if (claudeOrganizedData.firefliesTranscripts?.length > 0) {
-                  systemMessageContent += "\n**RECENT MEETINGS:**\n";
+                  systemMessageContent += "\n**RECENT MEETINGS WITH KEY INSIGHTS:**\n";
                   claudeOrganizedData.firefliesTranscripts.forEach(t => {
-                    systemMessageContent += `- ${t.title} (${t.dateString})\n`;
-                    if (t.summary?.action_items && Array.isArray(t.summary.action_items)) {
-                      systemMessageContent += `  Action Items: ${t.summary.action_items.slice(0, 2).join('; ')}\n`;
+                    systemMessageContent += `\nMeeting: "${t.title}" on ${t.dateString}\n`;
+                    systemMessageContent += `Link: ${t.transcript_url}\n`;
+                    systemMessageContent += `Participants: ${t.participants?.slice(0, 3).join(', ') || 'Not specified'}\n`;
+                    
+                    // Extract brand mentions and insights
+                    const overview = t.summary?.overview || '';
+                    const topics = t.summary?.topics_discussed || '';
+                    
+                    // Look for brand mentions in the meeting
+                    const brandMentions = [];
+                    if (claudeOrganizedData.topBrands) {
+                      claudeOrganizedData.topBrands.forEach(brand => {
+                        if (overview.toLowerCase().includes(brand.name.toLowerCase()) || 
+                            topics.toLowerCase().includes(brand.name.toLowerCase())) {
+                          brandMentions.push(brand.name);
+                        }
+                      });
                     }
-                    if (t.summary?.overview) {
-                      systemMessageContent += `  Key Points: ${t.summary.overview.slice(0, 150)}...\n`;
+                    
+                    if (brandMentions.length > 0) {
+                      systemMessageContent += `Brands Discussed: ${brandMentions.join(', ')}\n`;
                     }
-                    systemMessageContent += `  Link: ${t.transcript_url}\n\n`;
+                    
+                    if (t.summary?.action_items && Array.isArray(t.summary.action_items) && t.summary.action_items.length > 0) {
+                      systemMessageContent += `Action Items: ${t.summary.action_items.slice(0, 3).join('; ')}\n`;
+                    }
+                    
+                    if (overview) {
+                      systemMessageContent += `Key Discussion: ${overview.slice(0, 200)}...\n`;
+                    }
+                    
+                    systemMessageContent += "\n";
                   });
                 }
                 
                 if (claudeOrganizedData.o365Emails?.length > 0) {
-                  systemMessageContent += "\n**RECENT EMAILS:**\n";
+                  systemMessageContent += "\n**RECENT EMAIL THREADS:**\n";
                   claudeOrganizedData.o365Emails.forEach(e => {
-                    systemMessageContent += `- ${e.subject} (${new Date(e.receivedDate).toLocaleDateString()})\n`;
-                    systemMessageContent += `  From: ${e.fromName || e.from}\n`;
-                    if (e.preview) {
-                      systemMessageContent += `  Preview: ${e.preview}...\n\n`;
+                    systemMessageContent += `\nEmail: "${e.subject}"\n`;
+                    systemMessageContent += `From: ${e.fromName || e.from} (${new Date(e.receivedDate).toLocaleDateString()})\n`;
+                    systemMessageContent += `Content: ${e.preview}...\n`;
+                    
+                    // Look for urgency indicators
+                    const urgencyWords = ['urgent', 'asap', 'immediately', 'deadline', 'tomorrow', 'today'];
+                    const hasUrgency = urgencyWords.some(word => 
+                      e.subject.toLowerCase().includes(word) || 
+                      e.preview.toLowerCase().includes(word)
+                    );
+                    
+                    if (hasUrgency) {
+                      systemMessageContent += `⚡ URGENT: This email indicates time-sensitive action needed\n`;
                     }
                   });
                 }
                 
-                systemMessageContent += "\nSummarize these insights for the user, highlighting key action items and relevant discussions.\n";
+                systemMessageContent += "\n**INSTRUCTIONS FOR CONTEXT QUERIES:**\n";
+                systemMessageContent += "- Identify 'low hanging fruit' by looking for: urgent emails, pending action items, brands mentioned multiple times\n";
+                systemMessageContent += "- Quote specific insights from meetings/emails\n";
+                systemMessageContent += "- Always include meeting links when referencing them\n";
+                systemMessageContent += "- Highlight any time-sensitive opportunities\n";
+                systemMessageContent += "- If asked about 'last email' with specific contacts, provide the actual email details above\n";
               }
               // Default brand matching response
               else {
@@ -2111,22 +2194,50 @@ export default async function handler(req, res) {
                     if (brand.hasPartner) {
                       systemMessageContent += `   Agency: ${brand.partnerAgency}\n`;
                     }
+                    // Add specific meeting/email context
+                    if (brand.meetingContext) {
+                      systemMessageContent += `   Meeting: "${brand.meetingContext.title}" (${brand.meetingContext.date})\n`;
+                      systemMessageContent += `   Meeting Link: ${brand.meetingContext.url}\n`;
+                      systemMessageContent += `   Context: ${brand.meetingContext.context}\n`;
+                    }
+                    if (brand.emailContext) {
+                      systemMessageContent += `   Email: "${brand.emailContext.subject}"\n`;
+                      systemMessageContent += `   From: ${brand.emailContext.from}\n`;
+                      systemMessageContent += `   Preview: ${brand.emailContext.preview}\n`;
+                    }
                   });
                 }
                 
-                // Add context from meetings/emails if relevant
+                // Add all meeting/email context for context queries
                 if (claudeOrganizedData.firefliesTranscripts?.length > 0) {
-                  systemMessageContent += "\n**RELEVANT MEETINGS:**\n";
+                  systemMessageContent += "\n**ALL RELEVANT MEETINGS:**\n";
                   claudeOrganizedData.firefliesTranscripts.forEach(t => {
-                    systemMessageContent += `- ${t.title}: ${t.transcript_url}\n`;
+                    systemMessageContent += `- "${t.title}" on ${t.dateString}\n`;
+                    systemMessageContent += `  Link: ${t.transcript_url}\n`;
+                    if (t.summary?.action_items && Array.isArray(t.summary.action_items) && t.summary.action_items.length > 0) {
+                      systemMessageContent += `  Action Items: ${t.summary.action_items.slice(0, 2).join('; ')}\n`;
+                    }
+                    if (t.summary?.overview) {
+                      systemMessageContent += `  Summary: ${t.summary.overview.slice(0, 150)}...\n`;
+                    }
+                    systemMessageContent += "\n";
+                  });
+                }
+                
+                if (claudeOrganizedData.o365Emails?.length > 0) {
+                  systemMessageContent += "\n**ALL RECENT EMAILS:**\n";
+                  claudeOrganizedData.o365Emails.forEach(e => {
+                    systemMessageContent += `- "${e.subject}" from ${e.fromName || e.from} (${new Date(e.receivedDate).toLocaleDateString()})\n`;
+                    systemMessageContent += `  Preview: ${e.preview}...\n\n`;
                   });
                 }
                 
                 systemMessageContent += "\n**INSTRUCTIONS:**\n";
-                systemMessageContent += "- Present brands in a clear, actionable format\n";
-                systemMessageContent += "- Highlight brands with 'Hot Lead' or 'Recent Meeting' tags first\n";
-                systemMessageContent += "- Include meeting links when referencing discussions\n";
-                systemMessageContent += "- Suggest next steps for top 3 brands\n";
+                systemMessageContent += "- When mentioning meetings, ALWAYS include the meeting title and link\n";
+                systemMessageContent += "- Quote specific insights from emails/meetings when explaining brand relevance\n";
+                systemMessageContent += "- For 'low hanging fruit', identify brands with recent email threads or upcoming action items\n";
+                systemMessageContent += "- Always provide specific context, not generic statements\n";
+                systemMessageContent += "- Format meeting links as: Meeting: [Title] Link: [URL]\n";
               }
             }
             
