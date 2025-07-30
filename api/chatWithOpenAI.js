@@ -1655,142 +1655,141 @@ export default async function handler(req, res) {
         }
       }
 
-// Check if this is an image generation request
-if (req.body.generateImage === true) {
-  console.log('Processing image generation request');
-  
-  const { prompt, projectId, sessionId, imageModel, dimensions } = req.body;
+      // Check if this is an image generation request
+      if (req.body.generateImage === true) {
+        console.log('Processing image generation request');
+        
+        const { prompt, projectId, sessionId, imageModel, dimensions } = req.body;
 
-  if (!prompt) {
-    return res.status(400).json({ 
-      error: 'Missing required fields',
-      details: 'prompt is required'
-    });
-  }
-
-  if (!openAIApiKey) {
-    console.error('OpenAI API key not configured');
-    return res.status(500).json({ 
-      error: 'Image generation service not configured',
-      details: 'Please configure OPENAI_API_KEY'
-    });
-  }
-
-  try {
-  console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
-  
-  // Always use gpt-image-1
-  const model = 'gpt-image-1';
-  console.log('Using model:', model);
-  
-  // Build request body
-  const requestBody = {
-    model: model,
-    prompt: prompt,
-    n: 1
-  };
-  
-  // Set size based on dimensions parameter from frontend
-// Set size based on dimensions parameter from frontend
-  if (dimensions) {
-    // Use the dimensions passed from frontend
-    requestBody.size = dimensions;
-    console.log('Using dimensions from frontend:', dimensions);
-  } else {
-    // Default to landscape if no dimensions specified
-    requestBody.size = '1536x1024';
-    console.log('Using default landscape dimensions');
-  }
-  
-  const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openAIApiKey}`
-    },
-    body: JSON.stringify(requestBody)
-  });
-
-    if (!imageResponse.ok) {
-      const errorData = await imageResponse.text();
-      console.error('OpenAI Image API error:', imageResponse.status, errorData);
-      
-      if (imageResponse.status === 401) {
-        return res.status(401).json({ 
-          error: 'Invalid API key',
-          details: 'Check your OpenAI API key configuration'
-        });
-      }
-      
-      if (imageResponse.status === 429) {
-        return res.status(429).json({ 
-          error: 'Rate limit exceeded',
-          details: 'Too many requests. Please try again later.'
-        });
-      }
-      
-      if (imageResponse.status === 400) {
-        let errorDetails = errorData;
-        try {
-          const errorJson = JSON.parse(errorData);
-          errorDetails = errorJson.error?.message || errorData;
-        } catch (e) {
-          // If parsing fails, use raw error data
+        if (!prompt) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'prompt is required'
+          });
         }
-        return res.status(400).json({ 
-          error: 'Invalid request',
-          details: errorDetails
-        });
-      }
-      
-      return res.status(imageResponse.status).json({ 
-        error: 'Failed to generate image',
-        details: errorData
-      });
-    }
 
-    const data = await imageResponse.json();
-    console.log('✅ Image generation response received');
+        if (!openAIApiKey) {
+          console.error('OpenAI API key not configured');
+          return res.status(500).json({ 
+            error: 'Image generation service not configured',
+            details: 'Please configure OPENAI_API_KEY'
+          });
+        }
 
-    // Check for different possible response structures
-    let imageUrl = null;
-    
-    // Standard structure: data.data[0].url or data.data[0].b64_json
-    if (data.data && data.data.length > 0) {
-      if (data.data[0].url) {
-        imageUrl = data.data[0].url;
-      } else if (data.data[0].b64_json) {
-        // Convert base64 to data URL
-        const base64Image = data.data[0].b64_json;
-        imageUrl = `data:image/png;base64,${base64Image}`;
-        console.log('Converted base64 to data URL');
+        try {
+          console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
+          
+          // Always use gpt-image-1
+          const model = 'gpt-image-1';
+          console.log('Using model:', model);
+          
+          // Build request body
+          const requestBody = {
+            model: model,
+            prompt: prompt,
+            n: 1
+          };
+          
+          // Set size based on dimensions parameter from frontend
+          if (dimensions) {
+            // Use the dimensions passed from frontend
+            requestBody.size = dimensions;
+            console.log('Using dimensions from frontend:', dimensions);
+          } else {
+            // Default to landscape if no dimensions specified
+            requestBody.size = '1536x1024';
+            console.log('Using default landscape dimensions');
+          }
+          
+          const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${openAIApiKey}`
+            },
+            body: JSON.stringify(requestBody)
+          });
+
+          if (!imageResponse.ok) {
+            const errorData = await imageResponse.text();
+            console.error('OpenAI Image API error:', imageResponse.status, errorData);
+            
+            if (imageResponse.status === 401) {
+              return res.status(401).json({ 
+                error: 'Invalid API key',
+                details: 'Check your OpenAI API key configuration'
+              });
+            }
+            
+            if (imageResponse.status === 429) {
+              return res.status(429).json({ 
+                error: 'Rate limit exceeded',
+                details: 'Too many requests. Please try again later.'
+              });
+            }
+            
+            if (imageResponse.status === 400) {
+              let errorDetails = errorData;
+              try {
+                const errorJson = JSON.parse(errorData);
+                errorDetails = errorJson.error?.message || errorData;
+              } catch (e) {
+                // If parsing fails, use raw error data
+              }
+              return res.status(400).json({ 
+                error: 'Invalid request',
+                details: errorDetails
+              });
+            }
+            
+            return res.status(imageResponse.status).json({ 
+              error: 'Failed to generate image',
+              details: errorData
+            });
+          }
+
+          const data = await imageResponse.json();
+          console.log('✅ Image generation response received');
+
+          // Check for different possible response structures
+          let imageUrl = null;
+          
+          // Standard structure: data.data[0].url or data.data[0].b64_json
+          if (data.data && data.data.length > 0) {
+            if (data.data[0].url) {
+              imageUrl = data.data[0].url;
+            } else if (data.data[0].b64_json) {
+              // Convert base64 to data URL
+              const base64Image = data.data[0].b64_json;
+              imageUrl = `data:image/png;base64,${base64Image}`;
+              console.log('Converted base64 to data URL');
+            }
+          }
+          // Alternative structure: data.url
+          else if (data.url) {
+            imageUrl = data.url;
+          }
+          
+          if (imageUrl) {
+            return res.status(200).json({
+              success: true,
+              imageUrl: imageUrl,
+              revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
+              model: model
+            });
+          } else {
+            console.error('Unexpected response structure:', data);
+            throw new Error('No image URL found in response');
+          }
+          
+        } catch (error) {
+          console.error('Error in image generation:', error);
+          return res.status(500).json({ 
+            error: 'Failed to generate image',
+            details: error.message 
+          });
+        }
       }
-    }
-    // Alternative structure: data.url
-    else if (data.url) {
-      imageUrl = data.url;
-    }
-    
-    if (imageUrl) {
-      return res.status(200).json({
-        success: true,
-        imageUrl: imageUrl,
-        revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
-        model: model
-      });
-    } else {
-      console.error('Unexpected response structure:', data);
-      throw new Error('No image URL found in response');
-    }
-    
-  } catch (error) {
-    console.error('Error in image generation:', error);
-    return res.status(500).json({ 
-      error: 'Failed to generate image',
-      details: error.message 
-    });
-  }
-}
       // Handle regular chat messages
       let { userMessage, sessionId, audioData, projectId } = req.body;
 
