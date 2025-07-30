@@ -1206,7 +1206,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     const { topBrands, taggedBrands } = await narrowWithOpenAI(
       [],  // empty airtable brands
       hubspotData.brands || [],
-      [],  // empty meetings (using Fireflies instead)
+      [],  // empty meetings array since we use Fireflies
       firefliesData.transcripts || [],
       enhancedMessage
     );
