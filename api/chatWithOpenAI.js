@@ -1204,9 +1204,14 @@ async function extractSearchKeyword(query) {
     });
     
     const data = await response.json();
-    const keyword = data.choices[0].message.content.trim();
-    console.log(`🔍 AI extracted keyword: "${keyword}" from query: "${query}"`);
-    return keyword;
+    if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+      const keyword = data.choices[0].message.content.trim();
+      console.log(`🔍 AI extracted keyword: "${keyword}" from query: "${query}"`);
+      return keyword;
+    }
+    
+    console.log('⚠️ No keyword extracted, using empty string');
+    return '';
     
   } catch (error) {
     console.error('Error extracting keyword:', error);
