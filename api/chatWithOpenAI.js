@@ -57,6 +57,7 @@ const PROJECT_CONFIGS = {
 // HubSpot API Helper Functions
 const hubspotAPI = {
   baseUrl: 'https://api.hubapi.com',
+  portalId: '2944980', // Your HubSpot portal ID
   
   async searchBrands(filters = {}) {
     try {
@@ -851,6 +852,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
     const taggedBrands = hubspotBrands.map(b => {
       const brand = {
         source: 'hubspot',
+        id: b.id, // HubSpot ID for URL construction
         name: b.properties.brand_name || b.properties.name,
         category: b.properties.brand_category || b.properties.industry || 'General',
         budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 'TBD',
@@ -861,6 +863,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         website: b.properties.domain,
         lifecyclestage: b.properties.lifecyclestage,
         numContacts: b.properties.num_associated_contacts || '0',
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`, // Direct HubSpot URL
         tags: [],
         relevanceScore: 0,
         reason: ''
@@ -1258,10 +1261,16 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     
     // Create dropdown data with enhanced context
     const brandSuggestions = topBrands.slice(0, 10).map(brand => ({
+      id: brand.id,
       name: brand.name,
       score: brand.relevanceScore,
       tag: brand.tags[0] || 'Potential Match',
+      tags: brand.tags, // All tags for display
       reason: brand.reason,
+      budget: brand.budget,
+      hasAgency: brand.hasPartner,
+      agencyName: brand.partnerAgency,
+      hubspotUrl: brand.hubspotUrl,
       meetingUrl: brand.meetingContext?.url || null,
       meetingTitle: brand.meetingContext?.title || null,
       emailSubject: brand.emailContext?.subject || null
@@ -2193,6 +2202,9 @@ export default async function handler(req, res) {
                     }
                     if (brand.hasPartner) {
                       systemMessageContent += `   Agency: ${brand.partnerAgency}\n`;
+                    }
+                    if (brand.hubspotUrl) {
+                      systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
                     }
                     // Add specific meeting/email context
                     if (brand.meetingContext) {
