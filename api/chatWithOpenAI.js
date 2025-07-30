@@ -996,6 +996,18 @@ async function narrowWithIntelligentTags(hubspotBrands, meetings, firefliesTrans
 
 // Helper function to extract production context
 function extractProductionContext(message) {
+  // Add safety check for undefined message
+  if (!message) {
+    console.warn('extractProductionContext called with undefined message');
+    return {
+      title: null,
+      genre: null,
+      budget: null,
+      distributor: null,
+      targetDemo: null
+    };
+  }
+  
   const context = {
     title: null,
     genre: null,
@@ -1201,9 +1213,9 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     
     // Add insights about the matches
     if (topBrands.length > 0) {
-      const hotLeads = topBrands.filter(b => b.tags.includes('Hot Lead')).length;
-      const recentActivity = topBrands.filter(b => b.tags.includes('Recent Activity')).length;
-      const quickWins = topBrands.filter(b => b.tags.includes('Quick Win')).length;
+      const hotLeads = topBrands.filter(b => b.tags && b.tags.includes('Hot Lead')).length;
+      const recentActivity = topBrands.filter(b => b.tags && b.tags.includes('Recent Activity')).length;
+      const quickWins = topBrands.filter(b => b.tags && b.tags.includes('Quick Win')).length;
       
       if (hotLeads > 0) mcpThinking.push(`🔥 ${hotLeads} hot leads in active pipeline`);
       if (recentActivity > 0) mcpThinking.push(`📅 ${recentActivity} brands with recent activity`);
@@ -1217,7 +1229,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     const brandSuggestions = topBrands.map(brand => ({
       name: brand.name,
       score: brand.relevanceScore,
-      tag: brand.tags[0] || 'Potential Match', // Primary tag
+      tag: (brand.tags && brand.tags[0]) || 'Potential Match', // Primary tag with safety check
       reason: brand.reason
     }));
     
