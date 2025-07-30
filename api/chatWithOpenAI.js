@@ -1172,10 +1172,12 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     // Stage 2: Intelligent narrowing with tags
     mcpThinking.push('🧠 Analyzing brand relevance and pipeline status...');
     
-    const { topBrands, taggedBrands } = await narrowWithIntelligentTags(
+    // Call the wrapper function that maintains compatibility
+    const { topBrands, taggedBrands } = await narrowWithOpenAI(
+      [],  // empty airtable brands
       hubspotData.brands || [],
+      [],  // empty meetings (using Fireflies instead)
       firefliesData.transcripts || [],
-      o365Data || [],
       enhancedMessage
     );
     
