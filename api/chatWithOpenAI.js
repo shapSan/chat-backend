@@ -776,10 +776,10 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
 // Stage 2: Wrapper function to maintain compatibility
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
   try {
-    // Combine all brands
-    const allBrands = [...airtableBrands, ...hubspotBrands];
-    // Call the new function with empty emails array
-    const result = await narrowWithIntelligentTags(allBrands, firefliesTranscripts, [], userMessage);
+    // Only use hubspot brands since airtable is disabled
+    const allBrands = [...hubspotBrands];
+    // Call the new function with just brands, transcripts, and empty emails
+    const result = await narrowWithIntelligentTags(allBrands, firefliesTranscripts || [], [], userMessage);
     // Make sure we return the expected structure
     return {
       topBrands: result.topBrands || [],
