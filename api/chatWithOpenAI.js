@@ -1247,24 +1247,50 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     // Stage 1: Determine search strategy
     console.log('📊 Stage 1: Determining search strategy...');
     
-    // Check if this is a specific brand lookup
-    const brandLookupMatch = userMessage.match(/(?:contact|who is|point of contact|poc).*?(?:for|at)\s+([A-Z][^\?\.,]+)/i);
+    // Check if this is a specific brand lookup WITH context request
+    const brandLookupMatch = userMessage.match(/(?:contact|who is|point of contact|poc|calls?|meetings?|emails?).*?(?:with|for|at|about)\s+([A-Z][^\?\.,]+)/i);
     if (brandLookupMatch) {
       const brandName = brandLookupMatch[1].trim();
-      mcpThinking.push(`🔍 Looking up specific brand: ${brandName}`);
+      mcpThinking.push(`🔍 Looking up ${brandName} with recent activity...`);
       
-      // Just search for the specific brand
-      const brand = await hubspotAPI.searchSpecificBrand(brandName);
+      // Search for the brand AND its recent context
+      const [brand, firefliesData, o365Data] = await Promise.all([
+        hubspotAPI.searchSpecificBrand(brandName),
+        firefliesApiKey ? searchFireflies(brandName, { limit: 5 }) : { transcripts: [] },
+        msftClientId ? o365API.searchEmails(brandName, { days: 30 }) : []
+      ]);
+      
       if (brand) {
         mcpThinking.push('✅ Found brand in HubSpot');
         const contacts = await hubspotAPI.getContactsForCompany(brand.id);
         
+        // Find specific mentions in meetings
+        const brandMeetings = firefliesData.transcripts?.filter(t => {
+          const searchText = `${t.title} ${t.summary?.overview || ''} ${t.summary?.topics_discussed || ''}`.toLowerCase();
+          return searchText.includes(brandName.toLowerCase());
+        }) || [];
+        
+        // Find specific mentions in emails
+        const brandEmails = o365Data?.filter(e => {
+          const searchText = `${e.subject} ${e.preview || ''}`.toLowerCase();
+          return searchText.includes(brandName.toLowerCase());
+        }) || [];
+        
+        if (brandMeetings.length > 0) {
+          mcpThinking.push(`✅ Found ${brandMeetings.length} recent meetings`);
+        }
+        if (brandEmails.length > 0) {
+          mcpThinking.push(`✅ Found ${brandEmails.length} recent emails`);
+        }
+        
         return {
           organizedData: {
-            specificBrandLookup: true,
+            specificBrandWithContext: true,
             brand: brand,
             contacts: contacts,
-            currentProduction: currentProduction
+            recentMeetings: brandMeetings,
+            recentEmails: brandEmails,
+            brandName: brandName
           },
           mcpThinking,
           usedMCP: true
@@ -2182,8 +2208,74 @@ export default async function handler(req, res) {
             
             // Add Claude's organized data if available
             if (claudeOrganizedData) {
-              // Handle specific brand lookup
-              if (claudeOrganizedData.specificBrandLookup) {
+              // Handle specific brand lookup with context
+              if (claudeOrganizedData.specificBrandWithContext) {
+                systemMessageContent += `\n\n**${claudeOrganizedData.brandName} - RECENT ACTIVITY:**\n`;
+                
+                const brand = claudeOrganizedData.brand.properties;
+                systemMessageContent += `\nBrand: ${brand.brand_name || brand.name}\n`;
+                systemMessageContent += `HubSpot: https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${claudeOrganizedData.brand.id}\n`;
+                
+                // Recent meetings
+                if (claudeOrganizedData.recentMeetings?.length > 0) {
+                  systemMessageContent += `\n**RECENT MEETINGS:**\n`;
+                  claudeOrganizedData.recentMeetings.forEach(meeting => {
+                    systemMessageContent += `\nYes, there was a call titled "${meeting.title}" on ${meeting.dateString}\n`;
+                    systemMessageContent += `Link: ${meeting.transcript_url}\n`;
+                    
+                    // Key takeaway
+                    if (meeting.summary?.overview) {
+                      const takeaway = meeting.summary.overview.slice(0, 150);
+                      systemMessageContent += `Key Discussion: ${takeaway}...\n`;
+                    }
+                    
+                    // Action items
+                    if (meeting.summary?.action_items && Array.isArray(meeting.summary.action_items) && meeting.summary.action_items.length > 0) {
+                      systemMessageContent += `Action Items: ${meeting.summary.action_items[0]}\n`;
+                    }
+                    
+                    // Participants
+                    if (meeting.participants?.length > 0) {
+                      systemMessageContent += `Participants: ${meeting.participants.slice(0, 3).join(', ')}\n`;
+                    }
+                  });
+                } else {
+                  systemMessageContent += `\nNo recent meetings found with ${claudeOrganizedData.brandName} in the last 30 days.\n`;
+                }
+                
+                // Recent emails
+                if (claudeOrganizedData.recentEmails?.length > 0) {
+                  systemMessageContent += `\n**RECENT EMAILS:**\n`;
+                  claudeOrganizedData.recentEmails.forEach(email => {
+                    systemMessageContent += `\nEmail on ${new Date(email.receivedDate).toLocaleDateString()}: "${email.subject}"\n`;
+                    systemMessageContent += `From: ${email.fromName || email.from}\n`;
+                    if (email.preview) {
+                      // Extract a meaningful quote
+                      const quote = email.preview.slice(0, 100);
+                      systemMessageContent += `They mentioned: "${quote}..."\n`;
+                    }
+                  });
+                } else {
+                  systemMessageContent += `\nNo recent emails found with ${claudeOrganizedData.brandName}.\n`;
+                }
+                
+                // Contacts
+                if (claudeOrganizedData.contacts?.length > 0) {
+                  systemMessageContent += `\n**CONTACTS:**\n`;
+                  claudeOrganizedData.contacts.forEach(contact => {
+                    systemMessageContent += `- ${contact.properties.firstname || ''} ${contact.properties.lastname || ''} (${contact.properties.email || 'No email'})\n`;
+                  });
+                }
+                
+                systemMessageContent += `\n**INSTRUCTIONS:**\n`;
+                systemMessageContent += `- Format meetings as: "Yes, there was a call titled 'Meeting Name' on [date]..."\n`;
+                systemMessageContent += `- Always make meeting titles clickable with the full Fireflies URL\n`;
+                systemMessageContent += `- Quote specific takeaways from meetings and emails\n`;
+                systemMessageContent += `- Provide dates for all activities\n`;
+                systemMessageContent += `- If no meetings/emails found, say so clearly\n`;
+              }
+              // Handle regular brand lookup (just contacts)
+              else if (claudeOrganizedData.specificBrandLookup) {
                 systemMessageContent += "\n\n**BRAND CONTACT INFORMATION:**\n";
                 const brand = claudeOrganizedData.brand.properties;
                 systemMessageContent += `Brand: ${brand.brand_name || brand.name}\n`;
