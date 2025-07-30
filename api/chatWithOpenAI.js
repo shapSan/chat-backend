@@ -1458,22 +1458,6 @@ async function shouldUseSearch(userMessage, conversationContext) {
   if (!openAIApiKey) return false;
   
   try {
-    // Check if the conversation context contains production details
-    const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
-    const messageClues = userMessage.toLowerCase();
-    
-    // Quick check for production-related patterns
-    if (contextClues.includes('synopsis:') || 
-        contextClues.includes('distributor:') || 
-        contextClues.includes('cast:') ||
-        contextClues.includes('starting fee:') ||
-        messageClues.includes('brand') ||
-        messageClues.includes('integration') ||
-        messageClues.includes('partnership')) {
-      console.log('🎬 Production context detected - search needed');
-      return true;
-    }
-    
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -1487,7 +1471,7 @@ async function shouldUseSearch(userMessage, conversationContext) {
           content: 'You are a query classifier. Determine if this query needs to search databases (Airtable/HubSpot/Fireflies/Emails). Return ONLY "true" or "false".'
         }, {
           role: 'user',
-          content: `Query: "${userMessage}"\nContext: "${contextClues.slice(-500)}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, emails, or any business data? Also return true if there's a production/film/show mentioned in the context that might need brand partnerships.`
+          content: `Query: "${userMessage}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, emails, or any business data? Consider context clues like dates, names, projects, and email mentions.`
         }],
         temperature: 0,
         max_tokens: 10
@@ -1501,9 +1485,8 @@ async function shouldUseSearch(userMessage, conversationContext) {
     
   } catch (error) {
     console.error('Error classifying query:', error);
-    // Fallback to keyword detection - UPDATED to include more patterns
-    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership)/) ||
-           conversationContext?.toLowerCase().match(/(synopsis:|distributor:|cast:|starting fee:|production|film|show)/);
+    // Fallback to keyword detection - UPDATED to include email
+    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message)/);
   }
 }
 
