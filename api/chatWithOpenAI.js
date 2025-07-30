@@ -92,26 +92,30 @@ const hubspotAPI = {
             }
           ],
           properties: [
+            // Core fields (always reliable)
             'name',
-            'brand_name',
-            'company_type',
-            'brand_category',
+            'hs_object_id',
             'lifecyclestage',
+            
+            // Brand identification
+            'brand_name',
+            'brand_category',
+            
+            // Money & readiness indicators
             'media_spend_m_',
-            'partner_agency_name',
-            'notes_last_contacted',
-            'num_associated_contacts',
-            'description',
-            'industry',
             'annualrevenue',
-            'numberofemployees',
-            'website',
+            
+            // Activity tracking
+            'notes_last_contacted',
             'hs_lastmodifieddate',
-            // Additional fields you mentioned
-            'client_status',
-            'target_generation',
-            'target_income',
-            'playbook'
+            
+            // Contact info (simple)
+            'num_associated_contacts',
+            'partner_agency_name',
+            
+            // Basic info
+            'website',
+            'industry'
           ],
           limit: filters.limit || 50,
           sorts: [{ 
@@ -140,9 +144,9 @@ const hubspotAPI = {
 
   async searchProductions(filters = {}) {
     try {
-      console.log('🔍 HubSpot searchProductions called (searching Deals)');
+      console.log('🔍 HubSpot searchProductions called (searching Partnership Pipeline Deals)');
       
-      // Productions/Partnerships are stored as Deals
+      // Productions/Partnerships are stored as Deals in the Partnership Pipeline
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/deals/search`, {
         method: 'POST',
         headers: {
@@ -153,29 +157,35 @@ const hubspotAPI = {
           filterGroups: [{
             filters: [
               { 
-                propertyName: 'dealname', 
-                operator: 'HAS_PROPERTY' 
+                propertyName: 'pipeline', 
+                operator: 'EQ',
+                value: '115484704'  // Partnership Pipeline ID
               }
             ]
           }],
           properties: [
-            'dealname',  // This is the Production/Partnership Name
-            'content_type',
-            'description',  // This might be Synopsis
-            'dealstage',  // Partnership pipeline stage
-            'closedate',
-            'amount',
+            // Core fields
+            'dealname',
+            'hs_object_id',
+            'dealstage',
             'pipeline',
-            'distributor',
-            'brand_name',
-            'hs_lastmodifieddate',
-            'hubspot_owner_id',  // Owner
-            // Try to get custom fields that might exist
-            'production_scale',
-            'talent',
-            'have_contact',
+            
+            // Production details (simple)
+            'partnership_name',
+            'content_type',
             'synopsis',
-            'partnership_overview'
+            'distributor',
+            
+            // Money & timing
+            'amount',
+            'closedate',
+            
+            // Brand connection
+            'brand_name',
+            
+            // Activity
+            'hs_lastmodifieddate',
+            'createdate'
           ],
           limit: filters.limit || 30,
           sorts: [{ 
@@ -777,9 +787,15 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
   try {
     // Only use hubspot brands since airtable is disabled
-    const allBrands = [...hubspotBrands];
+    const allBrands = [...(hubspotBrands || [])];
     // Call the new function with just brands, transcripts, and empty emails
-    const result = await narrowWithIntelligentTags(allBrands, firefliesTranscripts || [], [], userMessage);
+    const result = await narrowWithIntelligentTags(
+      allBrands, 
+      meetings || [], 
+      firefliesTranscripts || [], 
+      [], // empty emails array
+      userMessage || ''
+    );
     // Make sure we return the expected structure
     return {
       topBrands: result.topBrands || [],
@@ -873,25 +889,29 @@ async function narrowWithIntelligentTags(hubspotBrands, meetings, firefliesTrans
   try {
     console.log(`🧮 Stage 2: Intelligent brand matching for ${hubspotBrands.length} brands...`);
     
-    // Extract production context intelligently
-    const productionContext = extractProductionContext(userMessage);
+    // Extract production context intelligently with safety check
+    const productionContext = extractProductionContext(userMessage || '');
     console.log('🎬 Production context:', productionContext);
     
     // Process each brand with intelligent tagging
     const taggedBrands = hubspotBrands.map(b => {
+      // Safe property access
+      const props = b.properties || {};
+      
       const brand = {
         source: 'hubspot',
-        name: b.properties.brand_name || b.properties.name,
-        category: b.properties.brand_category || b.properties.industry || 'General',
-        budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 
-                b.properties.annualrevenue ? `Revenue: ${(b.properties.annualrevenue/1000000).toFixed(1)}M` : 'TBD',
-        summary: (b.properties.description || '').slice(0, 100),
-        lastActivity: b.properties.notes_last_contacted || b.properties.hs_lastmodifieddate,
-        hasPartner: !!b.properties.partner_agency_name,
-        partnerAgency: b.properties.partner_agency_name,
-        website: b.properties.website,
-        dealStage: b.properties.dealstage,
-        pipelineStatus: b.properties.lifecyclestage,
+        name: props.brand_name || props.name || 'Unknown',
+        category: props.brand_category || props.industry || 'General',
+        budget: props.media_spend_m_ ? `${props.media_spend_m_}M` : 
+                props.annualrevenue ? `Revenue: ${(props.annualrevenue/1000000).toFixed(1)}M` : 'TBD',
+        summary: '', // Removed description field
+        lastActivity: props.notes_last_contacted || props.hs_lastmodifieddate,
+        hasPartner: !!props.partner_agency_name,
+        partnerAgency: props.partner_agency_name || null,
+        website: props.website || null,
+        dealStage: props.dealstage || null,
+        pipelineStatus: props.lifecyclestage || null,
+        contactCount: props.num_associated_contacts || '0',
         tags: [],
         relevanceScore: 0,
         reason: ''
@@ -902,21 +922,30 @@ async function narrowWithIntelligentTags(hubspotBrands, meetings, firefliesTrans
       let score = 0;
       let primaryReason = '';
       
+      // Safe string operations
+      const brandNameLower = brand.name.toLowerCase();
+      
       // Check if brand was mentioned in recent meetings
-      const mentionedInMeetings = meetings.some(m => 
-        m.fields['Summary']?.toLowerCase().includes(brand.name.toLowerCase()) ||
-        m.fields['Title']?.toLowerCase().includes(brand.name.toLowerCase())
-      );
+      const mentionedInMeetings = meetings && meetings.some(m => {
+        const summary = m.fields?.['Summary'] || '';
+        const title = m.fields?.['Title'] || '';
+        return summary.toLowerCase().includes(brandNameLower) ||
+               title.toLowerCase().includes(brandNameLower);
+      });
       
-      const mentionedInFireflies = firefliesTranscripts.some(t =>
-        t.summary?.overview?.toLowerCase().includes(brand.name.toLowerCase()) ||
-        t.title?.toLowerCase().includes(brand.name.toLowerCase())
-      );
+      const mentionedInFireflies = firefliesTranscripts && firefliesTranscripts.some(t => {
+        const overview = t.summary?.overview || '';
+        const title = t.title || '';
+        return overview.toLowerCase().includes(brandNameLower) ||
+               title.toLowerCase().includes(brandNameLower);
+      });
       
-      const mentionedInEmails = emails && emails.some(e =>
-        e.subject?.toLowerCase().includes(brand.name.toLowerCase()) ||
-        e.preview?.toLowerCase().includes(brand.name.toLowerCase())
-      );
+      const mentionedInEmails = emails && emails.some(e => {
+        const subject = e.subject || '';
+        const preview = e.preview || '';
+        return subject.toLowerCase().includes(brandNameLower) ||
+               preview.toLowerCase().includes(brandNameLower);
+      });
       
       // Tag assignment logic
       if (brand.pipelineStatus === 'customer' || brand.dealStage === 'contractsent') {
@@ -970,6 +999,13 @@ async function narrowWithIntelligentTags(hubspotBrands, meetings, firefliesTrans
         if (!primaryReason) primaryReason = 'Ready to move forward';
       }
       
+      // Has contacts - indicator of relationship
+      const contactCount = parseInt(brand.contactCount) || 0;
+      if (contactCount > 0) {
+        score += 5;
+        if (!primaryReason) primaryReason = `Has ${contactCount} contacts`;
+      }
+      
       brand.tags = tags;
       brand.relevanceScore = score;
       brand.reason = primaryReason || 'Potential match';
@@ -997,8 +1033,8 @@ async function narrowWithIntelligentTags(hubspotBrands, meetings, firefliesTrans
 // Helper function to extract production context
 function extractProductionContext(message) {
   // Add safety check for undefined message
-  if (!message) {
-    console.warn('extractProductionContext called with undefined message');
+  if (!message || typeof message !== 'string') {
+    console.warn('extractProductionContext called with invalid message:', message);
     return {
       title: null,
       genre: null,
@@ -1203,11 +1239,11 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     mcpThinking.push('🧠 Analyzing brand relevance and pipeline status...');
     
     // Call the wrapper function that maintains compatibility
-    const { topBrands, taggedBrands } = await narrowWithOpenAI(
-      [],  // empty airtable brands
+    const { topBrands, taggedBrands } = await narrowWithIntelligentTags(
       hubspotData.brands || [],
       [],  // empty meetings array since we use Fireflies
       firefliesData.transcripts || [],
+      o365Data || [],
       enhancedMessage
     );
     
@@ -1658,593 +1694,3 @@ export default async function handler(req, res) {
                 error: 'Runway video generation service not configured',
                 details: 'Please configure RUNWAY_API_KEY in environment variables'
               });
-            }
-            
-            // For Runway, validate promptImage
-            if (promptImage && !promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
-              return res.status(400).json({
-                error: 'Invalid image format',
-                details: 'promptImage must be a valid URL or base64 data URL'
-              });
-            }
-            
-            let imageToUse = promptImage;
-            if (!promptImage || promptImage.includes('dummyimage.com')) {
-              console.log('⚠️ Using default image for Runway');
-              imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
-            }
-            
-            result = await generateRunwayVideo({
-              promptText,
-              promptImage: imageToUse,
-              model: model || 'gen4_turbo',
-              ratio: ratio || '1104:832',
-              duration: duration || 5
-            });
-          }
-
-          console.log(`✅ Video generated successfully with ${videoModel || 'runway'}:`, result.taskId);
-
-          return res.status(200).json({
-            success: true,
-            videoUrl: result.url,
-            taskId: result.taskId,
-            model: videoModel || 'runway',
-            metadata: result.metadata
-          });
-
-        } catch (error) {
-          console.error('Error in video generation:', error);
-          return res.status(500).json({ 
-            error: 'Failed to generate video',
-            details: error.message 
-          });
-        }
-      }
-
-      // Check if this is an image generation request
-      if (req.body.generateImage === true) {
-        console.log('Processing image generation request');
-        
-        const { prompt, projectId, sessionId, imageModel, dimensions } = req.body;
-
-        if (!prompt) {
-          return res.status(400).json({ 
-            error: 'Missing required fields',
-            details: 'prompt is required'
-          });
-        }
-
-        if (!openAIApiKey) {
-          console.error('OpenAI API key not configured');
-          return res.status(500).json({ 
-            error: 'Image generation service not configured',
-            details: 'Please configure OPENAI_API_KEY'
-          });
-        }
-
-        try {
-          console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
-          
-          // Always use gpt-image-1
-          const model = 'gpt-image-1';
-          console.log('Using model:', model);
-          
-          // Build request body
-          const requestBody = {
-            model: model,
-            prompt: prompt,
-            n: 1
-          };
-          
-          // Set size based on dimensions parameter from frontend
-          if (dimensions) {
-            // Use the dimensions passed from frontend
-            requestBody.size = dimensions;
-            console.log('Using dimensions from frontend:', dimensions);
-          } else {
-            // Default to landscape if no dimensions specified
-            requestBody.size = '1536x1024';
-            console.log('Using default landscape dimensions');
-          }
-          
-          const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${openAIApiKey}`
-            },
-            body: JSON.stringify(requestBody)
-          });
-
-          if (!imageResponse.ok) {
-            const errorData = await imageResponse.text();
-            console.error('OpenAI Image API error:', imageResponse.status, errorData);
-            
-            if (imageResponse.status === 401) {
-              return res.status(401).json({ 
-                error: 'Invalid API key',
-                details: 'Check your OpenAI API key configuration'
-              });
-            }
-            
-            if (imageResponse.status === 429) {
-              return res.status(429).json({ 
-                error: 'Rate limit exceeded',
-                details: 'Too many requests. Please try again later.'
-              });
-            }
-            
-            if (imageResponse.status === 400) {
-              let errorDetails = errorData;
-              try {
-                const errorJson = JSON.parse(errorData);
-                errorDetails = errorJson.error?.message || errorData;
-              } catch (e) {
-                // If parsing fails, use raw error data
-              }
-              return res.status(400).json({ 
-                error: 'Invalid request',
-                details: errorDetails
-              });
-            }
-            
-            return res.status(imageResponse.status).json({ 
-              error: 'Failed to generate image',
-              details: errorData
-            });
-          }
-
-          const data = await imageResponse.json();
-          console.log('✅ Image generation response received');
-
-          // Check for different possible response structures
-          let imageUrl = null;
-          
-          // Standard structure: data.data[0].url or data.data[0].b64_json
-          if (data.data && data.data.length > 0) {
-            if (data.data[0].url) {
-              imageUrl = data.data[0].url;
-            } else if (data.data[0].b64_json) {
-              // Convert base64 to data URL
-              const base64Image = data.data[0].b64_json;
-              imageUrl = `data:image/png;base64,${base64Image}`;
-              console.log('Converted base64 to data URL');
-            }
-          }
-          // Alternative structure: data.url
-          else if (data.url) {
-            imageUrl = data.url;
-          }
-          
-          if (imageUrl) {
-            return res.status(200).json({
-              success: true,
-              imageUrl: imageUrl,
-              revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
-              model: model
-            });
-          } else {
-            console.error('Unexpected response structure:', data);
-            throw new Error('No image URL found in response');
-          }
-          
-        } catch (error) {
-          console.error('Error in image generation:', error);
-          return res.status(500).json({ 
-            error: 'Failed to generate image',
-            details: error.message 
-          });
-        }
-      }
-      // Handle regular chat messages
-      let { userMessage, sessionId, audioData, projectId } = req.body;
-
-      if (userMessage && userMessage.length > 5000) {
-        userMessage = userMessage.slice(0, 5000) + "…";
-      }
-
-      console.log('📨 Received chat request:', { 
-        userMessage: userMessage ? userMessage.slice(0, 100) + '...' : null, 
-        sessionId, 
-        projectId
-      });
-
-      if (!sessionId) {
-        return res.status(400).json({ error: 'Missing sessionId' });
-      }
-      if (!userMessage && !audioData) {
-        return res.status(400).json({ error: 'Missing required fields' });
-      }
-
-      // Get project configuration
-      const projectConfig = getProjectConfig(projectId);
-      const { baseId, chatTable, knowledgeTable } = projectConfig;
-
-      const knowledgeBaseUrl = `https://api.airtable.com/v0/${baseId}/${knowledgeTable}`;
-      const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
-      const headersAirtable = { 
-        'Content-Type': 'application/json', 
-        Authorization: `Bearer ${airtableApiKey}` 
-      };
-
-      let conversationContext = '';
-      let existingRecordId = null;
-
-      // Fetch knowledge base
-      let knowledgeBaseInstructions = '';
-      try {
-        console.log('📚 Fetching knowledge base from:', knowledgeBaseUrl);
-        const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
-        if (kbResponse.ok) {
-          const knowledgeBaseData = await kbResponse.json();
-          const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
-          knowledgeBaseInstructions = knowledgeEntries;
-          console.log('✅ Knowledge base loaded:', knowledgeBaseInstructions.slice(0, 200) + '...');
-        } else {
-          console.warn('⚠️ Knowledge base not found, using default');
-        }
-      } catch (error) {
-        console.error(`❌ Error fetching knowledge base:`, error);
-      }
-
-      // Fetch conversation history
-      try {
-        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
-        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
-        if (historyResponse.ok) {
-          const result = await historyResponse.json();
-          if (result.records.length > 0) {
-            conversationContext = result.records[0].fields.Conversation || '';
-            existingRecordId = result.records[0].id;
-
-            if (conversationContext.length > 3000) {
-              conversationContext = conversationContext.slice(-3000);
-            }
-          }
-        }
-      } catch (error) {
-        console.error(`Error fetching conversation history:`, error);
-      }
-
-      // Intelligent search query detection
-      const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
-      
-      console.log('🔍 Search detection:', { 
-        shouldSearchDatabases, 
-        userMessage: userMessage?.slice(0, 50),
-        hasO365: !!msftClientId,
-        hasHubSpot: !!hubspotApiKey,
-        hasFireflies: !!firefliesApiKey
-      });
-      
-      console.log('🔍 Brand matching detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
-
-      // Process audio or text
-      if (audioData) {
-        try {
-          const audioBuffer = Buffer.from(audioData, 'base64');
-          const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
-
-          const openaiWs = new WebSocket(openaiWsUrl, {
-            headers: {
-              Authorization: `Bearer ${openAIApiKey}`,
-              'OpenAI-Beta': 'realtime=v1',
-            },
-          });
-
-          // Build system message
-          let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
-          if (conversationContext) {
-            systemMessageContent += `\n\nConversation history: ${conversationContext}`;
-          }
-          systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
-          if (projectId && projectId !== 'default') {
-            systemMessageContent += ` You are assisting with the ${projectId} project.`;
-          }
-
-          openaiWs.on('open', () => {
-            console.log('Connected to OpenAI Realtime API');
-            openaiWs.send(JSON.stringify({
-              type: 'session.update',
-              session: { instructions: systemMessageContent },
-            }));
-            openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioBuffer.toString('base64') }));
-            openaiWs.send(JSON.stringify({
-              type: 'response.create',
-              response: { modalities: ['text'], instructions: 'Please respond to the user.' },
-            }));
-          });
-
-          openaiWs.on('message', async (message) => {
-            const event = JSON.parse(message);
-            console.log('OpenAI WebSocket message:', event);
-            if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
-              const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
-              if (aiReply) {
-                updateAirtableConversation(
-                  sessionId, 
-                  projectId, 
-                  chatUrl, 
-                  headersAirtable, 
-                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
-                  existingRecordId
-                ).catch(err => console.error('Airtable update error:', err));
-                
-                res.json({ 
-                  reply: aiReply,
-                  mcpThinking: null,
-                  usedMCP: false
-                });
-              } else {
-                res.status(500).json({ error: 'No valid reply received from OpenAI.' });
-              }
-              openaiWs.close();
-            }
-          });
-
-          openaiWs.on('error', (error) => {
-            console.error('OpenAI WebSocket error:', error);
-            res.status(500).json({ error: 'Failed to communicate with OpenAI' });
-          });
-          
-        } catch (error) {
-          console.error('Error processing audio data:', error);
-          res.status(500).json({ error: 'Error processing audio data.', details: error.message });
-        }
-      } else if (userMessage) {
-        try {
-          let aiReply = '';
-          let mcpThinking = [];
-          let usedMCP = false;
-
-          // Try Claude MCP for data gathering on brand matching queries
-          let claudeOrganizedData = null;
-          if (shouldSearchDatabases && anthropicApiKey) {
-            console.log('🎯 Brand matching query detected - attempting Claude MCP data gathering...');
-            console.log('🔑 API keys:', {
-              anthropic: anthropicApiKey ? 'Present' : 'MISSING!',
-              hubspot: hubspotApiKey ? 'Present' : 'MISSING!',
-              microsoft: msftClientId ? 'Present' : 'MISSING!'
-            });
-            
-            const claudeResult = await handleClaudeSearch(
-              userMessage, 
-              knowledgeBaseInstructions, 
-              projectId, 
-              sessionId,
-              conversationContext  // Pass conversation context
-            );
-            
-            if (claudeResult) {
-              claudeOrganizedData = claudeResult.organizedData;
-              mcpThinking = claudeResult.mcpThinking;
-              usedMCP = true;
-              console.log('✅ Claude MCP successfully gathered and organized data');
-              console.log('🧠 MCP Thinking:', mcpThinking);
-            } else {
-              console.log('⚠️ Claude MCP failed or returned null, using standard OpenAI');
-            }
-          } else {
-            if (!shouldSearchDatabases) {
-              console.log('❌ AI determined no search needed - using standard OpenAI');
-            }
-            if (!anthropicApiKey) {
-              console.log('❌ No Anthropic API key - using standard OpenAI');
-            }
-          }
-          
-          // Use OpenAI to generate the final response
-          if (!aiReply) {
-            console.log('📝 Using OpenAI for response generation');
-            
-            // Build enhanced system message with Claude's organized data
-            let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
-            
-            // Add Claude's organized data if available
-            if (claudeOrganizedData) {
-              systemMessageContent += "\n\n**INTELLIGENT SEARCH RESULTS FROM YOUR DATABASE:**\n";
-              
-              // Add production context if available
-              if (claudeOrganizedData.currentProduction) {
-                systemMessageContent += `\n**CURRENT PRODUCTION CONTEXT: ${claudeOrganizedData.currentProduction}**\n`;
-                systemMessageContent += "The user is asking about brand partnerships for this specific production.\n";
-              }
-              
-              if (claudeOrganizedData.topBrands && claudeOrganizedData.topBrands.length > 0) {
-                systemMessageContent += "\n**TOP MATCHED BRANDS:**\n";
-                claudeOrganizedData.topBrands.slice(0, 10).forEach((brand, index) => {
-                  systemMessageContent += `${index + 1}. ${brand.name}\n`;
-                  systemMessageContent += `   - Tags: ${brand.tags.join(', ')}\n`;
-                  systemMessageContent += `   - Relevance: ${brand.reason}\n`;
-                  systemMessageContent += `   - Budget: ${brand.budget}\n`;
-                  systemMessageContent += `   - Category: ${brand.category}\n`;
-                  if (brand.hasPartner) {
-                    systemMessageContent += `   - Partner Agency: ${brand.partnerAgency}\n`;
-                  }
-                  systemMessageContent += `   - Last Activity: ${brand.lastActivity || 'Unknown'}\n`;
-                  if (brand.summary) {
-                    systemMessageContent += `   - Summary: ${brand.summary}\n`;
-                  }
-                  systemMessageContent += "\n";
-                });
-              }
-              
-              if (claudeOrganizedData.firefliesTranscripts && claudeOrganizedData.firefliesTranscripts.length > 0) {
-                systemMessageContent += "\n**MEETING TRANSCRIPTS (via Fireflies):**\n";
-                claudeOrganizedData.firefliesTranscripts.slice(0, 5).forEach(transcript => {
-                  systemMessageContent += `- ${transcript.title} (${transcript.date})\n`;
-                  systemMessageContent += `  Participants: ${transcript.participants?.join(', ') || 'Unknown'}\n`;
-                  if (transcript.summary?.overview) {
-                    systemMessageContent += `  Summary: ${transcript.summary.overview.slice(0, 200)}...\n`;
-                  }
-                  if (transcript.summary?.action_items) {
-                    if (Array.isArray(transcript.summary.action_items) && transcript.summary.action_items.length > 0) {
-                      systemMessageContent += `  Action Items: ${transcript.summary.action_items.slice(0, 3).join('; ')}\n`;
-                    } else if (typeof transcript.summary.action_items === 'string') {
-                      systemMessageContent += `  Action Items: ${transcript.summary.action_items}\n`;
-                    }
-                  }
-                  if (transcript.transcript_url) {
-                    systemMessageContent += `  Meeting Link: ${transcript.transcript_url}\n`;
-                  }
-                  systemMessageContent += "\n";
-                });
-              }
-              
-              if (claudeOrganizedData.o365Emails && claudeOrganizedData.o365Emails.length > 0) {
-                systemMessageContent += "\n**RECENT EMAIL COMMUNICATIONS:**\n";
-                claudeOrganizedData.o365Emails.slice(0, 10).forEach(email => {
-                  systemMessageContent += `- ${email.subject} (${new Date(email.receivedDate).toLocaleDateString()})\n`;
-                  systemMessageContent += `  From: ${email.fromName || email.from}\n`;
-                  if (email.preview) {
-                    systemMessageContent += `  Preview: ${email.preview.slice(0, 150)}...\n`;
-                  }
-                  systemMessageContent += "\n";
-                });
-              }
-              
-              if (claudeOrganizedData.claudeSummary) {
-                systemMessageContent += "\n**ANALYSIS INSIGHTS:**\n";
-                systemMessageContent += JSON.stringify(claudeOrganizedData.claudeSummary, null, 2);
-                systemMessageContent += "\n";
-              }
-              
-              systemMessageContent += "\n**INSTRUCTIONS:**\n";
-              systemMessageContent += "- Use the above data to provide specific brand recommendations\n";
-              systemMessageContent += "- Include meeting references with their links in the format: Meeting: [Title] Link: [URL]\n";
-              systemMessageContent += "- Prioritize brands with partners and recent activity\n";
-              systemMessageContent += "- Suggest integration ideas for each brand\n";
-            }
-            
-            if (conversationContext) {
-              systemMessageContent += `\n\nConversation history: ${conversationContext}`;
-            }
-            systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
-            if (projectId && projectId !== 'default') {
-              systemMessageContent += ` You are assisting with the ${projectId} project.`;
-            }
-            
-            const openAIResponse = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-            aiReply = openAIResponse;
-          }
-          
-          if (aiReply) {
-            updateAirtableConversation(
-              sessionId, 
-              projectId, 
-              chatUrl, 
-              headersAirtable, 
-              `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
-              existingRecordId
-            ).catch(err => console.error('Airtable update error:', err));
-            
-            // Include brand suggestions if we have them
-            const response = { 
-              reply: aiReply,
-              mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-              usedMCP: usedMCP
-            };
-            
-            // Add brand suggestions for dropdown if available
-            if (claudeOrganizedData && claudeOrganizedData.brandSuggestions) {
-              response.brandSuggestions = claudeOrganizedData.brandSuggestions;
-            }
-            
-            return res.json(response);
-          } else {
-            return res.status(500).json({ error: 'No text reply received.' });
-          }
-        } catch (error) {
-          console.error('Error fetching response:', error);
-          return res.status(500).json({ error: 'Error fetching response.', details: error.message });
-        }
-      }
-    } catch (error) {
-      console.error('Error in handler:', error);
-      return res.status(500).json({ error: 'Internal server error', details: error.message });
-    }
-  } else {
-    res.setHeader("Allow", ["POST", "OPTIONS"]);
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-}
-
-async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
-  try {
-    const messages = [
-      { role: 'system', content: systemMessageContent },
-      { role: 'user', content: userMessage }
-    ];
-    
-    const totalLength = systemMessageContent.length + userMessage.length;
-    console.log(`Total message length: ${totalLength} characters`);
-    
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: messages,
-        max_tokens: 1000,
-        temperature: 0.7
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error('OpenAI API error:', response.status, errorData);
-      throw new Error(`OpenAI API error: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    console.log('OpenAI response received');
-    if (data.choices && data.choices.length > 0) {
-      return data.choices[0].message.content;
-    } else {
-      console.error('No valid choices in OpenAI response.');
-      return null;
-    }
-  } catch (error) {
-    console.error('Error in getTextResponseFromOpenAI:', error);
-    throw error;
-  }
-}
-
-async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
-  try {
-    let conversationToSave = updatedConversation;
-    if (conversationToSave.length > 10000) {
-      conversationToSave = '...' + conversationToSave.slice(-10000);
-    }
-    
-    const recordData = {
-      fields: {
-        SessionID: sessionId,
-        ProjectID: projectId || 'default',
-        Conversation: conversationToSave
-      }
-    };
-
-    if (existingRecordId) {
-      await fetch(`${chatUrl}/${existingRecordId}`, {
-        method: 'PATCH',
-        headers: headersAirtable,
-        body: JSON.stringify({ fields: recordData.fields }),
-      });
-      console.log(`Updated conversation for project: ${projectId}, session: ${sessionId}`);
-    } else {
-      await fetch(chatUrl, {
-        method: 'POST',
-        headers: headersAirtable,
-        body: JSON.stringify(recordData),
-      });
-      console.log(`Created new conversation for project: ${projectId}, session: ${sessionId}`);
-    }
-  } catch (error) {
-    console.error('Error updating Airtable conversation:', error);
-  }
-}
