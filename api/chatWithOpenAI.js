@@ -773,6 +773,24 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
   return { searchType, records: [], total: 0 };
 }
 
+// Stage 2: Wrapper function to maintain compatibility
+async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
+  try {
+    // Combine all brands
+    const allBrands = [...airtableBrands, ...hubspotBrands];
+    // Call the new function with empty emails array
+    const result = await narrowWithIntelligentTags(allBrands, firefliesTranscripts, [], userMessage);
+    // Make sure we return the expected structure
+    return {
+      topBrands: result.topBrands || [],
+      scores: {} // compatibility field
+    };
+  } catch (error) {
+    console.error('Error in narrowWithOpenAI wrapper:', error);
+    return { topBrands: [], scores: {} };
+  }
+}
+
 // New: Search HubSpot for brands and production data
 async function searchHubSpot(query, projectId, limit = 50) {
   console.log('🔍 Searching HubSpot for brands and productions...');
@@ -2039,7 +2057,6 @@ export default async function handler(req, res) {
                   systemMessageContent += "\n";
                 });
               }
-              
               
               if (claudeOrganizedData.firefliesTranscripts && claudeOrganizedData.firefliesTranscripts.length > 0) {
                 systemMessageContent += "\n**MEETING TRANSCRIPTS (via Fireflies):**\n";
