@@ -874,31 +874,24 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       let score = 0;
       let primaryReason = '';
       
-      // Check if brand was mentioned in recent meetings with specific context
+      // Check if brand was mentioned in recent meetings
       const brandNameLower = brand.name.toLowerCase();
       let meetingMention = null;
       let emailMention = null;
       
-      // More flexible search for brand mentions
       const mentionedInFireflies = firefliesTranscripts && firefliesTranscripts.some(t => {
-        const overview = (t.summary?.overview || '').toLowerCase();
-        const title = (t.title || '').toLowerCase();
-        const topics = (t.summary?.topics_discussed || '').toLowerCase();
-        const keywords = (t.summary?.keywords || []).join(' ').toLowerCase();
-        const searchText = `${overview} ${title} ${topics} ${keywords}`;
+        const overview = t.summary?.overview || '';
+        const title = t.title || '';
+        const topics = t.summary?.topics_discussed || '';
+        const searchText = `${overview} ${title} ${topics}`.toLowerCase();
         
-        // Look for brand name or partial matches
-        const brandWords = brandNameLower.split(' ');
-        const found = brandWords.some(word => word.length > 3 && searchText.includes(word));
-        
-        if (found || searchText.includes(brandNameLower)) {
-          // Capture the specific mention with full URL
+        if (searchText.includes(brandNameLower)) {
+          // Capture the specific mention
           meetingMention = {
             title: t.title,
             url: t.transcript_url,
-            context: overview.slice(0, 150) || `Discussed ${brand.name}`,
-            date: t.dateString || t.date,
-            actionItems: Array.isArray(t.summary?.action_items) ? t.summary.action_items[0] : null
+            context: overview.slice(0, 100),
+            date: t.dateString
           };
           return true;
         }
@@ -906,23 +899,17 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       });
       
       const mentionedInEmails = emails && emails.some(e => {
-        const subject = (e.subject || '').toLowerCase();
-        const preview = (e.preview || '').toLowerCase();
-        const searchText = `${subject} ${preview}`;
+        const subject = e.subject || '';
+        const preview = e.preview || '';
+        const searchText = `${subject} ${preview}`.toLowerCase();
         
-        // Look for brand name or partial matches
-        const brandWords = brandNameLower.split(' ');
-        const found = brandWords.some(word => word.length > 3 && searchText.includes(word));
-        
-        if (found || searchText.includes(brandNameLower)) {
+        if (searchText.includes(brandNameLower)) {
           // Capture the specific mention
           emailMention = {
             subject: e.subject,
-            preview: preview.slice(0, 150),
+            preview: preview.slice(0, 100),
             from: e.fromName || e.from,
-            date: e.receivedDate,
-            // O365 doesn't provide direct email links in this API
-            webLink: e.webLink || null
+            date: e.receivedDate
           };
           return true;
         }
@@ -933,7 +920,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       if (brand.lifecyclestage === 'customer') {
         tags.push('Hot Lead');
         score += 40;
-        primaryReason = 'Existing customer ready to activate';
+        primaryReason = 'Existing customer relationship';
       } else if (brand.lifecyclestage === 'opportunity') {
         tags.push('Active Opportunity');
         score += 35;
@@ -944,91 +931,23 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         primaryReason = 'Sales qualified lead';
       }
       
-      // Recent activity tagging with SPECIFIC context
+      // Recent activity tagging with specific context
       if (mentionedInFireflies && meetingMention) {
         tags.push('Recent Meeting');
         score += 30;
-        // Make the reason specific
-        primaryReason = `Discussed in "${meetingMention.title}" on ${meetingMention.date}`;
-        if (meetingMention.actionItems) {
-          primaryReason += ` - Action: ${meetingMention.actionItems}`;
+        if (!primaryReason) {
+          primaryReason = `Discussed in "${meetingMention.title}" on ${meetingMention.date}`;
         }
-        brand.meetingContext = meetingMention;
+        brand.meetingContext = meetingMention; // Store for later use
       }
       
       if (mentionedInEmails && emailMention) {
         tags.push('Email Thread');
         score += 20;
-        if (!primaryReason || primaryReason.includes('lead')) {
-          primaryReason = `Recent email: "${emailMention.subject}" from ${emailMention.from}`;
-        }
-        brand.emailContext = emailMention;
-      }
-      
-      if (brand.hasPartner) {
-        tags.push('Agency Ready');
-        score += 15;
         if (!primaryReason) {
-          primaryReason = `Ready with agency partner: ${brand.partnerAgency}`;
+          primaryReason = `Email thread: "${emailMention.subject}" from ${emailMention.from}`;
         }
-      }
-      
-      // Check budget fit
-      if (brand.budget && brand.budget !== 'TBD') {
-        const budgetValue = parseFloat(brand.budget.match(/\d+\.?\d*/)?.[0] || 0);
-        if (budgetValue > 5) {
-          tags.push('Big Budget');
-          score += 25;
-          if (!primaryReason || primaryReason.includes('lead')) {
-            primaryReason = `${brand.budget} media budget available`;
-          }
-        }
-      }
-      
-      // Genre/category matching with specific context
-      if (productionContext.genre && brand.category) {
-        const genreMatch = checkGenreMatch(productionContext.genre, brand.category);
-        if (genreMatch) {
-          tags.push('Genre Match');
-          score += 20;
-          if (!primaryReason) {
-            primaryReason = `Perfect ${productionContext.genre} genre fit - ${brand.category} brand`;
-          }
-        }
-      }
-      
-      // Recent activity based on last contact date
-      if (brand.lastActivity) {
-        const lastActivityDate = new Date(brand.lastActivity);
-        const daysSinceActivity = (new Date() - lastActivityDate) / (1000 * 60 * 60 * 24);
-        
-        if (daysSinceActivity < 7) {
-          tags.push('This Week');
-          score += 20;
-          if (!primaryReason || primaryReason.includes('lead')) {
-            primaryReason = `Contact this week - momentum is high`;
-          }
-        } else if (daysSinceActivity < 30) {
-          tags.push('Recent Activity');
-          score += 10;
-        }
-      }
-      
-      // Quick win - brands with multiple contacts (shows engagement)
-      const contactCount = parseInt(brand.numContacts) || 0;
-      if (contactCount >= 3) {
-        tags.push('High Engagement');
-        score += 10;
-        if (!primaryReason || primaryReason.includes('lead')) {
-          primaryReason = `${contactCount} contacts engaged - multiple touchpoints`;
-        }
-      }
-      
-      // Default tag if no others apply
-      if (tags.length === 0) {
-        tags.push('Potential Match');
-        score = 5;
-        primaryReason = 'Potential brand partner for consideration';
+        brand.emailContext = emailMention; // Store for later use
       }
       
       if (brand.hasPartner) {
