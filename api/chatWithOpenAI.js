@@ -2012,81 +2012,80 @@ export default async function handler(req, res) {
             let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
             
             // Add Claude's organized data if available
-            if (claudeOrganizedData) {
-              systemMessageContent += "\n\n**INTELLIGENT SEARCH RESULTS FROM YOUR DATABASE:**\n";
-              
-              // Add production context if available
-              if (claudeOrganizedData.currentProduction) {
-                systemMessageContent += `\n**CURRENT PRODUCTION CONTEXT: ${claudeOrganizedData.currentProduction}**\n`;
-                systemMessageContent += "The user is asking about brand partnerships for this specific production.\n";
-              }
-              
-              if (claudeOrganizedData.topBrands && claudeOrganizedData.topBrands.length > 0) {
-                systemMessageContent += "\n**TOP MATCHED BRANDS:**\n";
-                claudeOrganizedData.topBrands.slice(0, 10).forEach((brand, index) => {
-                  systemMessageContent += `${index + 1}. ${brand.name}\n`;
-                  systemMessageContent += `   - Tags: ${brand.tags.join(', ')}\n`;
-                  systemMessageContent += `   - Relevance: ${brand.reason}\n`;
-                  systemMessageContent += `   - Budget: ${brand.budget}\n`;
-                  systemMessageContent += `   - Category: ${brand.category}\n`;
-                  if (brand.hasPartner) {
-                    systemMessageContent += `   - Partner Agency: ${brand.partnerAgency}\n`;
-                  }
-                  systemMessageContent += `   - Last Activity: ${brand.lastActivity || 'Unknown'}\n`;
-                  if (brand.summary) {
-                    systemMessageContent += `   - Summary: ${brand.summary}\n`;
-                  }
-                  systemMessageContent += "\n";
-                });
-              }
-              }
-              
-              if (claudeOrganizedData.firefliesTranscripts && claudeOrganizedData.firefliesTranscripts.length > 0) {
-                systemMessageContent += "\n**MEETING TRANSCRIPTS (via Fireflies):**\n";
-                claudeOrganizedData.firefliesTranscripts.slice(0, 5).forEach(transcript => {
-                  systemMessageContent += `- ${transcript.title} (${transcript.date})\n`;
-                  systemMessageContent += `  Participants: ${transcript.participants?.join(', ') || 'Unknown'}\n`;
-                  if (transcript.summary?.overview) {
-                    systemMessageContent += `  Summary: ${transcript.summary.overview.slice(0, 200)}...\n`;
-                  }
-                  if (transcript.summary?.action_items) {
-                    if (Array.isArray(transcript.summary.action_items) && transcript.summary.action_items.length > 0) {
-                      systemMessageContent += `  Action Items: ${transcript.summary.action_items.slice(0, 3).join('; ')}\n`;
-                    } else if (typeof transcript.summary.action_items === 'string') {
-                      systemMessageContent += `  Action Items: ${transcript.summary.action_items}\n`;
-                    }
-                  }
-                  if (transcript.transcript_url) {
-                    systemMessageContent += `  Meeting Link: ${transcript.transcript_url}\n`;
-                  }
-                  systemMessageContent += "\n";
-                });
-              }
-              
-              if (claudeOrganizedData.o365Emails && claudeOrganizedData.o365Emails.length > 0) {
-                systemMessageContent += "\n**RECENT EMAIL COMMUNICATIONS:**\n";
-                claudeOrganizedData.o365Emails.slice(0, 10).forEach(email => {
-                  systemMessageContent += `- ${email.subject} (${new Date(email.receivedDate).toLocaleDateString()})\n`;
-                  systemMessageContent += `  From: ${email.fromName || email.from}\n`;
-                  if (email.preview) {
-                    systemMessageContent += `  Preview: ${email.preview.slice(0, 150)}...\n`;
-                  }
-                  systemMessageContent += "\n";
-                });
-              }
-              
-              if (claudeOrganizedData.claudeSummary) {
-                systemMessageContent += "\n**ANALYSIS INSIGHTS:**\n";
-                systemMessageContent += JSON.stringify(claudeOrganizedData.claudeSummary, null, 2);
-                systemMessageContent += "\n";
-              }
-              
-              systemMessageContent += "\n**INSTRUCTIONS:**\n";
-              systemMessageContent += "- Use the above data to provide specific brand recommendations\n";
-              systemMessageContent += "- Include meeting references with their links in the format: Meeting: [Title] Link: [URL]\n";
-              systemMessageContent += "- Prioritize brands with partners and recent activity\n";
-              systemMessageContent += "- Suggest integration ideas for each brand\n";
-            } // <--- ✅ THIS IS THE CORRECT LOCATION FOR THE BRACE
+           if (claudeOrganizedData) {
+  systemMessageContent += "\n\n**INTELLIGENT SEARCH RESULTS FROM YOUR DATABASE:**\n";
+  
+  // Add production context if available
+  if (claudeOrganizedData.currentProduction) {
+    systemMessageContent += `\n**CURRENT PRODUCTION CONTEXT: ${claudeOrganizedData.currentProduction}**\n`;
+    systemMessageContent += "The user is asking about brand partnerships for this specific production.\n";
+  }
+  
+  if (claudeOrganizedData.topBrands && claudeOrganizedData.topBrands.length > 0) {
+    systemMessageContent += "\n**TOP MATCHED BRANDS:**\n";
+    claudeOrganizedData.topBrands.slice(0, 10).forEach((brand, index) => {
+      systemMessageContent += `${index + 1}. ${brand.name}\n`;
+      systemMessageContent += `   - Tags: ${brand.tags.join(', ')}\n`;
+      systemMessageContent += `   - Relevance: ${brand.reason}\n`;
+      systemMessageContent += `   - Budget: ${brand.budget}\n`;
+      systemMessageContent += `   - Category: ${brand.category}\n`;
+      if (brand.hasPartner) {
+        systemMessageContent += `   - Partner Agency: ${brand.partnerAgency}\n`;
+      }
+      systemMessageContent += `   - Last Activity: ${brand.lastActivity || 'Unknown'}\n`;
+      if (brand.summary) {
+        systemMessageContent += `   - Summary: ${brand.summary}\n`;
+      }
+      systemMessageContent += "\n";
+    });
+  }
+  
+  if (claudeOrganizedData.firefliesTranscripts && claudeOrganizedData.firefliesTranscripts.length > 0) {
+    systemMessageContent += "\n**MEETING TRANSCRIPTS (via Fireflies):**\n";
+    claudeOrganizedData.firefliesTranscripts.slice(0, 5).forEach(transcript => {
+      systemMessageContent += `- ${transcript.title} (${transcript.date})\n`;
+      systemMessageContent += `  Participants: ${transcript.participants?.join(', ') || 'Unknown'}\n`;
+      if (transcript.summary?.overview) {
+        systemMessageContent += `  Summary: ${transcript.summary.overview.slice(0, 200)}...\n`;
+      }
+      if (transcript.summary?.action_items) {
+        if (Array.isArray(transcript.summary.action_items) && transcript.summary.action_items.length > 0) {
+          systemMessageContent += `  Action Items: ${transcript.summary.action_items.slice(0, 3).join('; ')}\n`;
+        } else if (typeof transcript.summary.action_items === 'string') {
+          systemMessageContent += `  Action Items: ${transcript.summary.action_items}\n`;
+        }
+      }
+      if (transcript.transcript_url) {
+        systemMessageContent += `  Meeting Link: ${transcript.transcript_url}\n`;
+      }
+      systemMessageContent += "\n";
+    });
+  }
+  
+  if (claudeOrganizedData.o365Emails && claudeOrganizedData.o365Emails.length > 0) {
+    systemMessageContent += "\n**RECENT EMAIL COMMUNICATIONS:**\n";
+    claudeOrganizedData.o365Emails.slice(0, 10).forEach(email => {
+      systemMessageContent += `- ${email.subject} (${new Date(email.receivedDate).toLocaleDateString()})\n`;
+      systemMessageContent += `  From: ${email.fromName || email.from}\n`;
+      if (email.preview) {
+        systemMessageContent += `  Preview: ${email.preview.slice(0, 150)}...\n`;
+      }
+      systemMessageContent += "\n";
+    });
+  }
+  
+  if (claudeOrganizedData.claudeSummary) {
+    systemMessageContent += "\n**ANALYSIS INSIGHTS:**\n";
+    systemMessageContent += JSON.stringify(claudeOrganizedData.claudeSummary, null, 2);
+    systemMessageContent += "\n";
+  }
+  
+  systemMessageContent += "\n**INSTRUCTIONS:**\n";
+  systemMessageContent += "- Use the above data to provide specific brand recommendations\n";
+  systemMessageContent += "- Include meeting references with their links in the format: Meeting: [Title] Link: [URL]\n";
+  systemMessageContent += "- Prioritize brands with partners and recent activity\n";
+  systemMessageContent += "- Suggest integration ideas for each brand\n";
+} // <--- ✅ THIS IS THE CORRECT LOCATION FOR THE BRACE
             
             if (conversationContext) {
               systemMessageContent += `\n\nConversation history: ${conversationContext}`;
