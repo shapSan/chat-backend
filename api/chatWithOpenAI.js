@@ -879,7 +879,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       let meetingMention = null;
       let emailMention = null;
       
-      // More flexible search for brand mentions
+      // More flexible search for brand mentions with fuzzy matching
       const mentionedInFireflies = firefliesTranscripts && firefliesTranscripts.some(t => {
         const overview = (t.summary?.overview || '').toLowerCase();
         const title = (t.title || '').toLowerCase();
@@ -887,12 +887,12 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         const keywords = (t.summary?.keywords || []).join(' ').toLowerCase();
         const searchText = `${overview} ${title} ${topics} ${keywords}`;
         
-        // Look for brand name or partial matches
-        const brandWords = brandNameLower.split(' ');
-        const found = brandWords.some(word => word.length > 3 && searchText.includes(word));
+        // Normalize brand name for fuzzy matching
+        const normalizedBrandName = brandNameLower.replace(/[''\'s]/g, '').replace(/\s+/g, ' ');
+        const brandWords = normalizedBrandName.split(' ').filter(w => w.length > 2);
         
-        if (found || searchText.includes(brandNameLower)) {
-          // Capture the specific mention with full URL
+        // Check for exact match first
+        if (searchText.includes(brandNameLower)) {
           meetingMention = {
             title: t.title,
             url: t.transcript_url,
@@ -902,6 +902,20 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
           };
           return true;
         }
+        
+        // Fuzzy match - if all significant words are found
+        const fuzzyMatch = brandWords.length > 0 && brandWords.every(word => searchText.includes(word));
+        if (fuzzyMatch) {
+          meetingMention = {
+            title: t.title,
+            url: t.transcript_url,
+            context: overview.slice(0, 150) || `Discussed ${brand.name}`,
+            date: t.dateString || t.date,
+            actionItems: Array.isArray(t.summary?.action_items) ? t.summary.action_items[0] : null
+          };
+          return true;
+        }
+        
         return false;
       });
       
@@ -1252,6 +1266,65 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     // Stage 1: Determine search strategy
     console.log('📊 Stage 1: Determining search strategy...');
     
+    // Check for explicit slash commands first
+    const slashCommand = userMessage.match(/^\/(\w+)\s+(.+)/);
+    if (slashCommand) {
+      const [_, command, brandName] = slashCommand;
+      mcpThinking.push(`🎯 Slash command: /${command} ${brandName}`);
+      
+      if (command === 'meetings' || command === 'meeting' || command === 'calls' || command === 'call') {
+        const firefliesData = await searchFireflies(brandName, { limit: 10 });
+        mcpThinking.push(`✅ Found ${firefliesData.transcripts?.length || 0} meetings`);
+        
+        return {
+          organizedData: {
+            slashCommand: true,
+            commandType: 'meetings',
+            brandName: brandName,
+            meetings: firefliesData.transcripts || [],
+            currentProduction: currentProduction
+          },
+          mcpThinking,
+          usedMCP: true
+        };
+      }
+      
+      if (command === 'emails' || command === 'email') {
+        const o365Data = await o365API.searchEmails(brandName, { days: 30 });
+        mcpThinking.push(`✅ Found ${o365Data?.length || 0} emails`);
+        
+        return {
+          organizedData: {
+            slashCommand: true,
+            commandType: 'emails',
+            brandName: brandName,
+            emails: o365Data || [],
+            currentProduction: currentProduction
+          },
+          mcpThinking,
+          usedMCP: true
+        };
+      }
+      
+      if (command === 'contact' || command === 'contacts') {
+        const brand = await hubspotAPI.searchSpecificBrand(brandName);
+        if (brand) {
+          const contacts = await hubspotAPI.getContactsForCompany(brand.id);
+          return {
+            organizedData: {
+              slashCommand: true,
+              commandType: 'contacts',
+              brand: brand,
+              contacts: contacts,
+              brandName: brandName
+            },
+            mcpThinking,
+            usedMCP: true
+          };
+        }
+      }
+    }
+    
     // Check if this is a specific brand lookup WITH context request
     const brandLookupMatch = userMessage.match(/(?:contact|who is|point of contact|poc|calls?|meetings?|emails?).*?(?:with|for|at|about)\s+([A-Z][^\?\.,]+)/i);
     if (brandLookupMatch) {
@@ -1303,29 +1376,83 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       }
     }
     
-    // Check if asking for meeting/email context
-    const contextQuery = userMessage.match(/(?:meetings?|emails?|context|insights?|discussions?)/i);
-    if (contextQuery && !userMessage.match(/brands?/i)) {
-      mcpThinking.push('📧 Gathering meeting and email context...');
+    // Check if asking for meeting/email context with intelligent patterns
+    const contextPatterns = [
+      /(?:meetings?|calls?|discussions?).*?(?:with|about|regarding)?\s*(?:brands?|partners?|companies)/i,
+      /(?:valuable|important|key|recent|latest).*?(?:meetings?|calls?|emails?)/i,
+      /(?:what|which|show|list).*?(?:meetings?|calls?|emails?).*?(?:this month|last month|recent)/i,
+      /(?:meetings?|emails?|calls?).*?(?:this month|last month|this week|recently)/i,
+      /(?:any|all|show).*?(?:meetings?|emails?|activity).*?(?:with|from|about)/i
+    ];
+    
+    const isContextQuery = contextPatterns.some(pattern => pattern.test(userMessage));
+    
+    if (isContextQuery) {
+      mcpThinking.push('📊 Analyzing meeting and email activity...');
       
-      // Focus on meetings and emails only
+      // Determine time frame from query
+      let daysToSearch = 30; // default
+      if (userMessage.includes('this week')) daysToSearch = 7;
+      if (userMessage.includes('today')) daysToSearch = 1;
+      if (userMessage.includes('this month')) {
+        const now = new Date();
+        daysToSearch = now.getDate(); // Days elapsed this month
+      }
+      
+      // Search for all meetings and emails
       const [firefliesData, o365Data] = await Promise.all([
-        firefliesApiKey ? searchFireflies(currentProduction || '', { limit: 5 }) : { transcripts: [] },
-        msftClientId ? o365API.searchEmails(currentProduction || userMessage.slice(0, 30), { days: 30 }) : []
+        firefliesApiKey ? searchFireflies('', { 
+          limit: 20, 
+          fromDate: new Date(Date.now() - daysToSearch * 24 * 60 * 60 * 1000).toISOString()
+        }) : { transcripts: [] },
+        msftClientId ? o365API.searchEmails('', { days: daysToSearch }) : []
       ]);
       
-      if (firefliesData.transcripts?.length > 0) {
-        mcpThinking.push(`✅ Found ${firefliesData.transcripts.length} relevant meetings`);
-      }
-      if (o365Data?.length > 0) {
-        mcpThinking.push(`✅ Found ${o365Data.length} relevant emails`);
+      // Analyze meetings for brand mentions and value indicators
+      const valuableMeetings = firefliesData.transcripts?.map(meeting => {
+        // Look for brand mentions
+        const overview = (meeting.summary?.overview || '').toLowerCase();
+        const topics = (meeting.summary?.topics_discussed || '').toLowerCase();
+        
+        // Value indicators
+        const hasActionItems = meeting.summary?.action_items?.length > 0;
+        const hasBudgetDiscussion = overview.includes('budget') || overview.includes('spend') || overview.includes('investment');
+        const hasDecisionMaker = meeting.participants?.some(p => 
+          p.toLowerCase().includes('ceo') || 
+          p.toLowerCase().includes('vp') || 
+          p.toLowerCase().includes('director')
+        );
+        
+        // Calculate value score
+        let valueScore = 0;
+        if (hasActionItems) valueScore += 30;
+        if (hasBudgetDiscussion) valueScore += 40;
+        if (hasDecisionMaker) valueScore += 30;
+        if (overview.includes('partnership') || overview.includes('integration')) valueScore += 20;
+        
+        return {
+          ...meeting,
+          valueScore,
+          valueIndicators: {
+            hasActionItems,
+            hasBudgetDiscussion,
+            hasDecisionMaker
+          }
+        };
+      }).sort((a, b) => b.valueScore - a.valueScore) || [];
+      
+      if (valuableMeetings.length > 0) {
+        mcpThinking.push(`✅ Found ${valuableMeetings.length} meetings this month`);
+        mcpThinking.push(`🏆 Identified ${valuableMeetings.filter(m => m.valueScore > 50).length} high-value meetings`);
       }
       
       return {
         organizedData: {
-          contextOnly: true,
-          firefliesTranscripts: firefliesData.transcripts || [],
-          o365Emails: o365Data || [],
+          contextAnalysis: true,
+          queryType: userMessage.includes('valuable') ? 'valuable_meetings' : 'all_activity',
+          valuableMeetings: valuableMeetings.slice(0, 10),
+          emails: o365Data || [],
+          timeFrame: `Last ${daysToSearch} days`,
           currentProduction: currentProduction
         },
         mcpThinking,
@@ -1644,66 +1771,71 @@ async function generateVeo3Video({
 
 // Intelligent query classification using AI
 async function shouldUseSearch(userMessage, conversationContext) {
-  if (!openAIApiKey) return false;
+  if (!openAIApiKey) return true; // Default to searching if no AI
   
   try {
-    // Check if the conversation context contains production details
-    const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
     const messageClues = userMessage.toLowerCase();
     
-    // Quick check for production-related patterns
+    // ALWAYS search for these patterns
+    const alwaysSearchPatterns = [
+      // Time-based queries
+      /(?:recent|latest|last|this|yesterday|today|week|month)/i,
+      // Action queries
+      /(?:show|list|find|what|which|any|who)/i,
+      // Business objects
+      /(?:meeting|email|brand|partner|deal|contact|call|activity)/i,
+      // Value queries
+      /(?:valuable|important|urgent|closing|budget)/i,
+      // Relationship queries
+      /(?:talked|discussed|mentioned|follow.?up)/i
+    ];
+    
+    // If ANY of these patterns match, search immediately
+    const shouldDefinitelySearch = alwaysSearchPatterns.some(pattern => 
+      pattern.test(messageClues)
+    );
+    
+    if (shouldDefinitelySearch) {
+      console.log('🔍 Query requires data search - triggering MCP');
+      return true;
+    }
+    
+    // Check conversation context
+    const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
+    
+    // Production context = likely needs brand data
     if (contextClues.includes('synopsis:') || 
         contextClues.includes('distributor:') || 
-        contextClues.includes('cast:') ||
-        contextClues.includes('starting fee:') ||
-        messageClues.includes('brand') ||
-        messageClues.includes('integration') ||
-        messageClues.includes('partnership')) {
-      console.log('🎬 Production context detected - search needed');
+        contextClues.includes('production')) {
+      console.log('🎬 Production context - search likely needed');
       return true;
     }
     
-    // Always search for context queries
-    if (messageClues.includes('email') || 
-        messageClues.includes('meeting') || 
-        messageClues.includes('discussed') ||
-        messageClues.includes('context') ||
-        messageClues.includes('insights') ||
-        messageClues.includes('low hanging fruit')) {
-      console.log('📧 Context query detected - search needed');
-      return true;
+    // Only skip search for truly conversational queries
+    const conversationalOnly = [
+      /^(hi|hello|hey|thanks|thank you|bye|goodbye)$/i,
+      /^(yes|no|ok|okay|sure|got it)$/i,
+      /^(what do you think|how are you|can you help)$/i,
+      /^(explain|tell me about|what is|how does).*?(work|mean|help)$/i
+    ];
+    
+    const isJustConversation = conversationalOnly.some(pattern => 
+      pattern.test(messageClues.trim())
+    );
+    
+    if (isJustConversation) {
+      console.log('💬 Pure conversation - no search needed');
+      return false;
     }
     
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [{
-          role: 'system',
-          content: 'You are a query classifier. Determine if this query needs to search databases (Airtable/HubSpot/Fireflies/Emails). Return ONLY "true" or "false".'
-        }, {
-          role: 'user',
-          content: `Query: "${userMessage}"\nContext: "${contextClues.slice(-500)}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, emails, or any business data? Also return true if there's a production/film/show mentioned in the context that might need brand partnerships.`
-        }],
-        temperature: 0,
-        max_tokens: 10
-      }),
-    });
-    
-    const data = await response.json();
-    const result = data.choices[0].message.content.toLowerCase().trim();
-    console.log(`🤖 AI classified query "${userMessage.slice(0,50)}..." as needing search: ${result}`);
-    return result === 'true';
+    // When in doubt, search!
+    console.log('🤔 Uncertain query - defaulting to search');
+    return true;
     
   } catch (error) {
     console.error('Error classifying query:', error);
-    // Fallback to keyword detection - UPDATED to include more patterns
-    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership|insights|context)/) ||
-           conversationContext?.toLowerCase().match(/(synopsis:|distributor:|cast:|starting fee:|production|film|show)/);
+    // Default to searching on error
+    return true;
   }
 }
 
@@ -2213,8 +2345,42 @@ export default async function handler(req, res) {
             
             // Add Claude's organized data if available
             if (claudeOrganizedData) {
+              // Handle slash commands
+              if (claudeOrganizedData.slashCommand) {
+                systemMessageContent += `\n\n**/${claudeOrganizedData.commandType.toUpperCase()} RESULTS FOR: ${claudeOrganizedData.brandName}**\n`;
+                
+                if (claudeOrganizedData.commandType === 'meetings' && claudeOrganizedData.meetings?.length > 0) {
+                  claudeOrganizedData.meetings.forEach(meeting => {
+                    systemMessageContent += `\n✅ "${meeting.title}" on ${meeting.dateString}\n`;
+                    systemMessageContent += `Link: ${meeting.transcript_url}\n`;
+                    if (meeting.summary?.overview) {
+                      systemMessageContent += `Summary: ${meeting.summary.overview.slice(0, 150)}...\n`;
+                    }
+                  });
+                } else if (claudeOrganizedData.commandType === 'emails' && claudeOrganizedData.emails?.length > 0) {
+                  claudeOrganizedData.emails.forEach(email => {
+                    systemMessageContent += `\n✉️ "${email.subject}" from ${email.fromName || email.from}\n`;
+                    systemMessageContent += `Date: ${new Date(email.receivedDate).toLocaleDateString()}\n`;
+                    if (email.preview) {
+                      systemMessageContent += `Preview: ${email.preview}...\n`;
+                    }
+                  });
+                } else if (claudeOrganizedData.commandType === 'contacts' && claudeOrganizedData.contacts?.length > 0) {
+                  systemMessageContent += `\nContacts at ${claudeOrganizedData.brand.properties.name}:\n`;
+                  claudeOrganizedData.contacts.forEach(contact => {
+                    systemMessageContent += `- ${contact.properties.firstname || ''} ${contact.properties.lastname || ''} - ${contact.properties.email || 'No email'}\n`;
+                  });
+                } else {
+                  systemMessageContent += `\nNo ${claudeOrganizedData.commandType} found for "${claudeOrganizedData.brandName}".\n`;
+                }
+                
+                systemMessageContent += `\n**TIP:** You can use slash commands for quick lookups:\n`;
+                systemMessageContent += `- /meetings [brand name]\n`;
+                systemMessageContent += `- /emails [brand name]\n`;
+                systemMessageContent += `- /contacts [brand name]\n`;
+              }
               // Handle specific brand lookup with context
-              if (claudeOrganizedData.specificBrandWithContext) {
+              else if (claudeOrganizedData.specificBrandWithContext) {
                 systemMessageContent += `\n\n**${claudeOrganizedData.brandName} - RECENT ACTIVITY:**\n`;
                 
                 const brand = claudeOrganizedData.brand.properties;
@@ -2298,6 +2464,71 @@ export default async function handler(req, res) {
                   systemMessageContent += "No contacts found in HubSpot for this brand.\n";
                 }
                 systemMessageContent += "\nProvide this contact information clearly to the user.\n";
+              }
+              // Handle intelligent context analysis
+              else if (claudeOrganizedData.contextAnalysis) {
+                if (claudeOrganizedData.queryType === 'valuable_meetings') {
+                  systemMessageContent += `\n\n**MOST VALUABLE MEETINGS ${claudeOrganizedData.timeFrame.toUpperCase()}:**\n`;
+                  
+                  const highValueMeetings = claudeOrganizedData.valuableMeetings.filter(m => m.valueScore > 50);
+                  
+                  if (highValueMeetings.length > 0) {
+                    highValueMeetings.forEach((meeting, index) => {
+                      systemMessageContent += `\n${index + 1}. "${meeting.title}" on ${meeting.dateString}\n`;
+                      systemMessageContent += `   Link: ${meeting.transcript_url}\n`;
+                      systemMessageContent += `   Value Score: ${meeting.valueScore}/100\n`;
+                      
+                      // Explain why it's valuable
+                      const reasons = [];
+                      if (meeting.valueIndicators.hasActionItems) {
+                        reasons.push(`${meeting.summary.action_items.length} action items`);
+                      }
+                      if (meeting.valueIndicators.hasBudgetDiscussion) {
+                        reasons.push('budget discussed');
+                      }
+                      if (meeting.valueIndicators.hasDecisionMaker) {
+                        reasons.push('senior stakeholders present');
+                      }
+                      
+                      systemMessageContent += `   Why valuable: ${reasons.join(', ')}\n`;
+                      
+                      if (meeting.summary?.overview) {
+                        systemMessageContent += `   Key discussion: ${meeting.summary.overview.slice(0, 100)}...\n`;
+                      }
+                    });
+                    
+                    systemMessageContent += `\n💡 KEY INSIGHTS:\n`;
+                    systemMessageContent += `- ${highValueMeetings.length} high-value meetings identified\n`;
+                    systemMessageContent += `- Meetings with action items and budget discussions rank highest\n`;
+                    systemMessageContent += `- Senior stakeholder involvement increases meeting value\n`;
+                  } else {
+                    systemMessageContent += `\nNo high-value meetings found in the specified timeframe.\n`;
+                  }
+                } else {
+                  // Handle general activity queries
+                  systemMessageContent += `\n\n**RECENT ACTIVITY ${claudeOrganizedData.timeFrame.toUpperCase()}:**\n`;
+                  
+                  if (claudeOrganizedData.valuableMeetings?.length > 0) {
+                    systemMessageContent += `\n**MEETINGS:**\n`;
+                    claudeOrganizedData.valuableMeetings.slice(0, 5).forEach(meeting => {
+                      systemMessageContent += `- "${meeting.title}" on ${meeting.dateString}\n`;
+                      systemMessageContent += `  Link: ${meeting.transcript_url}\n`;
+                    });
+                  }
+                  
+                  if (claudeOrganizedData.emails?.length > 0) {
+                    systemMessageContent += `\n**EMAILS:**\n`;
+                    claudeOrganizedData.emails.slice(0, 5).forEach(email => {
+                      systemMessageContent += `- "${email.subject}" from ${email.fromName || email.from}\n`;
+                    });
+                  }
+                }
+                
+                systemMessageContent += `\n**INSTRUCTIONS:**\n`;
+                systemMessageContent += `- Always provide specific meeting titles and dates\n`;
+                systemMessageContent += `- Include clickable Fireflies links\n`;
+                systemMessageContent += `- Explain WHY meetings are valuable (action items, budget, stakeholders)\n`;
+                systemMessageContent += `- Rank meetings by value score when asked about "valuable" meetings\n`;
               }
               // Handle context-only queries
               else if (claudeOrganizedData.contextOnly) {
