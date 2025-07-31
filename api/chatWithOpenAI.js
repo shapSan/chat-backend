@@ -1,4 +1,28 @@
-import dotenv from 'dotenv';
+if (command === 'meetings' || command === 'meeting' || command === 'calls' || command === 'call') {
+        // First try exact search
+        const firefliesData = await searchFireflies(brandName, { limit: 20 });
+        
+        // If user is asking about title specifically, filter by title
+        const inTitleRequest = userMessage.toLowerCase().includes('in the title') || 
+                             userMessage.toLowerCase().includes('in title');
+        
+        let relevantMeetings = firefliesData.transcripts || [];
+        
+        if (inTitleRequest && relevantMeetings.length > 0) {
+          // Filter to only meetings with brand in title
+          const normalizedSearch = brandName.toLowerCase().replace(/[''\']/g, '').replace(/\s+/g, ' ');
+          relevantMeetings = relevantMeetings.filter(m => {
+            const normalizedTitle = (m.title || '').toLowerCase().replace(/[''\']/g, '').replace(/\s+/g, ' ');
+            return normalizedTitle.includes(normalizedSearch);
+          });
+          mcpThinking.push(`🔍 Filtered to ${relevantMeetings.length} meetings with "${brandName}" in title`);
+        }
+        
+        mcpThinking.push(`✅ Found ${relevantMeetings.length} meetings`);
+        
+        return {
+          organizedData: {
+            slimport dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
 import RunwayML from '@runwayml/sdk';
@@ -693,18 +717,10 @@ async function searchFireflies(query, options = {}) {
       return { transcripts: [] };
     }
     
-    // Normalize the search query for better matching
-    let searchQuery = query;
-    if (query) {
-      // Remove apostrophes and normalize spaces for better matching
-      searchQuery = query.replace(/[''\']/g, '').replace(/\s+/g, ' ').trim();
-      console.log(`🔍 Normalized search query: "${searchQuery}" (from: "${query}")`);
-    }
-    
     // Parse query for special searches
-    const queryLower = searchQuery.toLowerCase();
+    const queryLower = query.toLowerCase();
     const filters = {
-      keyword: searchQuery, // Use normalized query
+      keyword: query,
       limit: options.limit || 10
     };
     
@@ -718,36 +734,17 @@ async function searchFireflies(query, options = {}) {
       filters.fromDate = thirtyDaysAgo.toISOString().split('T')[0];
     }
     
+    // Auto-detect time-based queries
+    if (queryLower.includes('last 3 months') || queryLower.includes('past 3 months')) {
+      const threeMonthsAgo = new Date();
+      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+      filters.fromDate = threeMonthsAgo.toISOString().split('T')[0];
+    }
+    
     // Search for transcripts
     const transcripts = await firefliesAPI.searchTranscripts(filters);
     
     console.log(`✅ Fireflies search complete: ${transcripts.length} transcripts`);
-    
-    // If we have a query, also do a secondary filter for fuzzy matching
-    if (searchQuery && transcripts.length === 0) {
-      console.log('🔍 No exact matches, trying broader search...');
-      // Try searching without the query to get recent meetings
-      const broaderFilters = {
-        keyword: '', // Empty to get all recent
-        limit: 20,
-        fromDate: filters.fromDate
-      };
-      
-      const allTranscripts = await firefliesAPI.searchTranscripts(broaderFilters);
-      
-      // Now filter locally for fuzzy matches
-      const searchWords = searchQuery.toLowerCase().split(' ').filter(w => w.length > 2);
-      const fuzzyMatches = allTranscripts.filter(t => {
-        const searchText = `${t.title} ${t.summary?.overview || ''} ${t.participants?.join(' ') || ''}`.toLowerCase();
-        // Check if all significant words are found
-        return searchWords.every(word => searchText.includes(word));
-      });
-      
-      if (fuzzyMatches.length > 0) {
-        console.log(`✅ Found ${fuzzyMatches.length} fuzzy matches`);
-        return { transcripts: fuzzyMatches };
-      }
-    }
     
     return {
       transcripts: transcripts
