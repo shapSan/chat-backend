@@ -1334,7 +1334,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       // Search for the brand AND its recent context
       const [brand, firefliesData, o365Data] = await Promise.all([
         hubspotAPI.searchSpecificBrand(brandName),
-        firefliesApiKey ? searchFireflies(brandName, { limit: 5 }) : { transcripts: [] },
+        firefliesApiKey ? searchFireflies(brandName, { limit: 10 }) : { transcripts: [] },
         msftClientId ? o365API.searchEmails(brandName, { days: 30 }) : []
       ]);
       
@@ -1342,23 +1342,33 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
         mcpThinking.push('✅ Found brand in HubSpot');
         const contacts = await hubspotAPI.getContactsForCompany(brand.id);
         
-        // Find specific mentions in meetings
+        // Find ALL mentions in meetings (not just first one)
+        const normalizedBrandName = brandName.toLowerCase().replace(/[''\'s]/g, '').replace(/\s+/g, ' ');
+        const brandWords = normalizedBrandName.split(' ').filter(w => w.length > 2);
+        
         const brandMeetings = firefliesData.transcripts?.filter(t => {
-          const searchText = `${t.title} ${t.summary?.overview || ''} ${t.summary?.topics_discussed || ''}`.toLowerCase();
-          return searchText.includes(brandName.toLowerCase());
+          const searchText = `${t.title || ''} ${t.summary?.overview || ''} ${t.summary?.topics_discussed || ''}`.toLowerCase();
+          const normalizedSearchText = searchText.replace(/[''\'s]/g, '').replace(/\s+/g, ' ');
+          
+          // Check exact match or fuzzy match
+          return normalizedSearchText.includes(normalizedBrandName) || 
+                 (brandWords.length > 0 && brandWords.every(word => normalizedSearchText.includes(word)));
         }) || [];
         
-        // Find specific mentions in emails
+        // Find ALL mentions in emails
         const brandEmails = o365Data?.filter(e => {
-          const searchText = `${e.subject} ${e.preview || ''}`.toLowerCase();
-          return searchText.includes(brandName.toLowerCase());
+          const searchText = `${e.subject || ''} ${e.preview || ''}`.toLowerCase();
+          const normalizedSearchText = searchText.replace(/[''\'s]/g, '').replace(/\s+/g, ' ');
+          
+          return normalizedSearchText.includes(normalizedBrandName) || 
+                 (brandWords.length > 0 && brandWords.every(word => normalizedSearchText.includes(word)));
         }) || [];
         
         if (brandMeetings.length > 0) {
-          mcpThinking.push(`✅ Found ${brandMeetings.length} recent meetings`);
+          mcpThinking.push(`✅ Found ${brandMeetings.length} meetings with ${brandName}`);
         }
         if (brandEmails.length > 0) {
-          mcpThinking.push(`✅ Found ${brandEmails.length} recent emails`);
+          mcpThinking.push(`✅ Found ${brandEmails.length} emails about ${brandName}`);
         }
         
         return {
