@@ -693,24 +693,61 @@ async function searchFireflies(query, options = {}) {
       return { transcripts: [] };
     }
     
+    // Normalize the search query for better matching
+    let searchQuery = query;
+    if (query) {
+      // Remove apostrophes and normalize spaces for better matching
+      searchQuery = query.replace(/[''\']/g, '').replace(/\s+/g, ' ').trim();
+      console.log(`🔍 Normalized search query: "${searchQuery}" (from: "${query}")`);
+    }
+    
     // Parse query for special searches
-    const queryLower = query.toLowerCase();
+    const queryLower = searchQuery.toLowerCase();
     const filters = {
-      keyword: query,
+      keyword: searchQuery, // Use normalized query
       limit: options.limit || 10
     };
     
-    // Auto-detect time-based queries
-    if (queryLower.includes('last 3 months') || queryLower.includes('past 3 months')) {
-      const threeMonthsAgo = new Date();
-      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-      filters.fromDate = threeMonthsAgo.toISOString().split('T')[0];
+    // Add date filtering if provided
+    if (options.fromDate) {
+      filters.fromDate = options.fromDate;
+    } else {
+      // Default to last 30 days if not specified
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      filters.fromDate = thirtyDaysAgo.toISOString().split('T')[0];
     }
     
     // Search for transcripts
     const transcripts = await firefliesAPI.searchTranscripts(filters);
     
     console.log(`✅ Fireflies search complete: ${transcripts.length} transcripts`);
+    
+    // If we have a query, also do a secondary filter for fuzzy matching
+    if (searchQuery && transcripts.length === 0) {
+      console.log('🔍 No exact matches, trying broader search...');
+      // Try searching without the query to get recent meetings
+      const broaderFilters = {
+        keyword: '', // Empty to get all recent
+        limit: 20,
+        fromDate: filters.fromDate
+      };
+      
+      const allTranscripts = await firefliesAPI.searchTranscripts(broaderFilters);
+      
+      // Now filter locally for fuzzy matches
+      const searchWords = searchQuery.toLowerCase().split(' ').filter(w => w.length > 2);
+      const fuzzyMatches = allTranscripts.filter(t => {
+        const searchText = `${t.title} ${t.summary?.overview || ''} ${t.participants?.join(' ') || ''}`.toLowerCase();
+        // Check if all significant words are found
+        return searchWords.every(word => searchText.includes(word));
+      });
+      
+      if (fuzzyMatches.length > 0) {
+        console.log(`✅ Found ${fuzzyMatches.length} fuzzy matches`);
+        return { transcripts: fuzzyMatches };
+      }
+    }
     
     return {
       transcripts: transcripts
@@ -2349,14 +2386,25 @@ export default async function handler(req, res) {
               if (claudeOrganizedData.slashCommand) {
                 systemMessageContent += `\n\n**/${claudeOrganizedData.commandType.toUpperCase()} RESULTS FOR: ${claudeOrganizedData.brandName}**\n`;
                 
-                if (claudeOrganizedData.commandType === 'meetings' && claudeOrganizedData.meetings?.length > 0) {
-                  claudeOrganizedData.meetings.forEach(meeting => {
-                    systemMessageContent += `\n✅ "${meeting.title}" on ${meeting.dateString}\n`;
-                    systemMessageContent += `Link: ${meeting.transcript_url}\n`;
-                    if (meeting.summary?.overview) {
-                      systemMessageContent += `Summary: ${meeting.summary.overview.slice(0, 150)}...\n`;
-                    }
-                  });
+                if (claudeOrganizedData.commandType === 'meetings') {
+                  if (claudeOrganizedData.meetings?.length > 0) {
+                    claudeOrganizedData.meetings.forEach(meeting => {
+                      systemMessageContent += `\n✅ "${meeting.title}" on ${meeting.dateString}\n`;
+                      systemMessageContent += `Link: ${meeting.transcript_url}\n`;
+                      if (meeting.summary?.overview) {
+                        systemMessageContent += `Summary: ${meeting.summary.overview.slice(0, 150)}...\n`;
+                      }
+                      if (meeting.participants?.length > 0) {
+                        systemMessageContent += `Participants: ${meeting.participants.slice(0, 3).join(', ')}\n`;
+                      }
+                    });
+                  } else {
+                    systemMessageContent += `\nNo meetings found with "${claudeOrganizedData.brandName}" in the last 30 days.\n`;
+                    systemMessageContent += `\nNote: I searched for both "${claudeOrganizedData.brandName}" and variations like "${claudeOrganizedData.brandName.replace(/s /g, "'s ")}".\n`;
+                    systemMessageContent += `\nIf the brand name has special characters or different spelling, try:\n`;
+                    systemMessageContent += `- /meetings "King's Hawaiian" (with apostrophe)\n`;
+                    systemMessageContent += `- /meetings "Kings Hawaiian" (without apostrophe)\n`;
+                  }
                 } else if (claudeOrganizedData.commandType === 'emails' && claudeOrganizedData.emails?.length > 0) {
                   claudeOrganizedData.emails.forEach(email => {
                     systemMessageContent += `\n✉️ "${email.subject}" from ${email.fromName || email.from}\n`;
