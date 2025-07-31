@@ -1334,7 +1334,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       // Search for the brand AND its recent context
       const [brand, firefliesData, o365Data] = await Promise.all([
         hubspotAPI.searchSpecificBrand(brandName),
-        firefliesApiKey ? searchFireflies(brandName, { limit: 10 }) : { transcripts: [] },
+        firefliesApiKey ? searchFireflies(brandName, { limit: 5 }) : { transcripts: [] },
         msftClientId ? o365API.searchEmails(brandName, { days: 30 }) : []
       ]);
       
@@ -1342,33 +1342,23 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
         mcpThinking.push('✅ Found brand in HubSpot');
         const contacts = await hubspotAPI.getContactsForCompany(brand.id);
         
-        // Find ALL mentions in meetings (not just first one)
-        const normalizedBrandName = brandName.toLowerCase().replace(/[''\'s]/g, '').replace(/\s+/g, ' ');
-        const brandWords = normalizedBrandName.split(' ').filter(w => w.length > 2);
-        
+        // Find specific mentions in meetings
         const brandMeetings = firefliesData.transcripts?.filter(t => {
-          const searchText = `${t.title || ''} ${t.summary?.overview || ''} ${t.summary?.topics_discussed || ''}`.toLowerCase();
-          const normalizedSearchText = searchText.replace(/[''\'s]/g, '').replace(/\s+/g, ' ');
-          
-          // Check exact match or fuzzy match
-          return normalizedSearchText.includes(normalizedBrandName) || 
-                 (brandWords.length > 0 && brandWords.every(word => normalizedSearchText.includes(word)));
+          const searchText = `${t.title} ${t.summary?.overview || ''} ${t.summary?.topics_discussed || ''}`.toLowerCase();
+          return searchText.includes(brandName.toLowerCase());
         }) || [];
         
-        // Find ALL mentions in emails
+        // Find specific mentions in emails
         const brandEmails = o365Data?.filter(e => {
-          const searchText = `${e.subject || ''} ${e.preview || ''}`.toLowerCase();
-          const normalizedSearchText = searchText.replace(/[''\'s]/g, '').replace(/\s+/g, ' ');
-          
-          return normalizedSearchText.includes(normalizedBrandName) || 
-                 (brandWords.length > 0 && brandWords.every(word => normalizedSearchText.includes(word)));
+          const searchText = `${e.subject} ${e.preview || ''}`.toLowerCase();
+          return searchText.includes(brandName.toLowerCase());
         }) || [];
         
         if (brandMeetings.length > 0) {
-          mcpThinking.push(`✅ Found ${brandMeetings.length} meetings with ${brandName}`);
+          mcpThinking.push(`✅ Found ${brandMeetings.length} recent meetings`);
         }
         if (brandEmails.length > 0) {
-          mcpThinking.push(`✅ Found ${brandEmails.length} emails about ${brandName}`);
+          mcpThinking.push(`✅ Found ${brandEmails.length} recent emails`);
         }
         
         return {
@@ -2844,86 +2834,6 @@ export default async function handler(req, res) {
             // Add brand suggestions for dropdown if available
             if (claudeOrganizedData && claudeOrganizedData.brandSuggestions) {
               response.brandSuggestions = claudeOrganizedData.brandSuggestions;
-            }
-            
-            // Add items array for frontend parsing if we have meetings/emails
-            if (claudeOrganizedData) {
-              const items = [];
-              
-              // Add meetings to items
-              if (claudeOrganizedData.recentMeetings?.length > 0) {
-                claudeOrganizedData.recentMeetings.forEach(meeting => {
-                  items.push({
-                    type: 'meeting',
-                    title: meeting.title,
-                    date: meeting.dateString || meeting.date,
-                    link: meeting.transcript_url,
-                    description: meeting.summary?.overview?.slice(0, 150) || 'Meeting discussion'
-                  });
-                });
-              }
-              
-              // Add emails to items
-              if (claudeOrganizedData.recentEmails?.length > 0) {
-                claudeOrganizedData.recentEmails.forEach(email => {
-                  items.push({
-                    type: 'email',
-                    subject: email.subject,
-                    date: new Date(email.receivedDate).toISOString().split('T')[0],
-                    from: email.fromName || email.from,
-                    body: email.preview || ''
-                  });
-                });
-              }
-              
-              // Add meetings from specific brand context
-              if (claudeOrganizedData.meetings?.length > 0) {
-                claudeOrganizedData.meetings.forEach(meeting => {
-                  items.push({
-                    type: 'meeting',
-                    title: meeting.title,
-                    date: meeting.dateString || meeting.date,
-                    link: meeting.transcript_url,
-                    description: meeting.summary?.overview?.slice(0, 150) || 'Meeting discussion'
-                  });
-                });
-              }
-              
-              // Add emails from specific brand context
-              if (claudeOrganizedData.emails?.length > 0) {
-                claudeOrganizedData.emails.forEach(email => {
-                  items.push({
-                    type: 'email',
-                    subject: email.subject,
-                    date: new Date(email.receivedDate).toISOString().split('T')[0],
-                    from: email.fromName || email.from,
-                    body: email.preview || ''
-                  });
-                });
-              }
-              
-              // Add valuable meetings
-              if (claudeOrganizedData.valuableMeetings?.length > 0) {
-                claudeOrganizedData.valuableMeetings.forEach(meeting => {
-                  if (!items.find(item => item.type === 'meeting' && item.title === meeting.title)) {
-                    items.push({
-                      type: 'meeting',
-                      title: meeting.title,
-                      date: meeting.dateString || meeting.date,
-                      link: meeting.transcript_url,
-                      description: meeting.summary?.overview?.slice(0, 150) || 'Meeting discussion',
-                      valueScore: meeting.valueScore // Optional extra data
-                    });
-                  }
-                });
-              }
-              
-              // Sort by date (most recent first)
-              items.sort((a, b) => new Date(b.date) - new Date(a.date));
-              
-              if (items.length > 0) {
-                response.items = items;
-              }
             }
             
             return res.json(response);
