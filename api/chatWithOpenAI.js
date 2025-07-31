@@ -2207,6 +2207,13 @@ export default async function handler(req, res) {
       // Intelligent search query detection
       const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
       
+      // Initialize MCP raw output for frontend
+      const mcpRawOutput = [];
+      
+      if (shouldSearchDatabases) {
+        mcpRawOutput.push('🎬 Production context detected - search needed');
+      }
+      
       console.log('🔍 Search detection:', { 
         shouldSearchDatabases, 
         userMessage: userMessage?.slice(0, 50),
@@ -2214,6 +2221,10 @@ export default async function handler(req, res) {
         hasHubSpot: !!hubspotApiKey,
         hasFireflies: !!firefliesApiKey
       });
+      
+      if (shouldSearchDatabases) {
+        mcpRawOutput.push(`🔍 Brand matching detection: ${shouldSearchDatabases ? 'YES' : 'NO'}`);
+      }
       
       console.log('🔍 Brand matching detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
 
@@ -2316,11 +2327,14 @@ export default async function handler(req, res) {
             if (claudeResult) {
               claudeOrganizedData = claudeResult.organizedData;
               mcpThinking = claudeResult.mcpThinking;
+              mcpRawOutput = [...mcpRawOutput, ...(claudeResult.mcpRawOutput || [])];
               usedMCP = true;
               console.log('✅ Claude MCP successfully gathered and organized data');
+              mcpRawOutput.push('✅ Claude MCP successfully gathered and organized data');
               console.log('🧠 MCP Thinking:', mcpThinking);
             } else {
               console.log('⚠️ Claude MCP failed or returned null, using standard OpenAI');
+              mcpRawOutput.push('⚠️ Claude MCP failed - using standard OpenAI');
             }
           } else {
             if (!shouldSearchDatabases) {
@@ -2334,6 +2348,7 @@ export default async function handler(req, res) {
           // Use OpenAI to generate the final response
           if (!aiReply) {
             console.log('📝 Using OpenAI for response generation');
+            mcpRawOutput.push('📝 Using OpenAI for response generation');
             
             // Build enhanced system message with Claude's organized data
             let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
@@ -2828,6 +2843,7 @@ export default async function handler(req, res) {
             const response = { 
               reply: aiReply,
               mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
+              mcpRawOutput: mcpRawOutput.length > 0 ? mcpRawOutput : null,
               usedMCP: usedMCP
             };
             
