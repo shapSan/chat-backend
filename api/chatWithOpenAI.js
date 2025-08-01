@@ -64,7 +64,1311 @@ const hubspotAPI = {
       console.log('🔍 HubSpot searchBrands called with filters:', filters);
       
       // Search for companies that are actual brands
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
+      const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt: promptText,
+        config: {
+          personGeneration: "allow_all",
+          aspectRatio: aspectRatio,
+          duration: `${duration}s`
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Veo3 API error:', response.status, errorText);
+      
+      if (response.status === 401) {
+        throw new Error('Invalid API key. Check GOOGLE_GEMINI_API_KEY in environment variables.');
+      }
+      if (response.status === 404) {
+        throw new Error('Veo3 API endpoint not found. The API may not be available in your region or your API key may not have access.');
+      }
+      if (response.status === 429) {
+        throw new Error('Rate limit exceeded. Try again later.');
+      }
+      
+      throw new Error(`Veo3 API error: ${response.status} - ${errorText}`);
+    }
+
+    const operation = await response.json();
+    console.log('✅ Video task created:', operation);
+
+    // If the API returns the operation name, we need to poll for completion
+    if (operation.name) {
+      console.log('⏳ Waiting for video generation...');
+      let attempts = 0;
+      const maxAttempts = 60; // 10 minutes max wait time
+      
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+        
+        // Poll the operation status
+        const statusUrl = `https://generativelanguage.googleapis.com/v1beta/${operation.name}?key=${googleGeminiApiKey}`;
+        const statusResponse = await fetch(statusUrl);
+        
+        if (!statusResponse.ok) {
+          console.error('Failed to check operation status:', statusResponse.status);
+          throw new Error('Failed to check video generation status');
+        }
+        
+        const statusData = await statusResponse.json();
+        console.log(`🔄 Status check ${attempts + 1}/${maxAttempts}:`, statusData.done ? 'COMPLETED' : 'PROCESSING');
+        
+        if (statusData.done) {
+          if (statusData.error) {
+            throw new Error(`Video generation failed: ${statusData.error.message}`);
+          }
+          
+          // Get the video URL from the response
+          const videoUrl = statusData.response?.video?.uri || statusData.response?.videoUrl;
+          if (!videoUrl) {
+            console.error('No video URL in response:', statusData);
+            throw new Error('No video URL in response');
+          }
+          
+          return {
+            url: videoUrl,
+            taskId: operation.name,
+            metadata: statusData.response
+          };
+        }
+        
+        attempts++;
+      }
+      
+      throw new Error('Video generation timed out');
+    } else {
+      // If the API returns the video directly (unlikely for video generation)
+      const videoUrl = operation.video?.uri || operation.videoUrl;
+      if (!videoUrl) {
+        console.error('No video URL in response:', operation);
+        throw new Error('No video URL in response');
+      }
+      
+      return {
+        url: videoUrl,
+        taskId: 'direct-response',
+        metadata: operation
+      };
+    }
+
+  } catch (error) {
+    console.error('Veo3 Error Details:', {
+      message: error.message,
+      status: error.status,
+      error: error.error,
+      stack: error.stack
+    });
+    
+    // For now, return a friendly error message
+    throw new Error(`Veo3 is currently in preview and may not be available. ${error.message}`);
+  }
+}
+
+// Intelligent query classification using AI
+async function shouldUseSearch(userMessage, conversationContext) {
+  if (!openAIApiKey) return false;
+  
+  try {
+    // Check if the conversation context contains production details
+    const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
+    const messageClues = userMessage.toLowerCase();
+    
+    // Quick check for production-related patterns
+    if (contextClues.includes('synopsis:') || 
+        contextClues.includes('distributor:') || 
+        contextClues.includes('cast:') ||
+        contextClues.includes('starting fee:') ||
+        messageClues.includes('brand') ||
+        messageClues.includes('integration') ||
+        messageClues.includes('partnership')) {
+      console.log('🎬 Production context detected - search needed');
+      return true;
+    }
+    
+    // Check if message contains production info (title + synopsis pattern)
+    if (messageClues.includes('synopsis:') || 
+        (userMessage.includes('\n') && messageClues.includes('follows') && messageClues.includes('con'))) {
+      console.log('🎬 Production synopsis detected - search needed for brand matching');
+      return true;
+    }
+    
+    // Always search for context queries
+    if (messageClues.includes('email') || 
+        messageClues.includes('meeting') || 
+        messageClues.includes('discussed') ||
+        messageClues.includes('context') ||
+        messageClues.includes('insights') ||
+        messageClues.includes('low hanging fruit')) {
+      console.log('📧 Context query detected - search needed');
+      return true;
+    }
+    
+    // For very short messages that might just be a title, use AI
+    if (userMessage.length > 100 || userMessage.split('\n').length > 1) {
+      // Likely a production description
+      console.log('📝 Long message detected - likely production info');
+      return true;
+    }
+    
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [{
+          role: 'system',
+          content: 'You are a query classifier. Determine if this query needs to search databases (Airtable/HubSpot/Fireflies/Emails). Return ONLY "true" or "false".'
+        }, {
+          role: 'user',
+          content: `Query: "${userMessage}"\nContext: "${contextClues.slice(-500)}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, emails, or any business data? Also return true if there's a production/film/show mentioned in the context that might need brand partnerships. Return true if this appears to be a production title with synopsis.`
+        }],
+        temperature: 0,
+        max_tokens: 10
+      }),
+    });
+    
+    const data = await response.json();
+    const result = data.choices[0].message.content.toLowerCase().trim();
+    console.log(`🤖 AI classified query "${userMessage.slice(0,50)}..." as needing search: ${result}`);
+    return result === 'true';
+    
+  } catch (error) {
+    console.error('Error classifying query:', error);
+    // Fallback to keyword detection - UPDATED to include more patterns
+    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership|insights|context|synopsis:|title:|film|show|series)/) ||
+           conversationContext?.toLowerCase().match(/(synopsis:|distributor:|cast:|starting fee:|production|film|show)/);
+  }
+}
+
+export default async function handler(req, res) {
+  // Set CORS headers early
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  
+  // Check if client wants streaming
+  const wantsStream = req.headers.accept === 'text/event-stream' || req.body.stream === true;
+  
+  if (req.method === 'POST') {
+    try {
+      // Check if this is an audio generation request
+      if (req.body.generateAudio === true) {
+        console.log('Processing audio generation request');
+        
+        const { prompt, projectId, sessionId } = req.body;
+        if (!prompt) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'prompt is required'
+          });
+        }
+        if (!elevenLabsApiKey) {
+          console.error('ElevenLabs API key not configured');
+          return res.status(500).json({ 
+            error: 'Audio generation service not configured',
+            details: 'Please configure ELEVENLABS_API_KEY'
+          });
+        }
+        const projectConfig = getProjectConfig(projectId);
+        const { voiceId, voiceSettings } = projectConfig;
+        console.log('Generating audio for project:', projectId, 'using voice:', voiceId);
+        try {
+            const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+            
+            const elevenLabsResponse = await fetch(elevenLabsUrl, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'audio/mpeg',
+                    'Content-Type': 'application/json',
+                    'xi-api-key': elevenLabsApiKey
+                },
+                body: JSON.stringify({
+                    text: prompt,
+                    model_id: 'eleven_monolingual_v1',
+                    voice_settings: voiceSettings
+                })
+            });
+            if (!elevenLabsResponse.ok) {
+                const errorText = await elevenLabsResponse.text();
+                console.error('ElevenLabs API error:', elevenLabsResponse.status, errorText);
+                return res.status(elevenLabsResponse.status).json({ 
+                    error: 'Failed to generate audio',
+                    details: errorText
+                });
+            }
+            const audioBuffer = await elevenLabsResponse.buffer();
+            const base64Audio = audioBuffer.toString('base64');
+            const audioDataUrl = `data:audio/mpeg;base64,${base64Audio}`;
+            return res.status(200).json({
+                success: true,
+                audioUrl: audioDataUrl,
+                voiceUsed: voiceId
+            });
+            
+        } catch (error) {
+            console.error('Error in audio generation:', error);
+            return res.status(500).json({ 
+                error: 'Failed to generate audio',
+                details: error.message 
+            });
+        }
+      }
+
+      // Check if this is a video generation request
+      if (req.body.generateVideo === true) {
+        console.log('Processing video generation request');
+        
+        const { promptText, promptImage, projectId, model, ratio, duration, videoModel } = req.body;
+
+        if (!promptText) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'promptText is required'
+          });
+        }
+
+        try {
+          let result;
+          
+          if (videoModel === 'veo3') {
+            // Use Veo3 for video generation
+            if (!googleGeminiApiKey) {
+              console.error('Google Gemini API key not configured');
+              return res.status(500).json({ 
+                error: 'Veo3 video generation service not configured',
+                details: 'Please configure GOOGLE_GEMINI_API_KEY in environment variables'
+              });
+            }
+            
+            // Convert ratio format from Runway to Veo3 format
+            let veo3AspectRatio = '16:9'; // default
+            if (ratio === '1104:832') veo3AspectRatio = '4:3';
+            else if (ratio === '832:1104') veo3AspectRatio = '9:16';
+            else if (ratio === '1920:1080') veo3AspectRatio = '16:9';
+            
+            result = await generateVeo3Video({
+              promptText,
+              aspectRatio: veo3AspectRatio,
+              duration
+            });
+            
+          } else {
+            // Use Runway for video generation (default)
+            if (!runwayApiKey) {
+              console.error('Runway API key not configured');
+              return res.status(500).json({ 
+                error: 'Runway video generation service not configured',
+                details: 'Please configure RUNWAY_API_KEY in environment variables'
+              });
+            }
+            
+            // For Runway, validate promptImage
+            if (promptImage && !promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
+              return res.status(400).json({
+                error: 'Invalid image format',
+                details: 'promptImage must be a valid URL or base64 data URL'
+              });
+            }
+            
+            let imageToUse = promptImage;
+            if (!promptImage || promptImage.includes('dummyimage.com')) {
+              console.log('⚠️ Using default image for Runway');
+              imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
+            }
+            
+            result = await generateRunwayVideo({
+              promptText,
+              promptImage: imageToUse,
+              model: model || 'gen4_turbo',
+              ratio: ratio || '1104:832',
+              duration: duration || 5
+            });
+          }
+
+          console.log(`✅ Video generated successfully with ${videoModel || 'runway'}:`, result.taskId);
+
+          return res.status(200).json({
+            success: true,
+            videoUrl: result.url,
+            taskId: result.taskId,
+            model: videoModel || 'runway',
+            metadata: result.metadata
+          });
+
+        } catch (error) {
+          console.error('Error in video generation:', error);
+          return res.status(500).json({ 
+            error: 'Failed to generate video',
+            details: error.message 
+          });
+        }
+      }
+
+      // Check if this is an image generation request
+      if (req.body.generateImage === true) {
+        console.log('Processing image generation request');
+        
+        const { prompt, projectId, sessionId, imageModel, dimensions } = req.body;
+
+        if (!prompt) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'prompt is required'
+          });
+        }
+
+        if (!openAIApiKey) {
+          console.error('OpenAI API key not configured');
+          return res.status(500).json({ 
+            error: 'Image generation service not configured',
+            details: 'Please configure OPENAI_API_KEY'
+          });
+        }
+
+        try {
+          console.log('🎨 Generating image with prompt:', prompt.slice(0, 100) + '...');
+          
+          // Always use gpt-image-1
+          const model = 'gpt-image-1';
+          console.log('Using model:', model);
+          
+          // Build request body
+          const requestBody = {
+            model: model,
+            prompt: prompt,
+            n: 1
+          };
+          
+          // Set size based on dimensions parameter from frontend
+          if (dimensions) {
+            // Use the dimensions passed from frontend
+            requestBody.size = dimensions;
+            console.log('Using dimensions from frontend:', dimensions);
+          } else {
+            // Default to landscape if no dimensions specified
+            requestBody.size = '1536x1024';
+            console.log('Using default landscape dimensions');
+          }
+          
+          const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${openAIApiKey}`
+            },
+            body: JSON.stringify(requestBody)
+          });
+
+          if (!imageResponse.ok) {
+            const errorData = await imageResponse.text();
+            console.error('OpenAI Image API error:', imageResponse.status, errorData);
+            
+            if (imageResponse.status === 401) {
+              return res.status(401).json({ 
+                error: 'Invalid API key',
+                details: 'Check your OpenAI API key configuration'
+              });
+            }
+            
+            if (imageResponse.status === 429) {
+              return res.status(429).json({ 
+                error: 'Rate limit exceeded',
+                details: 'Too many requests. Please try again later.'
+              });
+            }
+            
+            if (imageResponse.status === 400) {
+              let errorDetails = errorData;
+              try {
+                const errorJson = JSON.parse(errorData);
+                errorDetails = errorJson.error?.message || errorData;
+              } catch (e) {
+                // If parsing fails, use raw error data
+              }
+              return res.status(400).json({ 
+                error: 'Invalid request',
+                details: errorDetails
+              });
+            }
+            
+            return res.status(imageResponse.status).json({ 
+              error: 'Failed to generate image',
+              details: errorData
+            });
+          }
+
+          const data = await imageResponse.json();
+          console.log('✅ Image generation response received');
+
+          // Check for different possible response structures
+          let imageUrl = null;
+          
+          // Standard structure: data.data[0].url or data.data[0].b64_json
+          if (data.data && data.data.length > 0) {
+            if (data.data[0].url) {
+              imageUrl = data.data[0].url;
+            } else if (data.data[0].b64_json) {
+              // Convert base64 to data URL
+              const base64Image = data.data[0].b64_json;
+              imageUrl = `data:image/png;base64,${base64Image}`;
+              console.log('Converted base64 to data URL');
+            }
+          }
+          // Alternative structure: data.url
+          else if (data.url) {
+            imageUrl = data.url;
+          }
+          
+          if (imageUrl) {
+            return res.status(200).json({
+              success: true,
+              imageUrl: imageUrl,
+              revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
+              model: model
+            });
+          } else {
+            console.error('Unexpected response structure:', data);
+            throw new Error('No image URL found in response');
+          }
+          
+        } catch (error) {
+          console.error('Error in image generation:', error);
+          return res.status(500).json({ 
+            error: 'Failed to generate image',
+            details: error.message 
+          });
+        }
+      }
+      // Handle regular chat messages
+      let { userMessage, sessionId, audioData, projectId } = req.body;
+
+      if (userMessage && userMessage.length > 5000) {
+        userMessage = userMessage.slice(0, 5000) + "…";
+      }
+
+      console.log('📨 Received chat request:', { 
+        userMessage: userMessage ? userMessage.slice(0, 100) + '...' : null, 
+        sessionId, 
+        projectId
+      });
+
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Missing sessionId' });
+      }
+      if (!userMessage && !audioData) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      // Get project configuration
+      const projectConfig = getProjectConfig(projectId);
+      const { baseId, chatTable, knowledgeTable } = projectConfig;
+
+      const knowledgeBaseUrl = `https://api.airtable.com/v0/${baseId}/${knowledgeTable}`;
+      const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
+      const headersAirtable = { 
+        'Content-Type': 'application/json', 
+        Authorization: `Bearer ${airtableApiKey}` 
+      };
+
+      let conversationContext = '';
+      let existingRecordId = null;
+
+      // Fetch knowledge base
+      let knowledgeBaseInstructions = '';
+      try {
+        console.log('📚 Fetching knowledge base from:', knowledgeBaseUrl);
+        const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
+        if (kbResponse.ok) {
+          const knowledgeBaseData = await kbResponse.json();
+          const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
+          knowledgeBaseInstructions = knowledgeEntries;
+          console.log('✅ Knowledge base loaded:', knowledgeBaseInstructions.slice(0, 200) + '...');
+        } else {
+          console.warn('⚠️ Knowledge base not found, using default');
+        }
+      } catch (error) {
+        console.error(`❌ Error fetching knowledge base:`, error);
+      }
+
+      // Fetch conversation history
+      try {
+        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
+        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
+        if (historyResponse.ok) {
+          const result = await historyResponse.json();
+          if (result.records.length > 0) {
+            conversationContext = result.records[0].fields.Conversation || '';
+            existingRecordId = result.records[0].id;
+
+            if (conversationContext.length > 3000) {
+              conversationContext = conversationContext.slice(-3000);
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching conversation history:`, error);
+      }
+
+      // Intelligent search query detection
+      const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
+      
+      // Initialize MCP raw output for frontend
+      let mcpRawOutput = [];
+      
+      if (shouldSearchDatabases) {
+        mcpRawOutput.push('🎬 Production context detected - search needed');
+      }
+      
+      console.log('🔍 Search detection:', { 
+        shouldSearchDatabases, 
+        userMessage: userMessage?.slice(0, 50),
+        hasO365: !!msftClientId,
+        hasHubSpot: !!hubspotApiKey,
+        hasFireflies: !!firefliesApiKey
+      });
+      
+      if (shouldSearchDatabases) {
+        mcpRawOutput.push(`🔍 Brand matching detection: ${shouldSearchDatabases ? 'YES' : 'NO'}`);
+      }
+      
+      console.log('🔍 Brand matching detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
+
+      // Process audio or text
+      if (audioData) {
+        try {
+          const audioBuffer = Buffer.from(audioData, 'base64');
+          const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
+
+          const openaiWs = new WebSocket(openaiWsUrl, {
+            headers: {
+              Authorization: `Bearer ${openAIApiKey}`,
+              'OpenAI-Beta': 'realtime=v1',
+            },
+          });
+
+          // Build system message
+          let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+          if (conversationContext) {
+            systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+          }
+          systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+          if (projectId && projectId !== 'default') {
+            systemMessageContent += ` You are assisting with the ${projectId} project.`;
+          }
+
+          openaiWs.on('open', () => {
+            console.log('Connected to OpenAI Realtime API');
+            openaiWs.send(JSON.stringify({
+              type: 'session.update',
+              session: { instructions: systemMessageContent },
+            }));
+            openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioBuffer.toString('base64') }));
+            openaiWs.send(JSON.stringify({
+              type: 'response.create',
+              response: { modalities: ['text'], instructions: 'Please respond to the user.' },
+            }));
+          });
+
+          openaiWs.on('message', async (message) => {
+            const event = JSON.parse(message);
+            console.log('OpenAI WebSocket message:', event);
+            if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
+              const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
+              if (aiReply) {
+                updateAirtableConversation(
+                  sessionId, 
+                  projectId, 
+                  chatUrl, 
+                  headersAirtable, 
+                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
+                  existingRecordId
+                ).catch(err => console.error('Airtable update error:', err));
+                
+                res.json({ 
+                  reply: aiReply,
+                  mcpThinking: null,
+                  usedMCP: false
+                });
+              } else {
+                res.status(500).json({ error: 'No valid reply received from OpenAI.' });
+              }
+              openaiWs.close();
+            }
+          });
+
+          openaiWs.on('error', (error) => {
+            console.error('OpenAI WebSocket error:', error);
+            res.status(500).json({ error: 'Failed to communicate with OpenAI' });
+          });
+          
+        } catch (error) {
+          console.error('Error processing audio data:', error);
+          res.status(500).json({ error: 'Error processing audio data.', details: error.message });
+        }
+      } else if (userMessage) {
+        try {
+          let aiReply = '';
+          let mcpThinking = [];
+          let usedMCP = false;
+
+          // Try Claude MCP for data gathering on brand matching queries
+          let claudeOrganizedData = null;
+          if (shouldSearchDatabases && anthropicApiKey) {
+            console.log('🎯 Brand matching query detected - attempting Claude MCP data gathering...');
+            console.log('🔑 API keys:', {
+              anthropic: anthropicApiKey ? 'Present' : 'MISSING!',
+              hubspot: hubspotApiKey ? 'Present' : 'MISSING!',
+              microsoft: msftClientId ? 'Present' : 'MISSING!'
+            });
+            
+            const claudeResult = await handleClaudeSearch(
+              userMessage, 
+              knowledgeBaseInstructions, 
+              projectId, 
+              sessionId,
+              conversationContext  // Pass conversation context
+            );
+            
+            if (claudeResult) {
+              claudeOrganizedData = claudeResult.organizedData;
+              mcpThinking = claudeResult.mcpThinking;
+              mcpRawOutput = [...mcpRawOutput, ...(claudeResult.mcpRawOutput || [])];
+              usedMCP = true;
+              console.log('✅ Claude MCP successfully gathered and organized data');
+              mcpRawOutput.push('✅ Claude MCP successfully gathered and organized data');
+              console.log('🧠 MCP Thinking:', mcpThinking);
+            } else {
+              console.log('⚠️ Claude MCP failed or returned null, using standard OpenAI');
+              mcpRawOutput.push('⚠️ Claude MCP failed - using standard OpenAI');
+            }
+          } else {
+            if (!shouldSearchDatabases) {
+              console.log('❌ AI determined no search needed - using standard OpenAI');
+            }
+            if (!anthropicApiKey) {
+              console.log('❌ No Anthropic API key - using standard OpenAI');
+            }
+          }
+          
+          // Use OpenAI to generate the final response
+          if (!aiReply) {
+            console.log('📝 Using OpenAI for response generation');
+            mcpRawOutput.push('📝 Using OpenAI for response generation');
+            
+            // Build enhanced system message with Claude's organized data
+            let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+            
+            // Add Claude's organized data if available
+            if (claudeOrganizedData) {
+              // Handle different query intents naturally
+              if (claudeOrganizedData.queryIntent) {
+                const intent = claudeOrganizedData.queryIntent;
+                
+                switch (intent.type) {
+                  case 'urgent_deals':
+                    systemMessageContent += `\n\n**URGENT ATTENTION NEEDED:**\n`;
+                    if (claudeOrganizedData.topBrands?.length > 0) {
+                      systemMessageContent += `\nFound ${claudeOrganizedData.topBrands.length} brands requiring immediate attention:\n`;
+                      claudeOrganizedData.topBrands.forEach((brand, i) => {
+                        systemMessageContent += `\n${i + 1}. ${brand.name} - ${brand.reason}\n`;
+                        if (brand.meetingContext) {
+                          systemMessageContent += `   Last discussed: "${brand.meetingContext.title}" on ${brand.meetingContext.date}\n`;
+                          systemMessageContent += `   Meeting: ${brand.meetingContext.url}\n`;
+                          if (brand.meetingContext.actionItems) {
+                            systemMessageContent += `   ⚡ ACTION NEEDED: ${brand.meetingContext.actionItems}\n`;
+                          }
+                        }
+                        systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
+                      });
+                    } else {
+                      systemMessageContent += `\nNo urgent deals found at this time.\n`;
+                    }
+                    systemMessageContent += `\n**INSTRUCTIONS:** Focus on brands with pending action items and upcoming deadlines. Be specific about what needs to be done.\n`;
+                    break;
+                    
+                  case 'budget_filter':
+                    systemMessageContent += `\n\n**BRANDS MATCHING BUDGET CRITERIA:**\n`;
+                    if (intent.focus.minBudget) {
+                      systemMessageContent += `\nShowing brands with budgets over ${intent.focus.minBudget}M:\n`;
+                    }
+                    if (claudeOrganizedData.topBrands?.length > 0) {
+                      claudeOrganizedData.topBrands.forEach((brand, i) => {
+                        systemMessageContent += `\n${i + 1}. ${brand.name} - ${brand.budget} budget\n`;
+                        systemMessageContent += `   ${brand.reason}\n`;
+                        systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
+                      });
+                    }
+                    systemMessageContent += `\n**INSTRUCTIONS:** Emphasize budget amounts and potential integration value.\n`;
+                    break;
+                    
+                  case 'pipeline_stage':
+                    systemMessageContent += `\n\n**BRANDS READY TO CLOSE:**\n`;
+                    if (claudeOrganizedData.topBrands?.length > 0) {
+                      systemMessageContent += `\n${claudeOrganizedData.topBrands.length} brands are in final stages:\n`;
+                      claudeOrganizedData.topBrands.forEach((brand, i) => {
+                        systemMessageContent += `\n${i + 1}. ${brand.name} - ${brand.lifecyclestage || 'Active Deal'}\n`;
+                        systemMessageContent += `   Status: ${brand.reason}\n`;
+                        if (brand.hasPartner) {
+                          systemMessageContent += `   ✅ Agency Partner: ${brand.partnerAgency}\n`;
+                        }
+                        systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
+                      });
+                    }
+                    systemMessageContent += `\n**INSTRUCTIONS:** Highlight brands closest to signing and suggest immediate next steps.\n`;
+                    break;
+                    
+                  case 'relationship_health':
+                    systemMessageContent += `\n\n**BRANDS NEEDING FOLLOW-UP:**\n`;
+                    if (claudeOrganizedData.topBrands?.length > 0) {
+                      systemMessageContent += `\nThese brands haven't had recent activity and may need attention:\n`;
+                      claudeOrganizedData.topBrands.forEach((brand, i) => {
+                        systemMessageContent += `\n${i + 1}. ${brand.name}\n`;
+                        systemMessageContent += `   Last Activity: ${brand.lastActivity ? new Date(brand.lastActivity).toLocaleDateString() : 'Unknown'}\n`;
+                        systemMessageContent += `   Status: ${brand.lifecyclestage}\n`;
+                        systemMessageContent += `   Suggestion: Reach out to re-engage\n`;
+                        systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
+                      });
+                    }
+                    systemMessageContent += `\n**INSTRUCTIONS:** Suggest specific re-engagement strategies for each brand.\n`;
+                    break;
+                    
+                  case 'activity_summary':
+                    systemMessageContent += `\n\n**YOUR ACTIVITY SUMMARY:**\n`;
+                    systemMessageContent += `\n${claudeOrganizedData.summary}\n`;
+                    
+                    if (claudeOrganizedData.recentMeetings?.length > 0) {
+                      systemMessageContent += `\n**Recent Meetings:**\n`;
+                      claudeOrganizedData.recentMeetings.forEach(m => {
+                        systemMessageContent += `- "${m.title}" on ${m.dateString}: ${m.transcript_url}\n`;
+                      });
+                    }
+                    
+                    if (claudeOrganizedData.recentEmails?.length > 0) {
+                      systemMessageContent += `\n**Recent Emails:**\n`;
+                      claudeOrganizedData.recentEmails.forEach(e => {
+                        systemMessageContent += `- "${e.subject}" from ${e.fromName || e.from}\n`;
+                      });
+                    }
+                    
+                    if (claudeOrganizedData.topBrands?.length > 0) {
+                      systemMessageContent += `\n**Active Brands:**\n`;
+                      claudeOrganizedData.topBrands.slice(0, 5).forEach(b => {
+                        systemMessageContent += `- ${b.name}: ${b.tags.join(', ')}\n`;
+                      });
+                    }
+                    systemMessageContent += `\n**INSTRUCTIONS:** Provide a conversational summary of what's happening.\n`;
+                    break;
+                    
+                  default:
+                    // Fall back to standard brand recommendations
+                    if (claudeOrganizedData.topBrands?.length > 0) {
+                      systemMessageContent += "\n\n**BRAND PARTNERSHIP RECOMMENDATIONS:**\n";
+                      
+                      if (claudeOrganizedData.currentProduction) {
+                        systemMessageContent += `\nFor Production: ${claudeOrganizedData.currentProduction}\n`;
+                      }
+                      
+                      claudeOrganizedData.topBrands.forEach((brand, index) => {
+                        systemMessageContent += `\n${index + 1}. ${brand.name}\n`;
+                        systemMessageContent += `   Tags: ${brand.tags.join(', ')}\n`;
+                        systemMessageContent += `   Why: ${brand.reason}\n`;
+                        if (brand.budget !== 'TBD') {
+                          systemMessageContent += `   Budget: ${brand.budget}\n`;
+                        }
+                        if (brand.hasPartner) {
+                          systemMessageContent += `   Agency: ${brand.partnerAgency}\n`;
+                        }
+                        if (brand.hubspotUrl) {
+                          systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
+                        }
+                        if (brand.meetingContext) {
+                          systemMessageContent += `   Meeting: "${brand.meetingContext.title}" (${brand.meetingContext.date})\n`;
+                          systemMessageContent += `   Meeting Link: ${brand.meetingContext.url}\n`;
+                        }
+                      });
+                    }
+                }
+                
+                systemMessageContent += `\n**GENERAL INSTRUCTIONS:**\n`;
+                systemMessageContent += `- Respond naturally and conversationally\n`;
+                systemMessageContent += `- Always include clickable links\n`;
+                systemMessageContent += `- Be specific and actionable\n`;
+                systemMessageContent += `- Don't just list data - provide insights\n`;
+              }
+              // Handle slash commands
+              else if (claudeOrganizedData.slashCommand) {
+                systemMessageContent += `\n\n**/${claudeOrganizedData.commandType.toUpperCase()} RESULTS FOR: ${claudeOrganizedData.brandName}**\n`;
+                
+                if (claudeOrganizedData.commandType === 'meetings' && claudeOrganizedData.meetings?.length > 0) {
+                  claudeOrganizedData.meetings.forEach(meeting => {
+                    systemMessageContent += `\n✅ "${meeting.title}" on ${meeting.dateString}\n`;
+                    systemMessageContent += `Link: ${meeting.transcript_url}\n`;
+                    if (meeting.summary?.overview) {
+                      systemMessageContent += `Summary: ${meeting.summary.overview.slice(0, 150)}...\n`;
+                    }
+                  });
+                } else if (claudeOrganizedData.commandType === 'emails' && claudeOrganizedData.emails?.length > 0) {
+                  claudeOrganizedData.emails.forEach(email => {
+                    systemMessageContent += `\n✉️ "${email.subject}" from ${email.fromName || email.from}\n`;
+                    systemMessageContent += `Date: ${new Date(email.receivedDate).toLocaleDateString()}\n`;
+                    if (email.preview) {
+                      systemMessageContent += `Preview: ${email.preview}...\n`;
+                    }
+                  });
+                } else if (claudeOrganizedData.commandType === 'contacts' && claudeOrganizedData.contacts?.length > 0) {
+                  systemMessageContent += `\nContacts at ${claudeOrganizedData.brand.properties.name}:\n`;
+                  claudeOrganizedData.contacts.forEach(contact => {
+                    systemMessageContent += `- ${contact.properties.firstname || ''} ${contact.properties.lastname || ''} - ${contact.properties.email || 'No email'}\n`;
+                  });
+                } else {
+                  systemMessageContent += `\nNo ${claudeOrganizedData.commandType} found for "${claudeOrganizedData.brandName}".\n`;
+                }
+                
+                systemMessageContent += `\n**TIP:** You can use slash commands for quick lookups:\n`;
+                systemMessageContent += `- /meetings [brand name]\n`;
+                systemMessageContent += `- /emails [brand name]\n`;
+                systemMessageContent += `- /contacts [brand name]\n`;
+              }
+              // Handle specific brand lookup with context
+              else if (claudeOrganizedData.specificBrandWithContext) {
+                systemMessageContent += `\n\n**${claudeOrganizedData.brandName} - RECENT ACTIVITY:**\n`;
+                
+                const brand = claudeOrganizedData.brand.properties;
+                systemMessageContent += `\nBrand: ${brand.brand_name || brand.name}\n`;
+                systemMessageContent += `HubSpot: https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${claudeOrganizedData.brand.id}\n`;
+                
+                // Recent meetings
+                if (claudeOrganizedData.recentMeetings?.length > 0) {
+                  systemMessageContent += `\n**RECENT MEETINGS:**\n`;
+                  claudeOrganizedData.recentMeetings.forEach(meeting => {
+                    systemMessageContent += `\nYes, there was a call titled "${meeting.title}" on ${meeting.dateString}\n`;
+                    systemMessageContent += `Link: ${meeting.transcript_url}\n`;
+                    
+                    // Key takeaway
+                    if (meeting.summary?.overview) {
+                      const takeaway = meeting.summary.overview.slice(0, 150);
+                      systemMessageContent += `Key Discussion: ${takeaway}...\n`;
+                    }
+                    
+                    // Action items
+                    if (meeting.summary?.action_items && Array.isArray(meeting.summary.action_items) && meeting.summary.action_items.length > 0) {
+                      systemMessageContent += `Action Items: ${meeting.summary.action_items[0]}\n`;
+                    }
+                    
+                    // Participants
+                    if (meeting.participants?.length > 0) {
+                      systemMessageContent += `Participants: ${meeting.participants.slice(0, 3).join(', ')}\n`;
+                    }
+                  });
+                } else {
+                  systemMessageContent += `\nNo recent meetings found with ${claudeOrganizedData.brandName} in the last 30 days.\n`;
+                }
+                
+                // Recent emails
+                if (claudeOrganizedData.recentEmails?.length > 0) {
+                  systemMessageContent += `\n**RECENT EMAILS:**\n`;
+                  claudeOrganizedData.recentEmails.forEach(email => {
+                    systemMessageContent += `\nEmail on ${new Date(email.receivedDate).toLocaleDateString()}: "${email.subject}"\n`;
+                    systemMessageContent += `From: ${email.fromName || email.from}\n`;
+                    if (email.preview) {
+                      // Extract a meaningful quote
+                      const quote = email.preview.slice(0, 100);
+                      systemMessageContent += `They mentioned: "${quote}..."\n`;
+                    }
+                  });
+                } else {
+                  systemMessageContent += `\nNo recent emails found with ${claudeOrganizedData.brandName}.\n`;
+                }
+                
+                // Contacts
+                if (claudeOrganizedData.contacts?.length > 0) {
+                  systemMessageContent += `\n**CONTACTS:**\n`;
+                  claudeOrganizedData.contacts.forEach(contact => {
+                    systemMessageContent += `- ${contact.properties.firstname || ''} ${contact.properties.lastname || ''} (${contact.properties.email || 'No email'})\n`;
+                  });
+                }
+                
+                systemMessageContent += `\n**INSTRUCTIONS:**\n`;
+                systemMessageContent += `- Format meetings as: "Yes, there was a call titled 'Meeting Name' on [date]..."\n`;
+                systemMessageContent += `- Always make meeting titles clickable with the full Fireflies URL\n`;
+                systemMessageContent += `- Quote specific takeaways from meetings and emails\n`;
+                systemMessageContent += `- Provide dates for all activities\n`;
+                systemMessageContent += `- If no meetings/emails found, say so clearly\n`;
+              }
+              // Handle regular brand lookup (just contacts)
+              else if (claudeOrganizedData.specificBrandLookup) {
+                systemMessageContent += "\n\n**BRAND CONTACT INFORMATION:**\n";
+                const brand = claudeOrganizedData.brand.properties;
+                systemMessageContent += `Brand: ${brand.brand_name || brand.name}\n`;
+                if (brand.partner_agency_name) {
+                  systemMessageContent += `Partner Agency: ${brand.partner_agency_name}\n`;
+                }
+                if (claudeOrganizedData.contacts && claudeOrganizedData.contacts.length > 0) {
+                  systemMessageContent += "\nMain Contacts:\n";
+                  claudeOrganizedData.contacts.forEach((contact, i) => {
+                    systemMessageContent += `${i + 1}. ${contact.properties.firstname || ''} ${contact.properties.lastname || ''}\n`;
+                    systemMessageContent += `   Email: ${contact.properties.email || 'Not available'}\n`;
+                    systemMessageContent += `   Title: ${contact.properties.jobtitle || 'Not specified'}\n`;
+                  });
+                } else {
+                  systemMessageContent += "No contacts found in HubSpot for this brand.\n";
+                }
+                systemMessageContent += "\nProvide this contact information clearly to the user.\n";
+              }
+              // Handle intelligent context analysis
+              else if (claudeOrganizedData.contextAnalysis) {
+                if (claudeOrganizedData.queryType === 'valuable_meetings') {
+                  systemMessageContent += `\n\n**MOST VALUABLE MEETINGS ${claudeOrganizedData.timeFrame.toUpperCase()}:**\n`;
+                  
+                  const highValueMeetings = claudeOrganizedData.valuableMeetings.filter(m => m.valueScore > 50);
+                  
+                  if (highValueMeetings.length > 0) {
+                    highValueMeetings.forEach((meeting, index) => {
+                      systemMessageContent += `\n${index + 1}. "${meeting.title}" on ${meeting.dateString}\n`;
+                      systemMessageContent += `   Link: ${meeting.transcript_url}\n`;
+                      systemMessageContent += `   Value Score: ${meeting.valueScore}/100\n`;
+                      
+                      // Explain why it's valuable
+                      const reasons = [];
+                      if (meeting.valueIndicators.hasActionItems) {
+                        reasons.push(`${meeting.summary.action_items.length} action items`);
+                      }
+                      if (meeting.valueIndicators.hasBudgetDiscussion) {
+                        reasons.push('budget discussed');
+                      }
+                      if (meeting.valueIndicators.hasDecisionMaker) {
+                        reasons.push('senior stakeholders present');
+                      }
+                      
+                      systemMessageContent += `   Why valuable: ${reasons.join(', ')}\n`;
+                      
+                      if (meeting.summary?.overview) {
+                        systemMessageContent += `   Key discussion: ${meeting.summary.overview.slice(0, 100)}...\n`;
+                      }
+                    });
+                    
+                    systemMessageContent += `\n💡 KEY INSIGHTS:\n`;
+                    systemMessageContent += `- ${highValueMeetings.length} high-value meetings identified\n`;
+                    systemMessageContent += `- Meetings with action items and budget discussions rank highest\n`;
+                    systemMessageContent += `- Senior stakeholder involvement increases meeting value\n`;
+                  } else {
+                    systemMessageContent += `\nNo high-value meetings found in the specified timeframe.\n`;
+                  }
+                } else {
+                  // Handle general activity queries
+                  systemMessageContent += `\n\n**RECENT ACTIVITY ${claudeOrganizedData.timeFrame.toUpperCase()}:**\n`;
+                  
+                  if (claudeOrganizedData.valuableMeetings?.length > 0) {
+                    systemMessageContent += `\n**MEETINGS:**\n`;
+                    claudeOrganizedData.valuableMeetings.slice(0, 5).forEach(meeting => {
+                      systemMessageContent += `- "${meeting.title}" on ${meeting.dateString}\n`;
+                      systemMessageContent += `  Link: ${meeting.transcript_url}\n`;
+                    });
+                  }
+                  
+                  if (claudeOrganizedData.emails?.length > 0) {
+                    systemMessageContent += `\n**EMAILS:**\n`;
+                    claudeOrganizedData.emails.slice(0, 5).forEach(email => {
+                      systemMessageContent += `- "${email.subject}" from ${email.fromName || email.from}\n`;
+                    });
+                  }
+                }
+                
+                systemMessageContent += `\n**INSTRUCTIONS:**\n`;
+                systemMessageContent += `- Always provide specific meeting titles and dates\n`;
+                systemMessageContent += `- Include clickable Fireflies links\n`;
+                systemMessageContent += `- Explain WHY meetings are valuable (action items, budget, stakeholders)\n`;
+                systemMessageContent += `- Rank meetings by value score when asked about "valuable" meetings\n`;
+              }
+              // Handle context-only queries
+              else if (claudeOrganizedData.contextOnly) {
+                systemMessageContent += "\n\n**RECENT CONTEXT AND INSIGHTS:**\n";
+                
+                if (claudeOrganizedData.firefliesTranscripts?.length > 0) {
+                  systemMessageContent += "\n**RECENT MEETINGS WITH KEY INSIGHTS:**\n";
+                  claudeOrganizedData.firefliesTranscripts.forEach(t => {
+                    systemMessageContent += `\nMeeting: "${t.title}" on ${t.dateString}\n`;
+                    systemMessageContent += `Link: ${t.transcript_url}\n`;
+                    systemMessageContent += `Participants: ${t.participants?.slice(0, 3).join(', ') || 'Not specified'}\n`;
+                    
+                    // Extract brand mentions and insights
+                    const overview = t.summary?.overview || '';
+                    const topics = t.summary?.topics_discussed || '';
+                    
+                    // Look for brand mentions in the meeting
+                    const brandMentions = [];
+                    if (claudeOrganizedData.topBrands) {
+                      claudeOrganizedData.topBrands.forEach(brand => {
+                        if (overview.toLowerCase().includes(brand.name.toLowerCase()) || 
+                            topics.toLowerCase().includes(brand.name.toLowerCase())) {
+                          brandMentions.push(brand.name);
+                        }
+                      });
+                    }
+                    
+                    if (brandMentions.length > 0) {
+                      systemMessageContent += `Brands Discussed: ${brandMentions.join(', ')}\n`;
+                    }
+                    
+                    if (t.summary?.action_items && Array.isArray(t.summary.action_items) && t.summary.action_items.length > 0) {
+                      systemMessageContent += `Action Items: ${t.summary.action_items.slice(0, 3).join('; ')}\n`;
+                    }
+                    
+                    if (overview) {
+                      systemMessageContent += `Key Discussion: ${overview.slice(0, 200)}...\n`;
+                    }
+                    
+                    systemMessageContent += "\n";
+                  });
+                }
+                
+                if (claudeOrganizedData.o365Emails?.length > 0) {
+                  systemMessageContent += "\n**RECENT EMAIL THREADS:**\n";
+                  claudeOrganizedData.o365Emails.forEach(e => {
+                    systemMessageContent += `\nEmail: "${e.subject}"\n`;
+                    systemMessageContent += `From: ${e.fromName || e.from} (${new Date(e.receivedDate).toLocaleDateString()})\n`;
+                    systemMessageContent += `Content: ${e.preview}...\n`;
+                    
+                    // Look for urgency indicators
+                    const urgencyWords = ['urgent', 'asap', 'immediately', 'deadline', 'tomorrow', 'today'];
+                    const hasUrgency = urgencyWords.some(word => 
+                      e.subject.toLowerCase().includes(word) || 
+                      e.preview.toLowerCase().includes(word)
+                    );
+                    
+                    if (hasUrgency) {
+                      systemMessageContent += `⚡ URGENT: This email indicates time-sensitive action needed\n`;
+                    }
+                  });
+                }
+                
+                systemMessageContent += "\n**INSTRUCTIONS FOR CONTEXT QUERIES:**\n";
+                systemMessageContent += "- Identify 'low hanging fruit' by looking for: urgent emails, pending action items, brands mentioned multiple times\n";
+                systemMessageContent += "- Quote specific insights from meetings/emails\n";
+                systemMessageContent += "- Always include meeting links when referencing them\n";
+                systemMessageContent += "- Highlight any time-sensitive opportunities\n";
+                systemMessageContent += "- If asked about 'last email' with specific contacts, provide the actual email details above\n";
+              }
+              // Default brand matching response
+              else {
+                systemMessageContent += "\n\n**BRAND PARTNERSHIP RECOMMENDATIONS:**\n";
+                
+                if (claudeOrganizedData.currentProduction) {
+                  systemMessageContent += `\nFor Production: ${claudeOrganizedData.currentProduction}\n`;
+                }
+                
+                if (claudeOrganizedData.topBrands?.length > 0) {
+                  systemMessageContent += "\n**TOP BRANDS:**\n";
+                  claudeOrganizedData.topBrands.forEach((brand, index) => {
+                    systemMessageContent += `\n${index + 1}. ${brand.name}\n`;
+                    systemMessageContent += `   Tags: ${brand.tags.join(', ')}\n`;
+                    systemMessageContent += `   Why: ${brand.reason}\n`;
+                    if (brand.budget !== 'TBD') {
+                      systemMessageContent += `   Budget: ${brand.budget}\n`;
+                    }
+                    if (brand.hasPartner) {
+                      systemMessageContent += `   Agency: ${brand.partnerAgency}\n`;
+                    }
+                    if (brand.hubspotUrl) {
+                      systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
+                    }
+                    // Add specific meeting/email context
+                    if (brand.meetingContext) {
+                      systemMessageContent += `   Meeting: "${brand.meetingContext.title}" (${brand.meetingContext.date})\n`;
+                      systemMessageContent += `   Meeting Link: ${brand.meetingContext.url}\n`;
+                      if (brand.meetingContext.actionItems) {
+                        systemMessageContent += `   Action Item: ${brand.meetingContext.actionItems}\n`;
+                      }
+                      systemMessageContent += `   Discussion: ${brand.meetingContext.context}\n`;
+                    }
+                    if (brand.emailContext) {
+                      systemMessageContent += `   Email: "${brand.emailContext.subject}"\n`;
+                      systemMessageContent += `   From: ${brand.emailContext.from} on ${new Date(brand.emailContext.date).toLocaleDateString()}\n`;
+                      systemMessageContent += `   Preview: ${brand.emailContext.preview}\n`;
+                    }
+                  });
+                }
+                
+                // Add all meeting/email context for context queries
+                if (claudeOrganizedData.firefliesTranscripts?.length > 0) {
+                  systemMessageContent += "\n**ALL RELEVANT MEETINGS:**\n";
+                  claudeOrganizedData.firefliesTranscripts.forEach(t => {
+                    systemMessageContent += `- "${t.title}" on ${t.dateString}\n`;
+                    systemMessageContent += `  Link: ${t.transcript_url}\n`;
+                    if (t.summary?.action_items && Array.isArray(t.summary.action_items) && t.summary.action_items.length > 0) {
+                      systemMessageContent += `  Action Items: ${t.summary.action_items.slice(0, 2).join('; ')}\n`;
+                    }
+                    if (t.summary?.overview) {
+                      systemMessageContent += `  Summary: ${t.summary.overview.slice(0, 150)}...\n`;
+                    }
+                    systemMessageContent += "\n";
+                  });
+                }
+                
+                if (claudeOrganizedData.o365Emails?.length > 0) {
+                  systemMessageContent += "\n**ALL RECENT EMAILS:**\n";
+                  claudeOrganizedData.o365Emails.forEach(e => {
+                    systemMessageContent += `- "${e.subject}" from ${e.fromName || e.from} (${new Date(e.receivedDate).toLocaleDateString()})\n`;
+                    systemMessageContent += `  Preview: ${e.preview}...\n\n`;
+                  });
+                }
+                
+                systemMessageContent += "\n**INSTRUCTIONS:**\n";
+                systemMessageContent += "- When mentioning meetings, ALWAYS include the meeting title and link\n";
+                systemMessageContent += "- Quote specific insights from emails/meetings when explaining brand relevance\n";
+                systemMessageContent += "- For 'low hanging fruit', identify brands with recent email threads or upcoming action items\n";
+                systemMessageContent += "- Always provide specific context, not generic statements\n";
+                systemMessageContent += "- Format meeting links as: Meeting: [Title] Link: [URL]\n";
+              }
+            }
+            
+            if (conversationContext) {
+              systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+            }
+            systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+            if (projectId && projectId !== 'default') {
+              systemMessageContent += ` You are assisting with the ${projectId} project.`;
+            }
+            
+            const openAIResponse = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+            aiReply = openAIResponse;
+          }
+          
+          if (aiReply) {
+            updateAirtableConversation(
+              sessionId, 
+              projectId, 
+              chatUrl, 
+              headersAirtable, 
+              `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
+              existingRecordId
+            ).catch(err => console.error('Airtable update error:', err));
+            
+            // Include brand suggestions if we have them
+            const response = { 
+              reply: aiReply,
+              mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
+              mcpRawOutput: mcpRawOutput.length > 0 ? mcpRawOutput : null,
+              usedMCP: usedMCP
+            };
+            
+            // Add brand suggestions for dropdown if available
+            if (claudeOrganizedData && claudeOrganizedData.brandSuggestions) {
+              response.brandSuggestions = claudeOrganizedData.brandSuggestions;
+            }
+            
+            return res.json(response);
+          } else {
+            return res.status(500).json({ error: 'No text reply received.' });
+          }
+        } catch (error) {
+          console.error('Error fetching response:', error);
+          return res.status(500).json({ error: 'Error fetching response.', details: error.message });
+        }
+      }
+    } catch (error) {
+      console.error('Error in handler:', error);
+      return res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+  } else {
+    res.setHeader("Allow", ["POST", "OPTIONS"]);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+}
+
+async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
+  try {
+    const messages = [
+      { role: 'system', content: systemMessageContent },
+      { role: 'user', content: userMessage }
+    ];
+    
+    const totalLength = systemMessageContent.length + userMessage.length;
+    console.log(`Total message length: ${totalLength} characters`);
+    
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: messages,
+        max_tokens: 1000,
+        temperature: 0.7
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('OpenAI API error:', response.status, errorData);
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('OpenAI response received');
+    if (data.choices && data.choices.length > 0) {
+      return data.choices[0].message.content;
+    } else {
+      console.error('No valid choices in OpenAI response.');
+      return null;
+    }
+  } catch (error) {
+    console.error('Error in getTextResponseFromOpenAI:', error);
+    throw error;
+  }
+}
+
+async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
+  try {
+    let conversationToSave = updatedConversation;
+    if (conversationToSave.length > 10000) {
+      conversationToSave = '...' + conversationToSave.slice(-10000);
+    }
+    
+    const recordData = {
+      fields: {
+        SessionID: sessionId,
+        ProjectID: projectId || 'default',
+        Conversation: conversationToSave
+      }
+    };
+
+    if (existingRecordId) {
+      await fetch(`${chatUrl}/${existingRecordId}`, {
+        method: 'PATCH',
+        headers: headersAirtable,
+        body: JSON.stringify({ fields: recordData.fields }),
+      });
+      console.log(`Updated conversation for project: ${projectId}, session: ${sessionId}`);
+    } else {
+      await fetch(chatUrl, {
+        method: 'POST',
+        headers: headersAirtable,
+        body: JSON.stringify(recordData),
+      });
+      console.log(`Created new conversation for project: ${projectId}, session: ${sessionId}`);
+    }
+  } catch (error) {
+    console.error('Error updating Airtable conversation:', error);
+  }
+} = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -1661,3 +2965,5 @@ async function generateVeo3Video({
     
     console.log('🎥 Creating video with Veo3...');
     console.log('Request details:', { promptText, aspectRatio });
+    
+    const response
