@@ -2885,8 +2885,8 @@ export default async function handler(req, res) {
             // Include brand suggestions if we have them
             const response = { 
               reply: aiReply,
-              mcpThinking: mcpThinking.length > 0 ? mcpThinking : null,
-              mcpRawOutput: mcpRawOutput.length > 0 ? mcpRawOutput : null,
+              mcpThinking: mcpThinking || [],  // Always send array, never null
+              mcpRawOutput: mcpRawOutput || [], // Always send array, never null
               usedMCP: usedMCP
             };
             
