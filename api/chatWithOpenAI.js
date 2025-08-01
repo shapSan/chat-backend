@@ -2353,19 +2353,12 @@ export default async function handler(req, res) {
               claudeOrganizedData = claudeResult.organizedData;
               mcpThinking = claudeResult.mcpThinking || [];
               
-              // Debug log to check what we received
-              console.log('📊 Claude result received:', {
-                hasOrganizedData: !!claudeResult.organizedData,
-                mcpThinkingLength: mcpThinking.length,
-                mcpThinking: mcpThinking
-              });
-              
-              // Add MCP thinking steps with timestamps
+              // Add MCP thinking steps with timestamps for live feeling
               if (claudeResult.mcpThinking && Array.isArray(claudeResult.mcpThinking)) {
                 claudeResult.mcpThinking.forEach((step, index) => {
                   mcpRawOutput.push({
                     text: step,
-                    timestamp: Date.now() - mcpStartTime + (index * 100) // Add 100ms between steps
+                    timestamp: Date.now() - mcpStartTime + (index * 200) // 200ms between steps for natural pacing
                   });
                 });
               }
@@ -2376,7 +2369,6 @@ export default async function handler(req, res) {
                 text: '✅ Claude MCP successfully gathered and organized data',
                 timestamp: Date.now() - mcpStartTime
               });
-              console.log('🧠 MCP Thinking:', mcpThinking);
             } else {
               console.log('⚠️ Claude MCP failed or returned null, using standard OpenAI');
               mcpRawOutput.push({
@@ -2902,15 +2894,6 @@ export default async function handler(req, res) {
             if (claudeOrganizedData && claudeOrganizedData.brandSuggestions) {
               response.brandSuggestions = claudeOrganizedData.brandSuggestions;
             }
-            
-            // Debug log to see what we're actually sending
-            console.log('📤 Sending response to frontend:', {
-              hasReply: !!response.reply,
-              mcpThinkingLength: response.mcpThinking ? response.mcpThinking.length : 0,
-              mcpRawOutputLength: response.mcpRawOutput ? response.mcpRawOutput.length : 0,
-              usedMCP: response.usedMCP,
-              hasBrandSuggestions: !!response.brandSuggestions
-            });
             
             return res.json(response);
           } else {
