@@ -1790,6 +1790,13 @@ async function shouldUseSearch(userMessage, conversationContext) {
       return true;
     }
     
+    // Check if message contains production info (title + synopsis pattern)
+    if (messageClues.includes('synopsis:') || 
+        (userMessage.includes('\n') && messageClues.includes('follows') && messageClues.includes('con'))) {
+      console.log('🎬 Production synopsis detected - search needed for brand matching');
+      return true;
+    }
+    
     // Always search for context queries
     if (messageClues.includes('email') || 
         messageClues.includes('meeting') || 
@@ -1798,6 +1805,13 @@ async function shouldUseSearch(userMessage, conversationContext) {
         messageClues.includes('insights') ||
         messageClues.includes('low hanging fruit')) {
       console.log('📧 Context query detected - search needed');
+      return true;
+    }
+    
+    // For very short messages that might just be a title, use AI
+    if (userMessage.length > 100 || userMessage.split('\n').length > 1) {
+      // Likely a production description
+      console.log('📝 Long message detected - likely production info');
       return true;
     }
     
@@ -1814,7 +1828,7 @@ async function shouldUseSearch(userMessage, conversationContext) {
           content: 'You are a query classifier. Determine if this query needs to search databases (Airtable/HubSpot/Fireflies/Emails). Return ONLY "true" or "false".'
         }, {
           role: 'user',
-          content: `Query: "${userMessage}"\nContext: "${contextClues.slice(-500)}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, emails, or any business data? Also return true if there's a production/film/show mentioned in the context that might need brand partnerships.`
+          content: `Query: "${userMessage}"\nContext: "${contextClues.slice(-500)}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, emails, or any business data? Also return true if there's a production/film/show mentioned in the context that might need brand partnerships. Return true if this appears to be a production title with synopsis.`
         }],
         temperature: 0,
         max_tokens: 10
@@ -1829,7 +1843,7 @@ async function shouldUseSearch(userMessage, conversationContext) {
   } catch (error) {
     console.error('Error classifying query:', error);
     // Fallback to keyword detection - UPDATED to include more patterns
-    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership|insights|context)/) ||
+    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership|insights|context|synopsis:|title:|film|show|series)/) ||
            conversationContext?.toLowerCase().match(/(synopsis:|distributor:|cast:|starting fee:|production|film|show)/);
   }
 }
