@@ -1858,6 +1858,10 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
+  
+  // Check if client wants streaming
+  const wantsStream = req.headers.accept === 'text/event-stream' || req.body.stream === true;
+  
   if (req.method === 'POST') {
     try {
       // Check if this is an audio generation request
