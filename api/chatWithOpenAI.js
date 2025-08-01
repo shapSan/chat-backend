@@ -2351,7 +2351,14 @@ export default async function handler(req, res) {
             
             if (claudeResult) {
               claudeOrganizedData = claudeResult.organizedData;
-              mcpThinking = claudeResult.mcpThinking;
+              mcpThinking = claudeResult.mcpThinking || [];
+              
+              // Debug log to check what we received
+              console.log('📊 Claude result received:', {
+                hasOrganizedData: !!claudeResult.organizedData,
+                mcpThinkingLength: mcpThinking.length,
+                mcpThinking: mcpThinking
+              });
               
               // Add MCP thinking steps with timestamps
               if (claudeResult.mcpThinking && Array.isArray(claudeResult.mcpThinking)) {
@@ -2895,6 +2902,15 @@ export default async function handler(req, res) {
             if (claudeOrganizedData && claudeOrganizedData.brandSuggestions) {
               response.brandSuggestions = claudeOrganizedData.brandSuggestions;
             }
+            
+            // Debug log to see what we're actually sending
+            console.log('📤 Sending response to frontend:', {
+              hasReply: !!response.reply,
+              mcpThinkingLength: response.mcpThinking ? response.mcpThinking.length : 0,
+              mcpRawOutputLength: response.mcpRawOutput ? response.mcpRawOutput.length : 0,
+              usedMCP: response.usedMCP,
+              hasBrandSuggestions: !!response.brandSuggestions
+            });
             
             return res.json(response);
           } else {
