@@ -1506,7 +1506,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     );
     
     // Create dropdown data with enhanced context
-    const brandSuggestions = topBrands.slice(0, 10).map(brand => ({
+    const brandSuggestions = topBrands.slice(0, 15).map(brand => ({
       id: brand.id,
       name: brand.name,
       score: brand.relevanceScore,
@@ -1774,6 +1774,19 @@ async function shouldUseSearch(userMessage, conversationContext) {
   if (!openAIApiKey) return false;
   
   try {
+    // Skip search for very short, general queries
+    if (userMessage.length < 20 && !userMessage.includes('?')) {
+      console.log('🚫 Short general message - no search needed');
+      return false;
+    }
+    
+    // Check if this looks like a greeting or general chat
+    const greetingPatterns = /^(hi|hello|hey|how are you|what's up|good morning|good afternoon|good evening|thanks|thank you|bye|goodbye|ok|okay|sure|yes|no|cool|great|awesome)[\s\?\!\.]*$/i;
+    if (greetingPatterns.test(userMessage.trim())) {
+      console.log('💬 Greeting or general chat - no search needed');
+      return false;
+    }
+    
     // Check if the conversation context contains production details
     const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
     const messageClues = userMessage.toLowerCase();
@@ -1815,6 +1828,7 @@ async function shouldUseSearch(userMessage, conversationContext) {
       return true;
     }
     
+    // For ambiguous cases, use AI to decide
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -1825,10 +1839,10 @@ async function shouldUseSearch(userMessage, conversationContext) {
         model: 'gpt-3.5-turbo',
         messages: [{
           role: 'system',
-          content: 'You are a query classifier. Determine if this query needs to search databases (Airtable/HubSpot/Fireflies/Emails). Return ONLY "true" or "false".'
+          content: 'You are a query classifier. Determine if this query needs to search databases (HubSpot/Fireflies/Emails). Return ONLY "true" or "false". Return true ONLY for queries about: brands, companies, meetings, transcripts, productions, partnerships, contacts, emails, or business data. Return false for: general chat, greetings, thanks, simple questions, advice, or anything not related to searching business data.'
         }, {
           role: 'user',
-          content: `Query: "${userMessage}"\nContext: "${contextClues.slice(-500)}"\n\nDoes this query need to search for: brands, companies, meetings, transcripts, productions, partnerships, contacts, discussions, emails, or any business data? Also return true if there's a production/film/show mentioned in the context that might need brand partnerships. Return true if this appears to be a production title with synopsis.`
+          content: `Query: "${userMessage}"\nContext: "${contextClues.slice(-500)}"\n\nDoes this query specifically need to search for business data, brands, meetings, emails, or partnerships?`
         }],
         temperature: 0,
         max_tokens: 10
@@ -1842,9 +1856,19 @@ async function shouldUseSearch(userMessage, conversationContext) {
     
   } catch (error) {
     console.error('Error classifying query:', error);
-    // Fallback to keyword detection - UPDATED to include more patterns
-    return userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership|insights|context|synopsis:|title:|film|show|series)/) ||
+    // Fallback to keyword detection - only for specific business queries
+    const needsSearch = userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership|insights|context|synopsis:|title:|film|show|series)/) ||
            conversationContext?.toLowerCase().match(/(synopsis:|distributor:|cast:|starting fee:|production|film|show)/);
+    
+    // Double check it's not a general query
+    if (needsSearch && userMessage.length < 30) {
+      const generalWords = /^(what|how|when|where|why|can|could|should|would|is|are|do|does|did)[\s\w]*\?$/i;
+      if (generalWords.test(userMessage.trim())) {
+        return false;
+      }
+    }
+    
+    return needsSearch;
   }
 }
 
