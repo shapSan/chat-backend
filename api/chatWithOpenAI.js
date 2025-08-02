@@ -2946,6 +2946,9 @@ export default async function handler(req, res) {
           console.error('Error fetching response:', error);
           return res.status(500).json({ error: 'Error fetching response.', details: error.message });
         }
+      } else {
+        // Neither audioData nor userMessage provided
+        return res.status(400).json({ error: 'Missing required fields: userMessage or audioData' });
       }
     } catch (error) {
       console.error('Error in handler:', error);
