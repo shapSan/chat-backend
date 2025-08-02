@@ -59,12 +59,21 @@ const hubspotAPI = {
   baseUrl: 'https://api.hubapi.com',
   portalId: '2944980', // Your HubSpot portal ID
   
+  // Object type constants
+  OBJECTS: {
+    BRANDS: '2-26628489', // Custom object for brands
+    PARTNERSHIPS: '2-27025032', // Custom object for partnerships
+    DEALS: 'deals', // Standard object
+    COMPANIES: 'companies', // Standard object
+    CONTACTS: 'contacts' // Standard object
+  },
+  
   async searchBrands(filters = {}) {
     try {
       console.log('🔍 HubSpot searchBrands called with filters:', filters);
       
-      // Search for BRANDS custom object (not companies)
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/brands/search`, {
+      // Search for BRANDS custom object
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -73,16 +82,17 @@ const hubspotAPI = {
         body: JSON.stringify({
           filterGroups: filters.filterGroups || [
             {
-              // Default: get all brands
+              // Default: get all active brands
               filters: []
             }
           ],
           properties: [
-            // Brand-specific fields
-            'name',
+            // Brand-specific fields based on schema
             'brand_name',
+            'client_status',
+            'client_type',
+            'brand_website_url',
             'brand_category',
-            'lifecyclestage',
             'media_spend_m_',
             'partner_agency_name',
             'notes_last_contacted',
@@ -123,8 +133,8 @@ const hubspotAPI = {
     try {
       console.log('🔍 HubSpot searchProductions called (searching Partnerships custom object)');
       
-      // Search for PARTNERSHIPS custom object (not deals)
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/partnerships/search`, {
+      // Search for PARTNERSHIPS custom object
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.PARTNERSHIPS}/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -138,14 +148,15 @@ const hubspotAPI = {
             }
           ],
           properties: [
-            // Partnership-specific fields
-            'name',
-            'partnership_name',  // Production title
+            // Partnership-specific fields based on schema
+            'partnership_name',
+            'production_name',
+            'partnership_status',
+            'hs_pipeline_stage',
             'synopsis',
             'content_type',
             'distributor',
             'brand_name',
-            'partnership_stage',
             'amount',
             'hollywood_branded_fee',
             'closedate',
@@ -179,8 +190,54 @@ const hubspotAPI = {
   },
 
   async searchDeals(filters = {}) {
-    // Alias for searchProductions since they're the same thing
-    return this.searchProductions(filters);
+    try {
+      console.log('🔍 HubSpot searchDeals called');
+      
+      // Search standard DEALS object
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.DEALS}/search`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${hubspotApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          filterGroups: filters.filterGroups || [
+            {
+              filters: []
+            }
+          ],
+          properties: [
+            'dealname',
+            'amount',
+            'closedate',
+            'dealstage',
+            'pipeline',
+            'dealtype',
+            'hubspot_owner_id',
+            'hs_lastmodifieddate'
+          ],
+          limit: filters.limit || 30,
+          sorts: [{ 
+            propertyName: 'hs_lastmodifieddate', 
+            direction: 'DESCENDING' 
+          }]
+        })
+      });
+      
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('❌ HubSpot Deals API error:', response.status, errorBody);
+        throw new Error(`HubSpot API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log(`✅ HubSpot search returned ${data.results?.length || 0} deals`);
+      
+      return data;
+    } catch (error) {
+      console.error('❌ Error searching HubSpot deals:', error);
+      return { results: [] };
+    }
   },
 
   async getContactsForBrand(brandId) {
@@ -188,7 +245,7 @@ const hubspotAPI = {
       console.log('🔍 Getting contacts for brand:', brandId);
       
       const response = await fetch(
-        `${this.baseUrl}/crm/v3/objects/brands/${brandId}/associations/contacts`,
+        `${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/${brandId}/associations/${this.OBJECTS.CONTACTS}`,
         {
           headers: {
             'Authorization': `Bearer ${hubspotApiKey}`,
@@ -237,7 +294,7 @@ const hubspotAPI = {
     try {
       console.log(`🔍 Searching for specific brand: ${brandName}`);
       
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/brands/search`, {
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -246,8 +303,10 @@ const hubspotAPI = {
         body: JSON.stringify({
           query: brandName,
           properties: [
-            'name',
             'brand_name',
+            'client_status',
+            'client_type',
+            'brand_website_url',
             'num_associated_contacts',
             'partner_agency_name',
             'hubspot_owner_id',
@@ -266,7 +325,6 @@ const hubspotAPI = {
       
       // Find exact match if possible
       const exactMatch = data.results?.find(r => 
-        r.properties.name?.toLowerCase() === brandName.toLowerCase() ||
         r.properties.brand_name?.toLowerCase() === brandName.toLowerCase()
       );
       
@@ -280,21 +338,8 @@ const hubspotAPI = {
   async testConnection() {
     try {
       console.log('🔍 Testing HubSpot API connection...');
-      // First try to get custom object schemas to verify brands/partnerships exist
-      const schemasResponse = await fetch(`${this.baseUrl}/crm/v3/schemas`, {
-        headers: {
-          'Authorization': `Bearer ${hubspotApiKey}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (schemasResponse.ok) {
-        const schemas = await schemasResponse.json();
-        console.log('📋 Available custom objects:', schemas.results?.map(s => s.name).join(', '));
-      }
-      
-      // Try to fetch one brand
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/brands?limit=1`, {
+      // Test with brands custom object
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}?limit=1`, {
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
           'Content-Type': 'application/json'
@@ -940,19 +985,19 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         return false;
       });
       
-      // Tag assignment logic based on lifecycle stage
-      if (brand.lifecyclestage === 'customer') {
+      // Tag assignment logic based on client status
+      if (brand.clientStatus === 'Active' || brand.clientStatus === 'Customer') {
         tags.push('Hot Lead');
         score += 40;
-        primaryReason = 'Existing customer ready to activate';
-      } else if (brand.lifecyclestage === 'opportunity') {
+        primaryReason = 'Active client ready to activate';
+      } else if (brand.clientStatus === 'Opportunity' || brand.clientType === 'Warm Lead') {
         tags.push('Active Opportunity');
         score += 35;
         primaryReason = 'Active opportunity in pipeline';
-      } else if (brand.lifecyclestage === 'salesqualifiedlead') {
+      } else if (brand.clientStatus === 'Prospect' || brand.clientType === 'Lead') {
         tags.push('Qualified Lead');
         score += 25;
-        primaryReason = 'Sales qualified lead';
+        primaryReason = 'Qualified brand partner';
       }
       
       // Recent activity tagging with SPECIFIC context
@@ -1421,13 +1466,13 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
         // Format partnerships for display
         const partnerships = partnershipsData.results.map(p => ({
           id: p.id,
-          name: p.properties.partnership_name || p.properties.name,
+          name: p.properties.partnership_name || p.properties.production_name || p.properties.name,
           synopsis: p.properties.synopsis,
           contentType: p.properties.content_type,
           distributor: p.properties.distributor,
-          stage: p.properties.partnership_stage,
+          stage: p.properties.partnership_status || p.properties.hs_pipeline_stage,
           fee: p.properties.hollywood_branded_fee,
-          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/partnerships/${p.id}`,
+          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.PARTNERSHIPS}/${p.id}`,
           lastModified: p.properties.hs_lastmodifieddate
         }));
         
@@ -2804,7 +2849,7 @@ export default async function handler(req, res) {
                 
                 const brand = claudeOrganizedData.brand.properties;
                 systemMessageContent += `\nBrand: ${brand.brand_name || brand.name}\n`;
-                systemMessageContent += `HubSpot: https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/brands/${claudeOrganizedData.brand.id}\n`;
+                systemMessageContent += `HubSpot: https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.BRANDS}/${claudeOrganizedData.brand.id}\n`;
                 
                 // Recent meetings
                 if (claudeOrganizedData.recentMeetings?.length > 0) {
