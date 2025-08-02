@@ -1774,61 +1774,16 @@ async function shouldUseSearch(userMessage, conversationContext) {
   if (!openAIApiKey) return false;
   
   try {
-    // Skip search for very short, general queries
-    if (userMessage.length < 20 && !userMessage.includes('?')) {
-      console.log('🚫 Short general message - no search needed');
-      return false;
-    }
-    
-    // Check if this looks like a greeting or general chat
-    const greetingPatterns = /^(hi|hello|hey|how are you|what's up|good morning|good afternoon|good evening|thanks|thank you|bye|goodbye|ok|okay|sure|yes|no|cool|great|awesome)[\s\?\!\.]*$/i;
-    if (greetingPatterns.test(userMessage.trim())) {
-      console.log('💬 Greeting or general chat - no search needed');
-      return false;
-    }
-    
-    // Check if the conversation context contains production details
     const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
     const messageClues = userMessage.toLowerCase();
     
-    // Quick check for production-related patterns
-    if (contextClues.includes('synopsis:') || 
-        contextClues.includes('distributor:') || 
-        contextClues.includes('cast:') ||
-        contextClues.includes('starting fee:') ||
-        messageClues.includes('brand') ||
-        messageClues.includes('integration') ||
-        messageClues.includes('partnership')) {
-      console.log('🎬 Production context detected - search needed');
+    // Only use quick patterns for OBVIOUS production contexts
+    if (messageClues.includes('synopsis:') && messageClues.includes('title:')) {
+      console.log('🎬 Clear production format detected');
       return true;
     }
     
-    // Check if message contains production info (title + synopsis pattern)
-    if (messageClues.includes('synopsis:') || 
-        (userMessage.includes('\n') && messageClues.includes('follows') && messageClues.includes('con'))) {
-      console.log('🎬 Production synopsis detected - search needed for brand matching');
-      return true;
-    }
-    
-    // Always search for context queries
-    if (messageClues.includes('email') || 
-        messageClues.includes('meeting') || 
-        messageClues.includes('discussed') ||
-        messageClues.includes('context') ||
-        messageClues.includes('insights') ||
-        messageClues.includes('low hanging fruit')) {
-      console.log('📧 Context query detected - search needed');
-      return true;
-    }
-    
-    // For very short messages that might just be a title, use AI
-    if (userMessage.length > 100 || userMessage.split('\n').length > 1) {
-      // Likely a production description
-      console.log('📝 Long message detected - likely production info');
-      return true;
-    }
-    
-    // For ambiguous cases, use AI to decide
+    // For everything else, let AI decide intelligently
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -1839,10 +1794,33 @@ async function shouldUseSearch(userMessage, conversationContext) {
         model: 'gpt-3.5-turbo',
         messages: [{
           role: 'system',
-          content: 'You are a query classifier. Determine if this query needs to search databases (HubSpot/Fireflies/Emails). Return ONLY "true" or "false". Return true ONLY for queries about: brands, companies, meetings, transcripts, productions, partnerships, contacts, emails, or business data. Return false for: general chat, greetings, thanks, simple questions, advice, or anything not related to searching business data.'
+          content: `You are a query classifier for a Hollywood production company's AI assistant. The assistant has access to:
+- HubSpot CRM (brands, companies, contacts)
+- Fireflies meeting transcripts
+- Email archives
+- Production/film/show databases
+
+Return "true" ONLY if the query is asking to:
+- Search for brands, companies, or partnerships
+- Look up meetings, calls, or transcripts
+- Find emails or messages
+- Match brands to a production/film/show
+- Access any business data from these systems
+
+Return "false" for:
+- General knowledge questions
+- Casual conversation
+- Questions about how things work
+- Advice or recommendations not requiring database searches
+- Any query that can be answered without searching internal systems
+
+Just return "true" or "false", nothing else.`
         }, {
           role: 'user',
-          content: `Query: "${userMessage}"\nContext: "${contextClues.slice(-500)}"\n\nDoes this query specifically need to search for business data, brands, meetings, emails, or partnerships?`
+          content: `Query: "${userMessage}"
+Recent context: "${contextClues.slice(-300)}"
+
+Should I search the internal databases for this?`
         }],
         temperature: 0,
         max_tokens: 10
@@ -1851,24 +1829,13 @@ async function shouldUseSearch(userMessage, conversationContext) {
     
     const data = await response.json();
     const result = data.choices[0].message.content.toLowerCase().trim();
-    console.log(`🤖 AI classified query "${userMessage.slice(0,50)}..." as needing search: ${result}`);
+    console.log(`🤖 AI decision for "${userMessage.slice(0,50)}...": ${result}`);
     return result === 'true';
     
   } catch (error) {
-    console.error('Error classifying query:', error);
-    // Fallback to keyword detection - only for specific business queries
-    const needsSearch = userMessage.toLowerCase().match(/(brand|meeting|transcript|discuss|call|conversation|fireflies|hubspot|deal|production|partner|contact|yesterday|today|last|recent|email|inbox|message|integration|partnership|insights|context|synopsis:|title:|film|show|series)/) ||
-           conversationContext?.toLowerCase().match(/(synopsis:|distributor:|cast:|starting fee:|production|film|show)/);
-    
-    // Double check it's not a general query
-    if (needsSearch && userMessage.length < 30) {
-      const generalWords = /^(what|how|when|where|why|can|could|should|would|is|are|do|does|did)[\s\w]*\?$/i;
-      if (generalWords.test(userMessage.trim())) {
-        return false;
-      }
-    }
-    
-    return needsSearch;
+    console.error('Error in AI classification:', error);
+    // Minimal fallback - only for explicit business terms
+    return messageClues.match(/\b(hubspot|fireflies|brand matching|meeting transcript|email archive)\b/i) !== null;
   }
 }
 
