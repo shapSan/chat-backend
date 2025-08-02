@@ -63,8 +63,8 @@ const hubspotAPI = {
     try {
       console.log('🔍 HubSpot searchBrands called with filters:', filters);
       
-      // Search for companies that are actual brands
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
+      // Search for BRANDS custom object (not companies)
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/brands/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -73,27 +73,12 @@ const hubspotAPI = {
         body: JSON.stringify({
           filterGroups: filters.filterGroups || [
             {
-              // Look for companies that have brand_name filled
-              filters: [
-                { 
-                  propertyName: 'brand_name', 
-                  operator: 'HAS_PROPERTY' 
-                }
-              ]
-            },
-            {
-              // OR companies that are customers/opportunities (likely brands)
-              filters: [
-                { 
-                  propertyName: 'lifecyclestage', 
-                  operator: 'IN',
-                  values: ['customer', 'opportunity', 'salesqualifiedlead']
-                }
-              ]
+              // Default: get all brands
+              filters: []
             }
           ],
           properties: [
-            // Essential fields only
+            // Brand-specific fields
             'name',
             'brand_name',
             'brand_category',
@@ -124,7 +109,7 @@ const hubspotAPI = {
       }
       
       const data = await response.json();
-      console.log(`✅ HubSpot search returned ${data.results?.length || 0} companies`);
+      console.log(`✅ HubSpot search returned ${data.results?.length || 0} brands`);
       
       return data;
     } catch (error) {
@@ -136,34 +121,31 @@ const hubspotAPI = {
 
   async searchProductions(filters = {}) {
     try {
-      console.log('🔍 HubSpot searchProductions called (searching Partnership Pipeline)');
+      console.log('🔍 HubSpot searchProductions called (searching Partnerships custom object)');
       
-      // Productions/Partnerships are in Partnership Pipeline (ID: 115484704)
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/deals/search`, {
+      // Search for PARTNERSHIPS custom object (not deals)
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/partnerships/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          filterGroups: [{
-            filters: [
-              { 
-                propertyName: 'pipeline', 
-                operator: 'EQ',
-                value: '115484704' // Partnership Pipeline ID
-              }
-            ]
-          }],
+          filterGroups: filters.filterGroups || [
+            {
+              // Default: get all partnerships
+              filters: []
+            }
+          ],
           properties: [
-            // Essential partnership fields
-            'dealname',
+            // Partnership-specific fields
+            'name',
             'partnership_name',  // Production title
             'synopsis',
             'content_type',
             'distributor',
             'brand_name',
-            'dealstage',
+            'partnership_stage',
             'amount',
             'hollywood_branded_fee',
             'closedate',
@@ -201,12 +183,12 @@ const hubspotAPI = {
     return this.searchProductions(filters);
   },
 
-  async getContactsForCompany(companyId) {
+  async getContactsForBrand(brandId) {
     try {
-      console.log('🔍 Getting contacts for company:', companyId);
+      console.log('🔍 Getting contacts for brand:', brandId);
       
       const response = await fetch(
-        `${this.baseUrl}/crm/v3/objects/companies/${companyId}/associations/contacts`,
+        `${this.baseUrl}/crm/v3/objects/brands/${brandId}/associations/contacts`,
         {
           headers: {
             'Authorization': `Bearer ${hubspotApiKey}`,
@@ -255,7 +237,7 @@ const hubspotAPI = {
     try {
       console.log(`🔍 Searching for specific brand: ${brandName}`);
       
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies/search`, {
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/brands/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -294,10 +276,25 @@ const hubspotAPI = {
       return null;
     }
   },
+  
   async testConnection() {
     try {
       console.log('🔍 Testing HubSpot API connection...');
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/companies?limit=1`, {
+      // First try to get custom object schemas to verify brands/partnerships exist
+      const schemasResponse = await fetch(`${this.baseUrl}/crm/v3/schemas`, {
+        headers: {
+          'Authorization': `Bearer ${hubspotApiKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (schemasResponse.ok) {
+        const schemas = await schemasResponse.json();
+        console.log('📋 Available custom objects:', schemas.results?.map(s => s.name).join(', '));
+      }
+      
+      // Try to fetch one brand
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/brands?limit=1`, {
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
           'Content-Type': 'application/json'
@@ -1309,7 +1306,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       if (command === 'contact' || command === 'contacts') {
         const brand = await hubspotAPI.searchSpecificBrand(brandName);
         if (brand) {
-          const contacts = await hubspotAPI.getContactsForCompany(brand.id);
+          const contacts = await hubspotAPI.getContactsForBrand(brand.id);
           return {
             organizedData: {
               slashCommand: true,
@@ -1340,7 +1337,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       
       if (brand) {
         mcpThinking.push('✅ Found brand in HubSpot');
-        const contacts = await hubspotAPI.getContactsForCompany(brand.id);
+        const contacts = await hubspotAPI.getContactsForBrand(brand.id);
         
         // Find specific mentions in meetings
         const brandMeetings = firefliesData.transcripts?.filter(t => {
@@ -2564,7 +2561,7 @@ export default async function handler(req, res) {
                 
                 const brand = claudeOrganizedData.brand.properties;
                 systemMessageContent += `\nBrand: ${brand.brand_name || brand.name}\n`;
-                systemMessageContent += `HubSpot: https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${claudeOrganizedData.brand.id}\n`;
+                systemMessageContent += `HubSpot: https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/brands/${claudeOrganizedData.brand.id}\n`;
                 
                 // Recent meetings
                 if (claudeOrganizedData.recentMeetings?.length > 0) {
