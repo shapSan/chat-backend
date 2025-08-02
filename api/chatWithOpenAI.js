@@ -1174,6 +1174,32 @@ function extractProductionContext(message) {
   return context;
 }
 
+// Helper function to extract genre from synopsis
+function extractGenreFromSynopsis(synopsis) {
+  if (!synopsis) return null;
+  
+  const synopsisLower = synopsis.toLowerCase();
+  const genrePatterns = {
+    action: /\b(action|fight|chase|explosion|battle|war|combat|hero|villain)\b/i,
+    comedy: /\b(comedy|funny|humor|hilarious|laugh|sitcom|comedic)\b/i,
+    drama: /\b(drama|emotional|family|relationship|struggle|journey)\b/i,
+    horror: /\b(horror|scary|terror|thriller|suspense|supernatural)\b/i,
+    documentary: /\b(documentary|docu|non-fiction|true story|real|factual)\b/i,
+    sports: /\b(sports|athletic|fitness|game|match|competition|championship)\b/i,
+    scifi: /\b(sci-fi|science fiction|future|space|alien|technology|dystopian)\b/i,
+    romance: /\b(romance|love|romantic|relationship|dating)\b/i,
+    crime: /\b(crime|detective|investigation|murder|police|criminal)\b/i
+  };
+  
+  for (const [genre, pattern] of Object.entries(genrePatterns)) {
+    if (pattern.test(synopsis)) {
+      return genre;
+    }
+  }
+  
+  return 'general';
+}
+
 // Helper function to check genre matching
 function checkGenreMatch(productionGenre, brandCategory) {
   const genreMap = {
@@ -1373,7 +1399,147 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       }
     }
     
-    // Check if asking for meeting/email context with intelligent patterns
+    // Check if asking about partnerships/productions
+    const partnershipPatterns = [
+      /(?:partnerships?|productions?|shows?|films?|movies?).*?(?:suitable|good|match|for|new|recent|added|available)/i,
+      /(?:what|which|show|list).*?(?:partnerships?|productions?|shows?|films?|movies?)/i,
+      /new partnership opportunities/i,
+      /partnership.*?opportunities/i
+    ];
+    
+    const isPartnershipQuery = partnershipPatterns.some(pattern => pattern.test(userMessage));
+    
+    if (isPartnershipQuery) {
+      mcpThinking.push('🎬 Searching for partnership/production opportunities...');
+      
+      // Search for partnerships
+      const partnershipsData = await hubspotAPI.searchProductions({ limit: 20 });
+      
+      if (partnershipsData.results?.length > 0) {
+        mcpThinking.push(`✅ Found ${partnershipsData.results.length} partnership opportunities`);
+        
+        // Format partnerships for display
+        const partnerships = partnershipsData.results.map(p => ({
+          id: p.id,
+          name: p.properties.partnership_name || p.properties.name,
+          synopsis: p.properties.synopsis,
+          contentType: p.properties.content_type,
+          distributor: p.properties.distributor,
+          stage: p.properties.partnership_stage,
+          fee: p.properties.hollywood_branded_fee,
+          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/partnerships/${p.id}`,
+          lastModified: p.properties.hs_lastmodifieddate
+        }));
+        
+        return {
+          organizedData: {
+            partnershipSearch: true,
+            partnerships: partnerships,
+            queryType: 'partnership_opportunities'
+          },
+          mcpThinking,
+          usedMCP: true
+        };
+      }
+    }
+    
+    // Check if this is a specific production/partnership being shared (Title + Synopsis pattern)
+    const productionMatch = userMessage.match(/Title:\s*([^\n]+)[\s\S]*Synopsis:\s*([\s\S]+)/i);
+    if (productionMatch) {
+      const title = productionMatch[1].trim();
+      const synopsis = productionMatch[2].trim();
+      
+      mcpThinking.push(`🎬 Production shared: "${title}"`);
+      mcpThinking.push('🔍 Searching for this specific partnership in HubSpot...');
+      
+      // Search for this specific partnership
+      const partnershipSearch = await hubspotAPI.searchProductions({
+        filterGroups: [{
+          filters: [{
+            propertyName: 'partnership_name',
+            operator: 'CONTAINS_TOKEN',
+            value: title
+          }]
+        }],
+        limit: 5
+      });
+      
+      let partnershipDetails = null;
+      if (partnershipSearch.results?.length > 0) {
+        partnershipDetails = partnershipSearch.results[0];
+        mcpThinking.push('✅ Found partnership in HubSpot');
+      } else {
+        mcpThinking.push('⚠️ Partnership not found in HubSpot - will use provided details');
+      }
+      
+      // Search for meetings and emails about this production
+      const [firefliesData, o365Data] = await Promise.all([
+        firefliesApiKey ? searchFireflies(title, { limit: 10 }) : { transcripts: [] },
+        msftClientId ? o365API.searchEmails(title, { days: 60 }) : []
+      ]);
+      
+      if (firefliesData.transcripts?.length > 0) {
+        mcpThinking.push(`✅ Found ${firefliesData.transcripts.length} meetings about this production`);
+      }
+      if (o365Data?.length > 0) {
+        mcpThinking.push(`✅ Found ${o365Data.length} emails about this production`);
+      }
+      
+      // Now search for suitable brands based on the production context
+      mcpThinking.push('🎯 Finding suitable brands for this production...');
+      
+      const hubspotBrands = await hubspotAPI.searchBrands({ limit: 50 });
+      
+      // Enhanced narrowing that considers the production genre/type
+      const productionContext = {
+        title: title,
+        synopsis: synopsis,
+        genre: extractGenreFromSynopsis(synopsis),
+        contentType: partnershipDetails?.properties.content_type,
+        distributor: partnershipDetails?.properties.distributor
+      };
+      
+      const { topBrands } = await narrowWithIntelligentTags(
+        hubspotBrands.results || [],
+        firefliesData.transcripts || [],
+        o365Data || [],
+        `${userMessage}\nProduction Context: ${JSON.stringify(productionContext)}`
+      );
+      
+      return {
+        organizedData: {
+          productionShared: true,
+          production: {
+            title: title,
+            synopsis: synopsis,
+            hubspotDetails: partnershipDetails,
+            context: productionContext
+          },
+          topBrands: topBrands.slice(0, 15),
+          brandSuggestions: topBrands.slice(0, 15).map(brand => ({
+            id: brand.id,
+            name: brand.name,
+            score: brand.relevanceScore,
+            tag: brand.tags[0] || 'Potential Match',
+            tags: brand.tags,
+            reason: brand.reason,
+            budget: brand.budget,
+            hasAgency: brand.hasPartner,
+            agencyName: brand.partnerAgency,
+            hubspotUrl: brand.hubspotUrl,
+            meetingUrl: brand.meetingContext?.url || null,
+            meetingTitle: brand.meetingContext?.title || null,
+            emailSubject: brand.emailContext?.subject || null
+          })),
+          relatedMeetings: firefliesData.transcripts?.slice(0, 5) || [],
+          relatedEmails: o365Data?.slice(0, 5) || [],
+          currentProduction: title,
+          productionContext: productionContext
+        },
+        mcpThinking,
+        usedMCP: true
+      };
+    }
     const contextPatterns = [
       /(?:meetings?|calls?|discussions?).*?(?:with|about|regarding)?\s*(?:brands?|partners?|companies)/i,
       /(?:valuable|important|key|recent|latest).*?(?:meetings?|calls?|emails?)/i,
@@ -2386,8 +2552,85 @@ export default async function handler(req, res) {
             
             // Add Claude's organized data if available
             if (claudeOrganizedData) {
+              // Handle partnership search results
+              if (claudeOrganizedData.partnershipSearch) {
+                systemMessageContent += `\n\n**PARTNERSHIP/PRODUCTION OPPORTUNITIES:**\n`;
+                
+                if (claudeOrganizedData.partnerships?.length > 0) {
+                  systemMessageContent += `\nFound ${claudeOrganizedData.partnerships.length} partnership opportunities:\n`;
+                  claudeOrganizedData.partnerships.forEach((p, i) => {
+                    systemMessageContent += `\n${i + 1}. ${p.name}\n`;
+                    if (p.synopsis) {
+                      systemMessageContent += `   Synopsis: ${p.synopsis.slice(0, 150)}...\n`;
+                    }
+                    if (p.contentType) {
+                      systemMessageContent += `   Type: ${p.contentType}\n`;
+                    }
+                    if (p.distributor) {
+                      systemMessageContent += `   Distributor: ${p.distributor}\n`;
+                    }
+                    if (p.stage) {
+                      systemMessageContent += `   Stage: ${p.stage}\n`;
+                    }
+                    if (p.fee) {
+                      systemMessageContent += `   Fee: ${p.fee}\n`;
+                    }
+                    systemMessageContent += `   HubSpot: ${p.hubspotUrl}\n`;
+                  });
+                }
+                
+                systemMessageContent += `\n**INSTRUCTIONS:**\n`;
+                systemMessageContent += `- Present these as exciting opportunities\n`;
+                systemMessageContent += `- Highlight any that match the user's criteria\n`;
+                systemMessageContent += `- Include the HubSpot links for easy access\n`;
+              }
+              // Handle production shared with brand matching
+              else if (claudeOrganizedData.productionShared) {
+                systemMessageContent += `\n\n**PRODUCTION ANALYSIS:**\n`;
+                systemMessageContent += `Title: ${claudeOrganizedData.production.title}\n`;
+                systemMessageContent += `Synopsis: ${claudeOrganizedData.production.synopsis}\n`;
+                
+                if (claudeOrganizedData.production.hubspotDetails) {
+                  const details = claudeOrganizedData.production.hubspotDetails.properties;
+                  systemMessageContent += `\n**HubSpot Details:**\n`;
+                  if (details.content_type) systemMessageContent += `Type: ${details.content_type}\n`;
+                  if (details.distributor) systemMessageContent += `Distributor: ${details.distributor}\n`;
+                  if (details.partnership_stage) systemMessageContent += `Stage: ${details.partnership_stage}\n`;
+                }
+                
+                if (claudeOrganizedData.relatedMeetings?.length > 0) {
+                  systemMessageContent += `\n**Related Meetings:**\n`;
+                  claudeOrganizedData.relatedMeetings.forEach(m => {
+                    systemMessageContent += `- "${m.title}" on ${m.dateString}: ${m.transcript_url}\n`;
+                  });
+                }
+                
+                systemMessageContent += `\n**RECOMMENDED BRANDS FOR THIS PRODUCTION:**\n`;
+                if (claudeOrganizedData.topBrands?.length > 0) {
+                  claudeOrganizedData.topBrands.forEach((brand, index) => {
+                    systemMessageContent += `\n${index + 1}. ${brand.name}\n`;
+                    systemMessageContent += `   Tags: ${brand.tags.join(', ')}\n`;
+                    systemMessageContent += `   Why: ${brand.reason}\n`;
+                    if (brand.budget !== 'TBD') {
+                      systemMessageContent += `   Budget: ${brand.budget}\n`;
+                    }
+                    if (brand.hasPartner) {
+                      systemMessageContent += `   Agency: ${brand.partnerAgency}\n`;
+                    }
+                    if (brand.hubspotUrl) {
+                      systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
+                    }
+                  });
+                  
+                  systemMessageContent += `\n**INSTRUCTIONS:**\n`;
+                  systemMessageContent += `- Explain why each brand is a good fit for this specific production\n`;
+                  systemMessageContent += `- Reference the genre (${claudeOrganizedData.production.context.genre}) when explaining matches\n`;
+                  systemMessageContent += `- Highlight brands with recent activity or meetings\n`;
+                  systemMessageContent += `- Make it clear these are data-driven recommendations\n`;
+                }
+              }
               // Handle different query intents naturally
-              if (claudeOrganizedData.queryIntent) {
+              else if (claudeOrganizedData.queryIntent) {
                 const intent = claudeOrganizedData.queryIntent;
                 
                 switch (intent.type) {
