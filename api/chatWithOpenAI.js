@@ -1859,15 +1859,8 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
   
-  // Check if client wants SSE
-  const wantsSSE = req.headers.accept === 'text/event-stream';
-  if (wantsSSE) {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
-    });
-  }
+  // Check if client wants streaming - safely check req.body
+  const wantsStream = req.headers.accept === 'text/event-stream' || (req.body && req.body.stream === true);
   
   if (req.method === 'POST') {
     try {
@@ -2237,14 +2230,10 @@ export default async function handler(req, res) {
       let mcpStartTime = Date.now();
       
       if (shouldSearchDatabases) {
-        const mcpLine1 = {
+        mcpRawOutput.push({
           text: '🎬 Production context detected - search needed',
           timestamp: Date.now() - mcpStartTime
-        };
-        mcpRawOutput.push(mcpLine1);
-        if (wantsSSE) {
-          res.write(`data: ${JSON.stringify({ mcpUpdate: mcpLine1 })}\n\n`);
-        }
+        });
       }
       
       console.log('🔍 Search detection:', { 
@@ -2256,14 +2245,10 @@ export default async function handler(req, res) {
       });
       
       if (shouldSearchDatabases) {
-        const mcpLine2 = {
+        mcpRawOutput.push({
           text: `🔍 Brand matching detection: ${shouldSearchDatabases ? 'YES' : 'NO'}`,
           timestamp: Date.now() - mcpStartTime
-        };
-        mcpRawOutput.push(mcpLine2);
-        if (wantsSSE) {
-          res.write(`data: ${JSON.stringify({ mcpUpdate: mcpLine2 })}\n\n`);
-        }
+        });
       }
       
       console.log('🔍 Brand matching detection:', { shouldSearchDatabases, userMessage: userMessage?.slice(0, 50) });
@@ -2371,37 +2356,19 @@ export default async function handler(req, res) {
               // Add MCP thinking steps with timestamps for live feeling
               if (claudeResult.mcpThinking && Array.isArray(claudeResult.mcpThinking)) {
                 claudeResult.mcpThinking.forEach((step, index) => {
-                  const mcpLine = {
+                  mcpRawOutput.push({
                     text: step,
                     timestamp: Date.now() - mcpStartTime + (index * 200) // 200ms between steps for natural pacing
-                  };
-                  mcpRawOutput.push(mcpLine);
-                  if (wantsSSE) {
-                    res.write(`data: ${JSON.stringify({ mcpUpdate: mcpLine })}\n\n`);
-                  }
+                  });
                 });
               }
               
               usedMCP = true;
               console.log('✅ Claude MCP successfully gathered and organized data');
-              const successLine = {
+              mcpRawOutput.push({
                 text: '✅ Claude MCP successfully gathered and organized data',
                 timestamp: Date.now() - mcpStartTime
-              };
-              mcpRawOutput.push(successLine);
-              if (wantsSSE) {
-                res.write(`data: ${JSON.stringify({ mcpUpdate: successLine })}\n\n`);
-              }
-            } else {
-              console.log('⚠️ Claude MCP failed or returned null, using standard OpenAI');
-              const warningLine = {
-                text: '⚠️ Claude MCP failed - using standard OpenAI',
-                timestamp: Date.now() - mcpStartTime
-              };
-              mcpRawOutput.push(warningLine);
-              if (wantsSSE) {
-                res.write(`data: ${JSON.stringify({ mcpUpdate: warningLine })}\n\n`);
-              }
+              });
             } else {
               console.log('⚠️ Claude MCP failed or returned null, using standard OpenAI');
               mcpRawOutput.push({
@@ -2421,14 +2388,10 @@ export default async function handler(req, res) {
           // Use OpenAI to generate the final response
           if (!aiReply) {
             console.log('📝 Using OpenAI for response generation');
-            const openAILine = {
+            mcpRawOutput.push({
               text: '📝 Using OpenAI for response generation',
               timestamp: Date.now() - mcpStartTime
-            };
-            mcpRawOutput.push(openAILine);
-            if (wantsSSE) {
-              res.write(`data: ${JSON.stringify({ mcpUpdate: openAILine })}\n\n`);
-            }
+            });
             
             // Build enhanced system message with Claude's organized data
             let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
@@ -2932,13 +2895,7 @@ export default async function handler(req, res) {
               response.brandSuggestions = claudeOrganizedData.brandSuggestions;
             }
             
-            // Send final response based on client preference
-            if (wantsSSE) {
-              res.write(`data: ${JSON.stringify({ final: response })}\n\n`);
-              res.end();
-            } else {
-              return res.json(response);
-            }
+            return res.json(response);
           } else {
             return res.status(500).json({ error: 'No text reply received.' });
           }
@@ -2946,9 +2903,6 @@ export default async function handler(req, res) {
           console.error('Error fetching response:', error);
           return res.status(500).json({ error: 'Error fetching response.', details: error.message });
         }
-      } else {
-        // Neither audioData nor userMessage provided
-        return res.status(400).json({ error: 'Missing required fields: userMessage or audioData' });
       }
     } catch (error) {
       console.error('Error in handler:', error);
