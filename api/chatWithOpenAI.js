@@ -1188,23 +1188,45 @@ function extractProductionContext(message) {
     targetDemo: null
   };
   
-  // Extract title
-  const titleMatch = message.match(/(?:Title|Production|Film|Show|Project):\s*([^\n]+)/i);
-  if (titleMatch) context.title = titleMatch[1].trim();
+  // Extract title - look for various patterns
+  const titlePatterns = [
+    /Title:\s*([^\n]+)/i,
+    /Production:\s*([^\n]+)/i,
+    /Film:\s*([^\n]+)/i,
+    /Show:\s*([^\n]+)/i,
+    /Project:\s*([^\n]+)/i,
+    /^([A-Z][^:\n]+)[\n\s]+Synopsis:/im, // Title followed by Synopsis
+    /for\s+["']([^"']+)["']/i, // "for 'Title'"
+    /(?:the\s+production\s+)?["']([^"']+)["']/i // Production name in quotes
+  ];
   
-  // Extract genre
+  for (const pattern of titlePatterns) {
+    const match = message.match(pattern);
+    if (match && match[1]) {
+      context.title = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract genre from synopsis or content
+  const synopsisMatch = message.match(/Synopsis:\s*([\s\S]+?)(?:\n\n|$)/i);
+  const synopsisText = synopsisMatch ? synopsisMatch[1] : message;
+  
   const genrePatterns = {
-    action: /\b(action|fight|chase|explosion|battle|war|combat)\b/i,
-    comedy: /\b(comedy|funny|humor|hilarious|laugh|sitcom)\b/i,
-    drama: /\b(drama|emotional|family|relationship)\b/i,
-    horror: /\b(horror|scary|terror|thriller)\b/i,
-    documentary: /\b(documentary|docu|non-fiction|true story)\b/i,
-    sports: /\b(sports|athletic|fitness|game|match|competition)\b/i,
-    scifi: /\b(sci-fi|science fiction|future|space|alien)\b/i
+    action: /\b(action|fight|chase|explosion|battle|war|combat|hero|villain)\b/i,
+    comedy: /\b(comedy|funny|humor|hilarious|laugh|sitcom|comedic)\b/i,
+    drama: /\b(drama|emotional|family|relationship|struggle|journey)\b/i,
+    horror: /\b(horror|scary|terror|thriller|suspense|supernatural)\b/i,
+    documentary: /\b(documentary|docu|non-fiction|true story|real|factual)\b/i,
+    sports: /\b(sports|athletic|fitness|game|match|competition|championship)\b/i,
+    scifi: /\b(sci-fi|science fiction|future|space|alien|technology|dystopian)\b/i,
+    romance: /\b(romance|love|romantic|relationship|dating)\b/i,
+    crime: /\b(crime|detective|investigation|murder|police|criminal|con\s*artist|con\s*woman|heist)\b/i,
+    thriller: /\b(thriller|suspense|psychological|mystery|twist)\b/i
   };
   
   for (const [genre, pattern] of Object.entries(genrePatterns)) {
-    if (pattern.test(message)) {
+    if (pattern.test(synopsisText)) {
       context.genre = genre;
       break;
     }
@@ -1216,6 +1238,13 @@ function extractProductionContext(message) {
     context.budget = budgetMatch[0];
   }
   
+  // Extract distributor
+  const distributorMatch = message.match(/Distributor:\s*([^\n]+)/i);
+  if (distributorMatch) {
+    context.distributor = distributorMatch[1].trim();
+  }
+  
+  console.log('📝 Extracted production context:', context);
   return context;
 }
 
@@ -1896,23 +1925,38 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     // Default: Brand matching query
     mcpThinking.push('🔍 Starting brand partnership search...');
     
-    // Extract search parameters
-    const productionContext = extractProductionContext(userMessage + ' ' + (conversationContext || ''));
+    // Extract search parameters from both message and context
+    const fullContext = (userMessage + ' ' + (conversationContext || ''));
+    const productionContext = extractProductionContext(fullContext);
     
     if (productionContext.genre) {
       mcpThinking.push(`🎯 Focusing on ${productionContext.genre} genre`);
     }
     
-    // Parallel searches - limit results to manage AI context
+    // Parallel searches - use production title for better results
+    const searchKeywords = [];
+    if (currentProduction) {
+      // For production searches, use key words from the title
+      const titleWords = currentProduction.split(' ').filter(w => w.length > 3);
+      searchKeywords.push(...titleWords);
+    }
+    if (productionContext.genre) {
+      searchKeywords.push(productionContext.genre);
+    }
+    
+    // Default search terms if nothing specific
+    if (searchKeywords.length === 0) {
+      searchKeywords.push('brand', 'partnership');
+    }
+    
     const [hubspotData, firefliesData, o365Data] = await Promise.all([
       hubspotApiKey ? searchHubSpot(userMessage, projectId, 30) : { brands: [], productions: [] },
       firefliesApiKey ? searchFireflies(
-        // Search for production OR genre OR just general partnership discussions
-        currentProduction || productionContext.genre || 'partnership brand integration', 
-        { limit: 10 } // Get more meetings to find brand mentions
+        searchKeywords.slice(0, 2).join(' '), // Use first 2 keywords
+        { limit: 10 }
       ) : { transcripts: [] },
       msftClientId ? o365API.searchEmails(
-        currentProduction || productionContext.genre || 'brand', 
+        currentProduction || searchKeywords[0] || 'brand', 
         { days: 30 }
       ) : []
     ]);
