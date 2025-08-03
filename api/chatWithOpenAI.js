@@ -1219,6 +1219,194 @@ function extractProductionContext(message) {
   return context;
 }
 
+// Helper function to analyze brand insights from all data
+function analyzeBrandInsights(brandDetails, meetings, emails) {
+  const insights = {
+    engagementLevel: 'Unknown',
+    keyTopics: [],
+    decisionMakers: [],
+    painPoints: [],
+    opportunities: [],
+    lastTouchpoint: null,
+    sentimentTrend: 'Neutral'
+  };
+  
+  // Analyze engagement level
+  const recentMeetings = meetings.filter(m => {
+    const meetingDate = new Date(m.date);
+    const daysSince = (new Date() - meetingDate) / (1000 * 60 * 60 * 24);
+    return daysSince < 90;
+  }).length;
+  
+  const recentEmails = emails.filter(e => {
+    const emailDate = new Date(e.date);
+    const daysSince = (new Date() - emailDate) / (1000 * 60 * 60 * 24);
+    return daysSince < 30;
+  }).length;
+  
+  if (recentMeetings >= 3 || recentEmails >= 5) {
+    insights.engagementLevel = 'High';
+  } else if (recentMeetings >= 1 || recentEmails >= 2) {
+    insights.engagementLevel = 'Medium';
+  } else {
+    insights.engagementLevel = 'Low';
+  }
+  
+  // Extract key topics from meetings
+  const allTopics = [];
+  meetings.forEach(m => {
+    if (m.keywords) allTopics.push(...m.keywords);
+    if (m.topics) {
+      const topics = m.topics.toLowerCase();
+      if (topics.includes('budget')) insights.keyTopics.push('Budget Discussions');
+      if (topics.includes('integration')) insights.keyTopics.push('Integration Planning');
+      if (topics.includes('timeline')) insights.keyTopics.push('Timeline Alignment');
+      if (topics.includes('creative')) insights.keyTopics.push('Creative Direction');
+    }
+  });
+  
+  // Identify decision makers from email senders
+  const emailSenders = {};
+  emails.forEach(e => {
+    if (e.from) {
+      emailSenders[e.from] = (emailSenders[e.from] || 0) + 1;
+    }
+  });
+  
+  insights.decisionMakers = Object.entries(emailSenders)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([name, count]) => ({ name, interactions: count }));
+  
+  // Extract pain points and opportunities from meeting summaries
+  meetings.forEach(m => {
+    const summary = (m.summary || '').toLowerCase();
+    
+    // Pain points
+    if (summary.includes('challenge') || summary.includes('concern')) {
+      insights.painPoints.push('Implementation challenges discussed');
+    }
+    if (summary.includes('budget') && summary.includes('constraint')) {
+      insights.painPoints.push('Budget constraints mentioned');
+    }
+    
+    // Opportunities
+    if (summary.includes('interested') || summary.includes('excited')) {
+      insights.opportunities.push('High interest expressed');
+    }
+    if (m.actionItems && m.actionItems.length > 0) {
+      insights.opportunities.push(`${m.actionItems.length} action items pending`);
+    }
+  });
+  
+  // Find last touchpoint
+  const allTouchpoints = [
+    ...meetings.map(m => ({ type: 'meeting', date: new Date(m.date), title: m.title })),
+    ...emails.map(e => ({ type: 'email', date: new Date(e.date), title: e.subject }))
+  ].sort((a, b) => b.date - a.date);
+  
+  if (allTouchpoints.length > 0) {
+    insights.lastTouchpoint = allTouchpoints[0];
+  }
+  
+  // Analyze sentiment trend
+  if (insights.opportunities.length > insights.painPoints.length) {
+    insights.sentimentTrend = 'Positive';
+  } else if (insights.painPoints.length > insights.opportunities.length) {
+    insights.sentimentTrend = 'Cautious';
+  }
+  
+  return insights;
+}
+
+// Helper function to generate integration ideas
+function generateIntegrationIdeas(brand, insights, currentProduction) {
+  const ideas = [];
+  
+  // Base ideas on brand category
+  const category = (brand.category || '').toLowerCase();
+  
+  if (category.includes('auto') || category.includes('car')) {
+    ideas.push({
+      type: 'Hero Vehicle',
+      description: 'Feature brand vehicle as character\'s primary transportation',
+      rationale: 'Natural integration that adds production value'
+    });
+    ideas.push({
+      type: 'Chase Sequence',
+      description: 'Showcase vehicle performance in action sequence',
+      rationale: 'Highlights product capabilities authentically'
+    });
+  }
+  
+  if (category.includes('tech') || category.includes('electronics')) {
+    ideas.push({
+      type: 'Character Tool',
+      description: 'Integrate as essential character technology',
+      rationale: 'Shows product in realistic use cases'
+    });
+    ideas.push({
+      type: 'Plot Device',
+      description: 'Technology drives key story moments',
+      rationale: 'Deep integration increases brand recall'
+    });
+  }
+  
+  if (category.includes('fashion') || category.includes('apparel')) {
+    ideas.push({
+      type: 'Wardrobe Integration',
+      description: 'Outfit key characters in brand apparel',
+      rationale: 'Visual presence throughout production'
+    });
+    ideas.push({
+      type: 'Style Transformation',
+      description: 'Use fashion to show character development',
+      rationale: 'Emotional connection with brand'
+    });
+  }
+  
+  if (category.includes('food') || category.includes('beverage')) {
+    ideas.push({
+      type: 'Social Moments',
+      description: 'Feature in character bonding scenes',
+      rationale: 'Associates brand with positive emotions'
+    });
+    ideas.push({
+      type: 'Daily Ritual',
+      description: 'Part of character\'s routine',
+      rationale: 'Shows habitual product use'
+    });
+  }
+  
+  // Add ideas based on insights
+  if (insights.engagementLevel === 'High') {
+    ideas.push({
+      type: 'Custom Integration',
+      description: 'Co-develop unique brand moment for production',
+      rationale: 'High engagement allows for creative collaboration'
+    });
+  }
+  
+  if (brand.budget && parseFloat(brand.budget) > 10) {
+    ideas.push({
+      type: 'Multi-Scene Presence',
+      description: 'Strategic placement across multiple episodes/scenes',
+      rationale: 'Budget supports extended integration'
+    });
+  }
+  
+  // Production-specific ideas
+  if (currentProduction) {
+    ideas.push({
+      type: 'Themed Integration',
+      description: `Align brand with ${currentProduction} themes`,
+      rationale: 'Leverages production\'s unique narrative'
+    });
+  }
+  
+  return ideas.slice(0, 5); // Return top 5 ideas
+}
+
 // Helper function to check vibe matching
 function checkVibeMatch(productionContext, brand) {
   // Match brand vibe to production tone
@@ -2634,8 +2822,102 @@ export default async function handler(req, res) {
             
             // Add Claude's organized data if available
             if (claudeOrganizedData) {
+              // Handle pitch creation requests
+              if (claudeOrganizedData.pitchRequest) {
+                systemMessageContent += `\n\n**BRAND PITCH ANALYSIS:**\n`;
+                
+                if (claudeOrganizedData.brands?.length > 0) {
+                  claudeOrganizedData.brands.forEach((brandData, index) => {
+                    systemMessageContent += `\n\n## ${index + 1}. ${brandData.brand.name}\n`;
+                    systemMessageContent += `Category: ${brandData.brand.category || 'Not specified'}\n`;
+                    systemMessageContent += `Status: ${brandData.brand.clientStatus || 'Unknown'}\n`;
+                    if (brandData.brand.budget) {
+                      systemMessageContent += `Budget: ${brandData.brand.budget}\n`;
+                    }
+                    if (brandData.brand.agencyPartner) {
+                      systemMessageContent += `Agency: ${brandData.brand.agencyPartner}\n`;
+                    }
+                    systemMessageContent += `HubSpot: ${brandData.brand.hubspotUrl}\n`;
+                    
+                    // Insights section
+                    systemMessageContent += `\n### BRAND INSIGHTS:\n`;
+                    systemMessageContent += `Engagement Level: ${brandData.insights.engagementLevel}\n`;
+                    if (brandData.insights.lastTouchpoint) {
+                      const daysSince = Math.floor((new Date() - brandData.insights.lastTouchpoint.date) / (1000 * 60 * 60 * 24));
+                      systemMessageContent += `Last Contact: ${brandData.insights.lastTouchpoint.type} "${brandData.insights.lastTouchpoint.title}" (${daysSince} days ago)\n`;
+                    }
+                    systemMessageContent += `Sentiment: ${brandData.insights.sentimentTrend}\n`;
+                    
+                    if (brandData.insights.keyTopics.length > 0) {
+                      systemMessageContent += `Key Discussion Topics: ${brandData.insights.keyTopics.join(', ')}\n`;
+                    }
+                    
+                    if (brandData.insights.decisionMakers.length > 0) {
+                      systemMessageContent += `\nKey Contacts:\n`;
+                      brandData.insights.decisionMakers.forEach(dm => {
+                        systemMessageContent += `- ${dm.name} (${dm.interactions} interactions)\n`;
+                      });
+                    }
+                    
+                    // Recent activity
+                    if (brandData.meetings.length > 0) {
+                      systemMessageContent += `\nRecent Meetings:\n`;
+                      brandData.meetings.slice(0, 3).forEach(m => {
+                        systemMessageContent += `- "${m.title}" on ${m.date}\n`;
+                        if (m.actionItems && m.actionItems.length > 0) {
+                          systemMessageContent += `  Action: ${m.actionItems[0]}\n`;
+                        }
+                      });
+                    }
+                    
+                    if (brandData.emails.length > 0) {
+                      systemMessageContent += `\nRecent Emails:\n`;
+                      brandData.emails.slice(0, 3).forEach(e => {
+                        systemMessageContent += `- "${e.subject}" from ${e.from}\n`;
+                      });
+                    }
+                    
+                    // Integration ideas
+                    systemMessageContent += `\n### INTEGRATION IDEAS:\n`;
+                    brandData.integrationIdeas.forEach((idea, i) => {
+                      systemMessageContent += `\n${i + 1}. **${idea.type}**\n`;
+                      systemMessageContent += `   ${idea.description}\n`;
+                      systemMessageContent += `   Why it works: ${idea.rationale}\n`;
+                    });
+                    
+                    // Opportunities and challenges
+                    if (brandData.insights.opportunities.length > 0) {
+                      systemMessageContent += `\n### OPPORTUNITIES:\n`;
+                      brandData.insights.opportunities.forEach(opp => {
+                        systemMessageContent += `- ${opp}\n`;
+                      });
+                    }
+                    
+                    if (brandData.insights.painPoints.length > 0) {
+                      systemMessageContent += `\n### CONSIDERATIONS:\n`;
+                      brandData.insights.painPoints.forEach(pain => {
+                        systemMessageContent += `- ${pain}\n`;
+                      });
+                    }
+                  });
+                } else {
+                  systemMessageContent += `\nNo brands found matching: ${claudeOrganizedData.requestedBrands.join(', ')}\n`;
+                }
+                
+                systemMessageContent += `\n\n**INSTRUCTIONS FOR PITCH CREATION:**\n`;
+                systemMessageContent += `- Create compelling, personalized pitches for each brand\n`;
+                systemMessageContent += `- Reference specific meetings and conversations to show continuity\n`;
+                systemMessageContent += `- Address any pain points mentioned in past discussions\n`;
+                systemMessageContent += `- Emphasize the integration ideas that best fit their brand goals\n`;
+                systemMessageContent += `- Include next steps based on their engagement level\n`;
+                systemMessageContent += `- Make each pitch feel like a natural continuation of your relationship\n`;
+                
+                if (claudeOrganizedData.currentProduction) {
+                  systemMessageContent += `- Tie all pitches to the production: ${claudeOrganizedData.currentProduction}\n`;
+                }
+              }
               // Handle partnership search results
-              if (claudeOrganizedData.partnershipSearch) {
+              else if (claudeOrganizedData.partnershipSearch) {
                 systemMessageContent += `\n\n**PARTNERSHIP/PRODUCTION OPPORTUNITIES:**\n`;
                 
                 if (claudeOrganizedData.partnerships?.length > 0) {
