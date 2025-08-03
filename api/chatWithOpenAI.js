@@ -1219,6 +1219,43 @@ function extractProductionContext(message) {
   return context;
 }
 
+// Helper function to check vibe matching
+function checkVibeMatch(productionContext, brand) {
+  // Match brand vibe to production tone
+  const brandName = brand.name.toLowerCase();
+  const category = brand.category.toLowerCase();
+  
+  // Edgy/Cool brands for certain genres
+  if (productionContext.genre === 'action' || productionContext.genre === 'scifi') {
+    if (brandName.includes('tesla') || brandName.includes('red bull') || 
+        category.includes('tech') || category.includes('gaming')) {
+      return true;
+    }
+  }
+  
+  // Lifestyle brands for drama
+  if (productionContext.genre === 'drama' || productionContext.genre === 'romance') {
+    if (category.includes('beauty') || category.includes('fashion') || 
+        category.includes('luxury') || category.includes('home')) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Helper function to check if category is emerging
+function isEmergingCategory(category) {
+  const emergingCategories = [
+    'crypto', 'blockchain', 'nft', 'metaverse', 'ai', 'sustainability',
+    'plant-based', 'wellness', 'mental health', 'telehealth', 'fintech',
+    'edtech', 'creator economy', 'subscription', 'd2c', 'dtc'
+  ];
+  
+  const categoryLower = category.toLowerCase();
+  return emergingCategories.some(ec => categoryLower.includes(ec));
+}
+
 // Helper function to extract genre from synopsis
 function extractGenreFromSynopsis(synopsis) {
   if (!synopsis) return null;
