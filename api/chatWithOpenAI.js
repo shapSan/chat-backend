@@ -847,146 +847,137 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         return false;
       });
       
-      if (brand.clientStatus === 'Active' || brand.clientStatus === 'Customer') {
-        tags.push('Hot Lead');
-        score += 40;
-        primaryReason = 'Active client ready to activate';
-      } else if (brand.clientStatus === 'Opportunity' || brand.clientType === 'Warm Lead') {
-        tags.push('Active Opportunity');
-        score += 35;
-        primaryReason = 'Active opportunity in pipeline';
-      } else if (brand.clientStatus === 'Prospect' || brand.clientType === 'Lead') {
-        tags.push('Qualified Lead');
-        score += 25;
-        primaryReason = 'Qualified brand partner';
-      }
-      
-      if (mentionedInFireflies && meetingMention) {
-        tags.push('Recent Meeting');
-        score += 30;
-        primaryReason = `Discussed in "${meetingMention.title}" on ${meetingMention.date}`;
-        if (meetingMention.actionItems) {
-          primaryReason += ` - Action: ${meetingMention.actionItems}`;
-        }
-        brand.meetingContext = meetingMention;
-      }
-      
-      if (mentionedInEmails && emailMention) {
-        tags.push('Email Thread');
-        score += 20;
-        if (!primaryReason || primaryReason.includes('lead')) {
-          primaryReason = `Recent email: "${emailMention.subject}" from ${emailMention.from}`;
-        }
-        brand.emailContext = emailMention;
-      }
-      
-      if (brand.hasPartner) {
-        tags.push('Agency Ready');
-        score += 15;
-        if (!primaryReason) {
-          primaryReason = `Ready with agency partner: ${brand.partnerAgency}`;
+      // Priority 1: Creative/Genre Match (highest weight)
+      if (productionContext.genre && brand.category) {
+        const genreMatch = checkGenreMatch(productionContext.genre, brand.category);
+        if (genreMatch) {
+          tags.push('Creative Match');
+          score += 40; // Highest weight
+          primaryReason = `Perfect creative fit: ${brand.category} aligns with ${productionContext.genre} genre`;
         }
       }
       
+      // Check for creative alignment from meetings/emails
+      if (meetingMention && (meetingMention.context.includes('creative') || meetingMention.context.includes('integration'))) {
+        if (!tags.includes('Creative Match')) {
+          tags.push('Creative Match');
+          score += 35;
+        }
+        primaryReason = `Creative synergy discussed in "${meetingMention.title}" - ${meetingMention.context}`;
+      }
+      
+      // Priority 2: Big Budget
       if (brand.budget && brand.budget !== 'TBD') {
         const budgetValue = parseFloat(brand.budget.match(/\d+\.?\d*/)?.[0] || 0);
         if (budgetValue > 5) {
           tags.push('Big Budget');
-          score += 25;
-          if (!primaryReason || primaryReason.includes('lead')) {
-            primaryReason = `${brand.budget} media budget available`;
-          }
-        }
-      }
-      
-      if (productionContext.genre && brand.category) {
-        const genreMatch = checkGenreMatch(productionContext.genre, brand.category);
-        if (genreMatch) {
-          tags.push('Genre Match');
-          score += 20;
+          score += 30;
           if (!primaryReason) {
-            primaryReason = `Perfect ${productionContext.genre} genre fit - ${brand.category} brand`;
+            primaryReason = `${brand.budget} media spend available for integrations`;
           }
         }
       }
       
+      // Priority 3: Current Client
+      if (brand.clientStatus === 'Active' || brand.clientStatus === 'Customer') {
+        tags.push('Current Client');
+        score += 35;
+        if (!primaryReason) {
+          primaryReason = 'Active client ready for new integration';
+        }
+      }
+      
+      // Priority 4: This Week Activity (Email or Meeting)
       if (brand.lastActivity) {
         const lastActivityDate = new Date(brand.lastActivity);
         const daysSinceActivity = (new Date() - lastActivityDate) / (1000 * 60 * 60 * 24);
         
         if (daysSinceActivity < 7) {
-          tags.push('This Week');
-          score += 20;
-          if (!primaryReason || primaryReason.includes('lead')) {
-            primaryReason = `Contact this week - momentum is high`;
+          if (mentionedInEmails && emailMention) {
+            tags.push('This Week Email');
+            score += 25;
+            if (!primaryReason) {
+              primaryReason = `Fresh momentum: "${emailMention.subject}" from ${emailMention.from}`;
+            }
           }
-        } else if (daysSinceActivity < 30) {
-          tags.push('Recent Activity');
-          score += 10;
+          
+          if (mentionedInFireflies && meetingMention) {
+            const meetingDate = new Date(meetingMention.date);
+            const daysSinceMeeting = (new Date() - meetingDate) / (1000 * 60 * 60 * 24);
+            if (daysSinceMeeting < 7) {
+              tags.push('This Week Meeting');
+              score += 30;
+              primaryReason = `Just discussed in "${meetingMention.title}" - ${meetingMention.actionItems || 'ready to move forward'}`;
+            }
+          }
         }
       }
       
-      const numContacts = parseInt(brand.numContacts) || 0;
-      if (numContacts >= 3) {
-        tags.push('High Engagement');
-        score += 10;
-        if (!primaryReason || primaryReason.includes('lead')) {
-          primaryReason = `${numContacts} contacts engaged - multiple touchpoints`;
+      // Priority 5: Strategic fits
+      // Check for strategic alignment indicators
+      const isStrategic = 
+        (brand.hasPartner && tags.includes('Creative Match')) ||
+        (brand.lifecyclestage === 'opportunity' && brand.budget !== 'TBD') ||
+        (meetingMention && meetingMention.actionItems) ||
+        (brand.category && isEmergingCategory(brand.category));
+      
+      if (isStrategic) {
+        tags.push('Strategic');
+        score += 20;
+        if (!primaryReason) {
+          if (brand.hasPartner) {
+            primaryReason = `Strategic opportunity: Agency partner ${brand.partnerAgency} can accelerate deal`;
+          } else if (meetingMention && meetingMention.actionItems) {
+            primaryReason = `Strategic next step: ${meetingMention.actionItems}`;
+          } else {
+            primaryReason = `Strategic ${brand.category} brand for portfolio expansion`;
+          }
         }
       }
       
-      if (tags.length === 0) {
-        tags.push('Potential Match');
-        score = 5;
-        primaryReason = 'Potential brand partner for consideration';
+      // Additional context for meetings/emails that aren't "this week"
+      if (!tags.includes('This Week Meeting') && mentionedInFireflies && meetingMention) {
+        score += 20;
+        if (!primaryReason) {
+          primaryReason = `Discussed in "${meetingMention.title}" on ${meetingMention.date}`;
+          if (meetingMention.actionItems) {
+            primaryReason += ` - Action: ${meetingMention.actionItems}`;
+          }
+        }
+        brand.meetingContext = meetingMention;
       }
       
-      if (brand.hasPartner) {
-        tags.push('Agency Ready');
+      if (!tags.includes('This Week Email') && mentionedInEmails && emailMention) {
         score += 15;
-        if (!primaryReason) primaryReason = `Has agency: ${brand.partnerAgency}`;
+        if (!primaryReason || primaryReason.includes('partner')) {
+          primaryReason = `Recent email: "${emailMention.subject}" from ${emailMention.from}`;
+        }
+        brand.emailContext = emailMention;
       }
       
-      if (brand.budget && brand.budget !== 'TBD') {
-        const budgetValue = parseFloat(brand.budget.match(/\d+\.?\d*/)?.[0] || 0);
-        if (budgetValue > 5) {
-          tags.push('Big Budget');
-          score += 25;
-          if (!primaryReason) primaryReason = `High budget: ${brand.budget}`;
+      // Deal stage specifics for HubSpot
+      if (brand.lifecyclestage === 'opportunity' && !tags.includes('Current Client')) {
+        score += 15;
+        if (!primaryReason) {
+          primaryReason = 'Active opportunity in pipeline';
         }
       }
       
-      if (productionContext.genre && brand.category) {
-        const genreMatch = checkGenreMatch(productionContext.genre, brand.category);
-        if (genreMatch) {
-          tags.push('Genre Match');
-          score += 20;
-          if (!primaryReason) primaryReason = `Perfect fit for ${productionContext.genre}`;
-        }
-      }
-      
-      if (brand.lastActivity) {
-        const lastActivityDate = new Date(brand.lastActivity);
-        const daysSinceActivity = (new Date() - lastActivityDate) / (1000 * 60 * 60 * 24);
-        
-        if (daysSinceActivity < 30) {
-          tags.push('Recent Activity');
-          score += 15;
-          if (!primaryReason) primaryReason = 'Recent contact activity';
-        }
-      }
-      
-      const contactCount = parseInt(brand.numContacts) || 0;
-      if (contactCount >= 3) {
-        tags.push('High Engagement');
-        score += 10;
-        if (!primaryReason) primaryReason = `${contactCount} contacts engaged`;
-      }
-      
+      // If no tags yet, check for other valuable signals
       if (tags.length === 0) {
-        tags.push('Potential Match');
-        score = 5;
-        primaryReason = 'Potential brand partner';
+        if (brand.hasPartner) {
+          tags.push('Strategic');
+          score += 15;
+          primaryReason = `Agency-backed: ${brand.partnerAgency} partnership ready`;
+        } else if (brand.numContacts && parseInt(brand.numContacts) >= 3) {
+          tags.push('Strategic');
+          score += 10;
+          primaryReason = `${brand.numContacts} contacts engaged - multiple stakeholders involved`;
+        } else {
+          tags.push('Creative Match');
+          score += 5;
+          primaryReason = `Potential creative fit for ${productionContext.genre || 'production'}`;
+        }
       }
       
       brand.tags = tags;
@@ -1280,9 +1271,17 @@ function checkVibeMatch(productionContext, brand) {
 
 function isEmergingCategory(category) {
   const emergingCategories = [
-    'crypto', 'blockchain', 'nft', 'metaverse', 'ai', 'sustainability',
-    'plant-based', 'wellness', 'mental health', 'telehealth', 'fintech',
-    'edtech', 'creator economy', 'subscription', 'd2c', 'dtc'
+    'crypto', 'blockchain', 'nft', 'metaverse', 'ai', 'artificial intelligence',
+    'sustainability', 'sustainable', 'eco', 'green tech',
+    'plant-based', 'vegan', 'alternative protein',
+    'wellness', 'mental health', 'meditation', 'mindfulness',
+    'telehealth', 'digital health', 'healthtech',
+    'fintech', 'digital banking', 'payment',
+    'edtech', 'online learning', 'education technology',
+    'creator economy', 'influencer', 'content creation',
+    'subscription', 'saas', 'd2c', 'dtc', 'direct to consumer',
+    'ev', 'electric vehicle', 'renewable energy',
+    'gaming', 'esports', 'streaming'
   ];
   
   const categoryLower = category.toLowerCase();
@@ -1316,17 +1315,41 @@ function extractGenreFromSynopsis(synopsis) {
 
 function checkGenreMatch(productionGenre, brandCategory) {
   const genreMap = {
-    sports: ['athletic', 'fitness', 'sports', 'energy', 'nutrition'],
-    comedy: ['snack', 'beverage', 'casual', 'youth', 'entertainment'],
-    action: ['automotive', 'technology', 'gaming', 'energy', 'extreme'],
-    drama: ['fashion', 'beauty', 'lifestyle', 'home', 'family'],
-    documentary: ['education', 'health', 'environment', 'social', 'tech']
+    sports: ['athletic', 'fitness', 'sports', 'energy', 'nutrition', 'wellness', 'performance'],
+    comedy: ['snack', 'beverage', 'casual', 'youth', 'entertainment', 'social', 'fun'],
+    action: ['automotive', 'technology', 'gaming', 'energy', 'extreme', 'adventure', 'performance'],
+    drama: ['fashion', 'beauty', 'lifestyle', 'home', 'family', 'luxury', 'wellness'],
+    documentary: ['education', 'health', 'environment', 'social', 'tech', 'nonprofit', 'sustainability'],
+    thriller: ['tech', 'security', 'automotive', 'insurance', 'home security', 'financial'],
+    romance: ['jewelry', 'fashion', 'beauty', 'travel', 'hospitality', 'dining', 'luxury'],
+    scifi: ['technology', 'gaming', 'electronics', 'automotive', 'innovation', 'future', 'ai'],
+    crime: ['security', 'insurance', 'automotive', 'tech', 'financial', 'legal']
   };
   
   const relevantCategories = genreMap[productionGenre] || [];
-  return relevantCategories.some(cat => 
-    brandCategory.toLowerCase().includes(cat)
-  );
+  const categoryLower = brandCategory.toLowerCase();
+  
+  // Direct match
+  if (relevantCategories.some(cat => categoryLower.includes(cat))) {
+    return true;
+  }
+  
+  // Smart matches for broader categories
+  if (productionGenre && categoryLower) {
+    // Tech/Innovation brands work well with action, scifi, thriller
+    if (['action', 'scifi', 'thriller'].includes(productionGenre) && 
+        (categoryLower.includes('tech') || categoryLower.includes('innovation') || categoryLower.includes('ai'))) {
+      return true;
+    }
+    
+    // Lifestyle brands work across multiple genres
+    if (['drama', 'romance', 'comedy'].includes(productionGenre) && 
+        (categoryLower.includes('lifestyle') || categoryLower.includes('consumer'))) {
+      return true;
+    }
+  }
+  
+  return false;
 }
 
 async function extractSearchKeyword(query) {
