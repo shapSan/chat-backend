@@ -1539,10 +1539,8 @@ async function extractSearchKeyword(query) {
   }
 }
 
-// CORRECTED AND UNIFIED handleClaudeSearch FUNCTION
+// PASTE THIS NEW, COMPLETE FUNCTION IN ITS PLACE
 async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId, conversationContext) {
-  const currentProduction = extractProductionContext(userMessage)?.title;
-
   if (!anthropicApiKey) {
     console.error('[handleClaudeSearch] No Anthropic API key available');
     return null;
@@ -1550,64 +1548,156 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
 
   try {
     const mcpThinking = [];
+    const userMessageLower = userMessage.toLowerCase();
 
-    const slashCommand = userMessage.match(/^\/(\w+)\s+(.+)/);
-    if (slashCommand) {
-      const [_, command, brandName] = slashCommand;
-      mcpThinking.push(`🎯 Slash command: /${command} ${brandName}`);
+    // ==================================================================
+    // IMPROVEMENT 1: More robust check for new Production submissions.
+    // Instead of a rigid Regex, we just check for the presence of keywords.
+    // ==================================================================
+    const isProductionQuery = userMessageLower.includes('title:') && userMessageLower.includes('synopsis:');
 
-      if (command === 'meetings' || command === 'meeting' || command === 'calls' || command === 'call') {
-        const firefliesData = await searchFireflies(brandName, { limit: 10 });
-        mcpThinking.push(`✅ Found ${firefliesData.transcripts?.length || 0} meetings`);
+    if (isProductionQuery) {
+      // Reliably extract title and synopsis regardless of formatting
+      const titleMatch = userMessage.match(/Title:\s*([^\n]+)/i);
+      const synopsisMatch = userMessage.match(/Synopsis:\s*([\s\S]+)/i);
+      
+      if (titleMatch && synopsisMatch) {
+          const title = titleMatch[1].trim();
+          const synopsis = synopsisMatch[1].trim();
+          
+          mcpThinking.push(`🎬 Production analysis triggered for "${title}"`);
+          
+          const genre = extractGenreFromSynopsis(synopsis);
+          mcpThinking.push(`🧠 Identified Genre: ${genre || 'General'}`);
 
-        return {
-          organizedData: {
-            slashCommand: true,
-            commandType: 'meetings',
-            brandName: brandName,
-            meetings: firefliesData.transcripts || [],
-            currentProduction: currentProduction
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
+          // Run parallel searches
+          const [hubspotBrands, partnershipSearch, firefliesData, emailData] = await Promise.all([
+              hubspotAPI.searchBrands({ limit: 30 }),
+              hubspotAPI.searchProductions({
+                  filterGroups: [{
+                      filters: [{ propertyName: 'production_name', operator: 'CONTAINS_TOKEN', value: title }]
+                  }],
+                  limit: 1
+              }),
+              searchFireflies(`${title} ${genre}`, { limit: 10 }),
+              o365API.searchEmails(title, { days: 90 })
+          ]);
+          mcpThinking.push(`✅ Found ${hubspotBrands.results?.length || 0} potential brands in HubSpot.`);
+          mcpThinking.push(`✅ Found ${firefliesData.transcripts?.length || 0} related meetings in Fireflies.`);
+          mcpThinking.push(`✅ Found ${emailData?.length || 0} related emails.`);
+          if (partnershipSearch.results?.length > 0) {
+              mcpThinking.push(`✅ Found existing partnership record in HubSpot.`);
+          }
 
-      if (command === 'emails' || command === 'email') {
-        const o365Data = await o365API.searchEmails(brandName, { days: 30 });
-        mcpThinking.push(`✅ Found ${o365Data?.length || 0} emails`);
+          // Narrow down brands
+          const { topBrands } = await narrowWithIntelligentTags(
+              hubspotBrands.results || [],
+              firefliesData.transcripts || [],
+              emailData || [],
+              userMessage
+          );
+          mcpThinking.push(`🎯 Narrowed down to ${topBrands.length} most relevant brands.`);
 
-        return {
-          organizedData: {
-            slashCommand: true,
-            commandType: 'emails',
-            brandName: brandName,
-            emails: o365Data || [],
-            currentProduction: currentProduction
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-
-      if (command === 'contact' || command === 'contacts') {
-        const brand = await hubspotAPI.searchSpecificBrand(brandName);
-        if (brand) {
-          const contacts = await hubspotAPI.getContactsForBrand(brand.id);
           return {
-            organizedData: {
-              slashCommand: true,
-              commandType: 'contacts',
-              brand: brand,
-              contacts: contacts,
-              brandName: brandName
-            },
-            mcpThinking,
-            usedMCP: true
+              organizedData: {
+                  type: 'production_analysis',
+                  structuredData: {
+                      brands: topBrands.map(b => ({ id: b.id, name: b.name, hubspotUrl: b.hubspotUrl, tags: b.tags, reason: b.reason })),
+                      meetings: (firefliesData.transcripts || []).map(m => ({ id: m.id, title: m.title, date: m.dateString, url: m.transcript_url })),
+                      emails: (emailData || []).map(e => ({ subject: e.subject, from: e.fromName || e.from, date: e.receivedDate }))
+                  },
+                  fullReport: {
+                      productionContext: { title, synopsis, genre },
+                      topBrands: topBrands,
+                      meetings: firefliesData.transcripts || [],
+                      emails: emailData || [],
+                      partnershipDetails: partnershipSearch.results?.[0] || null
+                  }
+              },
+              mcpThinking,
+              usedMCP: true
           };
-        }
       }
     }
+
+    // ==================================================================
+    // IMPROVEMENT 2: More flexible detection for specific lookups.
+    // We use an array of patterns to catch different ways of asking.
+    // ==================================================================
+    const lookupPatterns = [
+        /(?:meetings?|calls?|emails?).*?(?:with|for|about|regarding)\s+([A-Z][^\?\.,]+)/i, // "meetings with Brand X"
+        /(?:what's the latest with|any updates on|show me activity for)\s+([A-Z][^\?\.,]+)/i, // "what's the latest with Brand X"
+        /^\/(?:meetings?|emails?)\s+(.+)/i // /meetings Brand X
+    ];
+    
+    let lookupMatch = null;
+    for (const pattern of lookupPatterns) {
+        const match = userMessage.match(pattern);
+        if (match) {
+            lookupMatch = match;
+            break;
+        }
+    }
+
+    if (lookupMatch) {
+        const brandName = lookupMatch[1].trim();
+        mcpThinking.push(`🔍 Specific lookup triggered for "${brandName}"`);
+        
+        const [brand, firefliesData, emailData] = await Promise.all([
+            hubspotAPI.searchSpecificBrand(brandName),
+            searchFireflies(brandName, { limit: 10 }),
+            o365API.searchEmails(brandName, { days: 90 })
+        ]);
+        mcpThinking.push(`✅ Found ${firefliesData.transcripts?.length || 0} meetings & ${emailData?.length || 0} emails.`);
+
+        if (brand || firefliesData.transcripts?.length > 0 || emailData?.length > 0) {
+            return {
+                organizedData: {
+                    type: 'brand_lookup',
+                    brandName,
+                    structuredData: {
+                        brand: brand ? { id: brand.id, name: brand.properties.brand_name || brand.properties.name, hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.BRANDS}/${brand.id}` } : null,
+                        meetings: (firefliesData.transcripts || []).map(m => ({ id: m.id, title: m.title, date: m.dateString, url: m.transcript_url })),
+                        emails: (emailData || []).map(e => ({ subject: e.subject, from: e.fromName || e.from, date: e.receivedDate }))
+                    },
+                    fullReport: {
+                        brand: brand,
+                        meetings: firefliesData.transcripts || [],
+                        emails: emailData || []
+                    }
+                },
+                mcpThinking,
+                usedMCP: true
+            };
+        }
+    }
+    
+    // This is the default case if no other intent is matched
+    mcpThinking.push('⚠️ No specific intent detected, running default search...');
+    const hubspotData = await searchHubSpot(userMessage, projectId, 30);
+    return {
+        organizedData: {
+            type: 'general_search',
+            structuredData: {
+                brands: (hubspotData.brands || []).map(b => ({id: b.id, name: b.properties.brand_name || b.properties.name, hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`}))
+            },
+            fullReport: {
+                brands: hubspotData.brands || []
+            }
+        },
+        mcpThinking,
+        usedMCP: true
+    };
+
+  } catch (error) {
+    console.error('[handleClaudeSearch] Fatal error:', {
+      error: error.message,
+      stack: error.stack,
+      apiKeyStatus: !!anthropicApiKey
+    });
+    return null;
+  }
+}
 
     const brandLookupMatch = userMessage.match(/(?:contact|who is|point of contact|poc|calls?|meetings?|emails?).*?(?:with|for|at|about)\s+([A-Z][^\?\.,]+)/i);
     if (brandLookupMatch) {
