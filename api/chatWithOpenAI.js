@@ -3237,6 +3237,24 @@ export default async function handler(req, res) {
           }
           
           if (aiReply) {
+            // Post-process to ensure consistent brand card formatting
+            if (aiReply.includes('Brand integration suggestions for') && aiReply.includes('Brand:')) {
+              // Ensure proper line breaks after the title
+              aiReply = aiReply.replace(
+                /^(Brand integration suggestions for [^:]+:)\s*/,
+                '$1\n\n'
+              );
+              
+              // Ensure consistent field formatting (remove any asterisks)
+              aiReply = aiReply.replace(/\*\*(Brand|Integration|Why it works|HB Insights):\*\*/g, '$1:');
+              
+              // Ensure proper spacing between brand sections
+              aiReply = aiReply.replace(/\n(Brand:)/g, '\n\n$1');
+              
+              // Clean up any triple+ line breaks
+              aiReply = aiReply.replace(/\n{3,}/g, '\n\n');
+            }
+            
             updateAirtableConversation(
               sessionId, 
               projectId, 
