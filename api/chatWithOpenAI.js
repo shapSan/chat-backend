@@ -723,7 +723,6 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefli
       scores: {}
     };
   } catch (error) {
-    console.error('[narrowWithOpenAI] Error:', error);
     return { topBrands: [], scores: {} };
   }
 }
@@ -1461,7 +1460,7 @@ async function extractSearchKeyword(query) {
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-3.5-turbo',
         messages: [{
           role: 'system',
           content: 'Extract the search keyword from this query about meetings. If asking about "latest meeting" with no specific topic, return empty string. If asking about a specific brand/person/topic, return just that term. Return ONLY the keyword or empty string, nothing else.'
@@ -1483,7 +1482,6 @@ async function extractSearchKeyword(query) {
     return '';
     
   } catch (error) {
-    console.error('[extractSearchKeyword] Error:', error);
     return '';
   }
 }
@@ -2189,7 +2187,7 @@ async function shouldUseSearch(userMessage, conversationContext) {
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-3.5-turbo',
         messages: [{
           role: 'system',
           content: `You are a query classifier for a Hollywood production company's AI assistant. The assistant has access to:
@@ -2230,7 +2228,6 @@ Should I search the internal databases for this?`
     return result === 'true';
     
   } catch (error) {
-    console.error('[shouldUseSearch] Error:', error);
     // Enhanced fallback patterns
     const patterns = [
       /Title:\s*[^\n]+/i,
