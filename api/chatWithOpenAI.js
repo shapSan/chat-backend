@@ -2087,10 +2087,22 @@ async function shouldUseSearch(userMessage, conversationContext) {
     const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
     const messageClues = userMessage.toLowerCase();
     
-    if (messageClues.includes('synopsis:') && messageClues.includes('title:')) {
+    // IMMEDIATE DETECTION for production formats
+    if (userMessage.match(/Title:\s*[^\n]+[\s\S]*Synopsis:/i)) {
       return true;
     }
     
+    // Check for production patterns
+    if (messageClues.includes('synopsis:') && (messageClues.includes('title:') || messageClues.includes('talent:') || messageClues.includes('distributor:'))) {
+      return true;
+    }
+    
+    // Check for brand/partnership queries
+    if (messageClues.match(/\b(brands?|partnerships?|integrations?|matches|suitable|opportunities)\b/i)) {
+      return true;
+    }
+    
+    // For everything else, let AI decide intelligently
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -2139,7 +2151,14 @@ Should I search the internal databases for this?`
     return result === 'true';
     
   } catch (error) {
-    return messageClues.match(/\b(hubspot|fireflies|brand matching|meeting transcript|email archive)\b/i) !== null;
+    // Enhanced fallback patterns
+    const patterns = [
+      /Title:\s*[^\n]+/i,
+      /Synopsis:/i,
+      /\b(brand|partnership|integration|hubspot|fireflies|meeting|email)\b/i,
+      /\b(find|search|look for|match|suitable)\s+\w*\s*(brands?|partners?)/i
+    ];
+    return patterns.some(pattern => userMessage.match(pattern));
   }
 }
 
