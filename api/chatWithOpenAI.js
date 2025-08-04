@@ -1699,11 +1699,6 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
   }
 }
 
-    const brandLookupMatch = userMessage.match(/(?:contact|who is|point of contact|poc|calls?|meetings?|emails?).*?(?:with|for|at|about)\s+([A-Z][^\?\.,]+)/i);
-    if (brandLookupMatch) {
-      const brandName = brandLookupMatch[1].trim();
-      mcpThinking.push(`🔍 Looking up ${brandName} with recent activity...`);
-
       const [brand, firefliesData, o365Data] = await Promise.all([
         hubspotAPI.searchSpecificBrand(brandName),
         firefliesApiKey ? searchFireflies(brandName, { limit: 5 }) : { transcripts: [] },
