@@ -26,6 +26,13 @@ const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+const runwayApiKey = process.env.RUNWAY_API_KEY;
+const hubspotApiKey = process.env.HUBSPOT_API_KEY;
+const googleGeminiApiKey = process.env.GOOGLE_GEMINI_API_KEY;
+const firefliesApiKey = process.env.FIREFLIES_API_KEY || 'e88b1a60-3390-4dca-9605-20e533727717';
+const msftTenantId = process.env.MICROSOFT_TENANT_ID;
+const msftClientId = process.env.MICROSOFT_CLIENT_ID;
+const msftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
 // Debug: Log API key status at startup
 console.log('[STARTUP] API Keys Status:', {
@@ -35,13 +42,6 @@ console.log('[STARTUP] API Keys Status:', {
   hasFireflies: !!firefliesApiKey,
   hasMicrosoft: !!msftClientId
 });
-const runwayApiKey = process.env.RUNWAY_API_KEY;
-const hubspotApiKey = process.env.HUBSPOT_API_KEY;
-const googleGeminiApiKey = process.env.GOOGLE_GEMINI_API_KEY;
-const firefliesApiKey = process.env.FIREFLIES_API_KEY || 'e88b1a60-3390-4dca-9605-20e533727717';
-const msftTenantId = process.env.MICROSOFT_TENANT_ID;
-const msftClientId = process.env.MICROSOFT_CLIENT_ID;
-const msftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
 const PROJECT_CONFIGS = {
   'default': {
