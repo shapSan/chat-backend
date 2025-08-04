@@ -1856,22 +1856,29 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       userMessage
     );
     
-    const brandSuggestions = topBrands.slice(0, 15).map(brand => ({
-      id: brand.id,
-      name: brand.name,
-      score: brand.relevanceScore,
-      tag: brand.tags[0] || 'Potential Match',
-      tags: brand.tags,
-      reason: brand.reason,
-      budget: brand.budget,
-      hasAgency: brand.hasPartner,
-      agencyName: brand.partnerAgency,
-      hubspotUrl: brand.hubspotUrl,
-      brandUrl: `https://www.google.com/search?q=${encodeURIComponent(brand.name)}`, // Google search URL
-      meetingUrl: brand.meetingContext?.url || null,
-      meetingTitle: brand.meetingContext?.title || null,
-      emailSubject: brand.emailContext?.subject || null
-    }));
+    const brandSuggestions = topBrands.slice(0, 15).map(brand => {
+      // Debug logging
+      if (brand.tags.length > 1) {
+        console.log(`Brand ${brand.name} has ${brand.tags.length} tags:`, brand.tags);
+      }
+      
+      return {
+        id: brand.id,
+        name: brand.name,
+        score: brand.relevanceScore,
+        tag: brand.tags[0] || 'Potential Match',
+        tags: brand.tags,
+        reason: brand.reason,
+        budget: brand.budget,
+        hasAgency: brand.hasPartner,
+        agencyName: brand.partnerAgency,
+        hubspotUrl: brand.hubspotUrl,
+        brandUrl: `https://www.google.com/search?q=${encodeURIComponent(brand.name)}`,
+        meetingUrl: brand.meetingContext?.url || null,
+        meetingTitle: brand.meetingContext?.title || null,
+        emailSubject: brand.emailContext?.subject || null
+      };
+    });
     
     mcpThinking.push(`✨ Prepared ${brandSuggestions.length} recommendations`);
     
