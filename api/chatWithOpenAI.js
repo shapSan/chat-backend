@@ -1544,6 +1544,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
           stage: p.properties.partnership_status || p.properties.hs_pipeline_stage,
           fee: p.properties.hollywood_branded_fee,
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.PARTNERSHIPS}/${p.id}`,
+          projectUrl: `https://www.google.com/search?q=${encodeURIComponent(p.properties.partnership_name || p.properties.production_name || p.properties.name || '')}`, // Google search URL
           lastModified: p.properties.hs_lastmodifieddate
         }));
         
@@ -1792,6 +1793,7 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       hasAgency: brand.hasPartner,
       agencyName: brand.partnerAgency,
       hubspotUrl: brand.hubspotUrl,
+      brandUrl: `https://www.google.com/search?q=${encodeURIComponent(brand.name)}`, // Google search URL
       meetingUrl: brand.meetingContext?.url || null,
       meetingTitle: brand.meetingContext?.title || null,
       emailSubject: brand.emailContext?.subject || null
@@ -2599,6 +2601,9 @@ export default async function handler(req, res) {
                 systemMessageContent += `- Emphasize the integration ideas that best fit their brand goals\n`;
                 systemMessageContent += `- Include next steps based on their engagement level\n`;
                 systemMessageContent += `- Make each pitch feel like a natural continuation of your relationship\n`;
+                systemMessageContent += `- Format brand names with HubSpot links like: Brand Name (HubSpot: URL)\n`;
+                systemMessageContent += `- In HB Insights, include Fireflies meeting links when referencing meetings\n`;
+                systemMessageContent += `- Keep HB Insights focused on actual data points, no fluff\n`;
                 
                 if (claudeOrganizedData.currentProduction) {
                   systemMessageContent += `- Tie all pitches to the production: ${claudeOrganizedData.currentProduction}\n`;
