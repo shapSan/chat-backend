@@ -2733,6 +2733,117 @@ export default async function handler(req, res) {
   	      });
             
   	      let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+
+          // START OF MISSING CODE TO PASTE
+            if (claudeOrganizedData && claudeOrganizedData.fullReport) {
+              const report = claudeOrganizedData.fullReport;
+              
+              switch (claudeOrganizedData.type) {
+                case 'production_analysis':
+                  systemMessageContent += `\n\n**PRODUCTION ANALYSIS REPORT**\n`;
+                  systemMessageContent += `Title: ${report.productionContext.title}\n`;
+                  systemMessageContent += `Synopsis: ${report.productionContext.synopsis}\n`;
+                  systemMessageContent += `Genre: ${report.productionContext.genre}\n\n`;
+                  
+                  systemMessageContent += `**TOP 15 BRAND MATCHES:**\n`;
+                  report.topBrands.forEach((brand, i) => {
+                    systemMessageContent += `${i + 1}. ${brand.name} - ${brand.reason}\n`;
+                    systemMessageContent += `   Tags: ${brand.tags.join(', ')}\n`;
+                    if (brand.budget !== 'TBD') systemMessageContent += `   Budget: ${brand.budget}\n`;
+                  });
+                  
+              	  if (report.meetings?.length > 0) {
+            	    systemMessageContent += `\n**RELEVANT MEETINGS:**\n`;
+            	    report.meetings.forEach(m => {
+            	      systemMessageContent += `- "${m.title}" on ${m.dateString}\n`;
+            	      if (m.summary?.overview) {
+            	        systemMessageContent += `  Summary: ${m.summary.overview.slice(0, 150)}...\n`;
+          	      }
+          	    });
+        	      }
+                  
+  	              if (report.emails?.length > 0) {
+  	                systemMessageContent += `\n**RELEVANT EMAILS:**\n`;
+  	                report.emails.forEach(e => {
+  	                  systemMessageContent += `- "${e.subject}" from ${e.fromName || e.from}\n`;
+  	                });
+  	              }
+  	              break;
+                  
+          	      case 'brand_lookup':
+  	                systemMessageContent += `\n\n**BRAND ACTIVITY REPORT: ${claudeOrganizedData.brandName}**\n`;
+                  
+  	                if (report.brand) {
+  	                  systemMessageContent += `Brand: ${report.brand.properties.brand_name || report.brand.properties.name}\n`;
+  	                  systemMessageContent += `Status: ${report.brand.properties.client_status || 'Unknown'}\n`;
+  	                }
+                  
+  	                if (report.meetings?.length > 0) {
+  	                  systemMessageContent += `\n**MEETINGS (${report.meetings.length} total):**\n`;
+  	                  report.meetings.forEach(m => {
+  	                    systemMessageContent += `- "${m.title}" on ${m.dateString}\n`;
+  	                    if (m.summary?.action_items?.length > 0) {
+  	                      systemMessageContent += `  Action: ${m.summary.action_items[0]}\n`;
+  	                    }
+  	                  });
+  	                }
+                  
+  	                if (report.emails?.length > 0) {
+  	                  systemMessageContent += `\n**EMAILS (${report.emails.length} total):**\n`;
+  	                  report.emails.forEach(e => {
+  	                    systemMessageContent += `- "${e.subject}" from ${e.fromName || e.from}\n`;
+  	                    if (e.preview) {
+  	                      systemMessageContent += `  Preview: ${e.preview.slice(0, 100)}...\n`;
+  	                    }
+  	                  });
+  	                }
+  	                break;
+                  
+  	              case 'brand_deep_dive':
+  	                systemMessageContent += `\n\n**BRAND DEEP DIVE ANALYSIS**\n`;
+                  
+  	                report.brandAnalysis.forEach(ba => {
+  	                  systemMessageContent += `\n**${ba.brandName}:**\n`;
+  	                  if (ba.brand) {
+  	                    systemMessageContent += `Status: ${ba.brand.properties.client_status || 'Unknown'}\n`;
+  	                    systemMessageContent += `Category: ${ba.brand.properties.brand_category || ba.brand.properties.industry}\n`;
+  	                  }
+                    
+  	                  systemMessageContent += `Activity: ${ba.meetings.length} meetings, ${ba.emails.length} emails\n`;
+                    
+  	                  if (ba.meetings.length > 0) {
+  	                    systemMessageContent += `Recent Meetings:\n`;
+  	                    ba.meetings.slice(0, 3).forEach(m => {
+  	                      systemMessageContent += `- "${m.title}" on ${m.dateString}\n`;
+  	                    });
+  	                  }
+                    
+  	                  if (ba.emails.length > 0) {
+  	                    systemMessageContent += `Recent Emails:\n`;
+  	                    ba.emails.slice(0, 3).forEach(e => {
+  	                      systemMessageContent += `- "${e.subject}"\n`;
+  	                    });
+  	                  }
+  	                });
+                  
+  	                systemMessageContent += `\n**GENERATE INTEGRATION IDEAS FOR EACH BRAND**\n`;
+  	                break;
+                  
+  	              default:
+  	                systemMessageContent += `\n\n**BRAND PARTNERSHIP OPPORTUNITIES**\n`;
+  	                if (report.topBrands?.length > 0) {
+  	                  report.topBrands.forEach((brand, i) => {
+  	                    systemMessageContent += `${i + 1}. ${brand.name} - ${brand.reason}\n`;
+  	                  });
+  	                }
+  	            }
+              
+  	            systemMessageContent += `\n\n**INSTRUCTIONS:**\n`;
+  	            systemMessageContent += `Use the Airtable knowledge base instructions to format your response.\n`;
+  	            systemMessageContent += `Focus on actionable insights and specific recommendations.\n`;
+  	            systemMessageContent += `Reference actual meetings and emails when relevant.\n`;
+  	          }
+             // END OF MISSING CODE TO PASTE
             
   	      if (claudeOrganizedData && claudeOrganizedData.fullReport) {
   	        const report = claudeOrganizedData.fullReport;
