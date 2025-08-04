@@ -766,7 +766,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       const brand = {
         source: 'hubspot',
         id: b.id,
-        name: b.properties.brand_name || b.properties.name,
+        name: b.properties.brand_name || b.properties.name || '',
         category: b.properties.brand_category || b.properties.industry || 'General',
         budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 'TBD',
         summary: (b.properties.description || '').slice(0, 100),
@@ -775,6 +775,8 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         partnerAgency: b.properties.partner_agency_name,
         website: b.properties.domain,
         lifecyclestage: b.properties.lifecyclestage,
+        clientStatus: b.properties.client_status, // Add this field
+        clientType: b.properties.client_type, // Add this field
         numContacts: b.properties.num_associated_contacts || '0',
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`,
         tags: [],
@@ -794,33 +796,51 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         const overview = (t.summary?.overview || '').toLowerCase();
         const title = (t.title || '').toLowerCase();
         const topics = (t.summary?.topics_discussed || '').toLowerCase();
-        const keywords = (t.summary?.keywords || []).join(' ').toLowerCase();
-        const searchText = `${overview} ${title} ${topics} ${keywords}`;
+        const actionItems = (t.summary?.action_items || []).join(' ').toLowerCase();
         
-        const normalizedBrandName = brandNameLower.replace(/[''\'s]/g, '').replace(/\s+/g, ' ');
-        const brandWords = normalizedBrandName.split(' ').filter(w => w.length > 2);
+        // Build searchable text
+        const searchText = `${title} ${overview} ${topics} ${actionItems}`;
         
-        if (searchText.includes(brandNameLower)) {
-          meetingMention = {
-            title: t.title,
-            url: t.transcript_url,
-            context: overview.slice(0, 150) || `Discussed ${brand.name}`,
-            date: t.dateString || t.date,
-            actionItems: Array.isArray(t.summary?.action_items) ? t.summary.action_items[0] : null
-          };
-          return true;
-        }
+        // Smart brand matching
+        const brandNameClean = brand.name.toLowerCase()
+          .replace(/\s*(inc\.?|llc|ltd|corp|corporation|company|co\.?)\s*$/i, '') // Remove company suffixes
+          .replace(/[''\'s]/g, '') // Remove possessives
+          .trim();
         
-        const fuzzyMatch = brandWords.length > 0 && brandWords.every(word => searchText.includes(word));
-        if (fuzzyMatch) {
-          meetingMention = {
-            title: t.title,
-            url: t.transcript_url,
-            context: overview.slice(0, 150) || `Discussed ${brand.name}`,
-            date: t.dateString || t.date,
-            actionItems: Array.isArray(t.summary?.action_items) ? t.summary.action_items[0] : null
-          };
-          return true;
+        // For single-word brands, require exact match
+        if (!brandNameClean.includes(' ')) {
+          if (searchText.includes(` ${brandNameClean} `) || 
+              searchText.includes(` ${brandNameClean}.`) ||
+              searchText.includes(` ${brandNameClean},`)) {
+            meetingMention = {
+              title: t.title,
+              url: t.transcript_url,
+              context: overview.slice(0, 150) || actionItems[0] || `Discussed ${brand.name}`,
+              date: t.dateString || t.date,
+              actionItems: actionItems[0] || null
+            };
+            return true;
+          }
+        } else {
+          // For multi-word brands, check if the core name is mentioned
+          const coreBrandName = brandNameClean.split(' ')[0]; // First word is usually the key
+          if (coreBrandName.length > 3 && searchText.includes(coreBrandName)) {
+            // Verify it's in a brand context
+            const contextCheck = searchText.includes(`${coreBrandName} brand`) ||
+                                searchText.includes(`${coreBrandName} partnership`) ||
+                                searchText.includes(`${coreBrandName} integration`) ||
+                                searchText.includes(`${coreBrandName} deal`);
+            if (contextCheck || searchText.includes(brandNameClean)) {
+              meetingMention = {
+                title: t.title,
+                url: t.transcript_url,
+                context: overview.slice(0, 150) || actionItems[0] || `Mentioned ${brand.name}`,
+                date: t.dateString || t.date,
+                actionItems: actionItems[0] || null
+              };
+              return true;
+            }
+          }
         }
         
         return false;
@@ -829,12 +849,15 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       const mentionedInEmails = emails && emails.some(e => {
         const subject = (e.subject || '').toLowerCase();
         const preview = (e.preview || '').toLowerCase();
-        const searchText = `${subject} ${preview}`;
         
-        const brandWords = brandNameLower.split(' ');
-        const found = brandWords.some(word => word.length > 3 && searchText.includes(word));
+        // Smart email matching - look for brand in subject or key parts of preview
+        const brandNameClean = brand.name.toLowerCase()
+          .replace(/\s*(inc\.?|llc|ltd|corp|corporation|company|co\.?)\s*$/i, '')
+          .trim();
         
-        if (found || searchText.includes(brandNameLower)) {
+        // Check subject first (most reliable)
+        if (subject.includes(brandNameClean) || 
+            (brandNameClean.includes(' ') && subject.includes(brandNameClean.split(' ')[0]))) {
           emailMention = {
             subject: e.subject,
             preview: preview.slice(0, 150),
@@ -844,6 +867,21 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
           };
           return true;
         }
+        
+        // Check preview for brand + context words
+        const contextWords = ['partnership', 'integration', 'brand', 'deal', 'proposal', 'opportunity'];
+        if (preview.includes(brandNameClean) || 
+            (brandNameClean.length > 4 && contextWords.some(ctx => preview.includes(`${brandNameClean.split(' ')[0]} ${ctx}`)))) {
+          emailMention = {
+            subject: e.subject,
+            preview: preview.slice(0, 150),
+            from: e.fromName || e.from,
+            date: e.receivedDate,
+            webLink: e.webLink || null
+          };
+          return true;
+        }
+        
         return false;
       });
       
@@ -1761,16 +1799,42 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
       searchKeywords.push('brand', 'partnership');
     }
     
+    // Smart search strategy based on query type
+    let firefliesSearchTerm = '';
+    let emailSearchTerm = '';
+    
+    // If we have a current production, search for it
+    if (currentProduction) {
+      firefliesSearchTerm = currentProduction;
+      emailSearchTerm = currentProduction;
+    } 
+    // If it's a genre-based query, search for genre keywords
+    else if (productionContext.genre) {
+      // Genre terms that actually appear in meetings/emails
+      const genreSearchTerms = {
+        action: 'action',
+        comedy: 'comedy',
+        drama: 'drama',
+        horror: 'thriller',
+        documentary: 'documentary',
+        sports: 'sports',
+        scifi: 'sci-fi',
+        romance: 'romantic',
+        crime: 'crime'
+      };
+      firefliesSearchTerm = genreSearchTerms[productionContext.genre] || '';
+      emailSearchTerm = firefliesSearchTerm;
+    }
+    // For general brand searches, look for common terms
+    else if (userMessage.toLowerCase().includes('brand')) {
+      firefliesSearchTerm = 'brand integration';
+      emailSearchTerm = 'partnership';
+    }
+    
     const [hubspotData, firefliesData, o365Data] = await Promise.all([
-      hubspotApiKey ? searchHubSpot(userMessage, projectId, 30) : { brands: [], productions: [] },
-      firefliesApiKey ? searchFireflies(
-        searchKeywords.slice(0, 2).join(' '),
-        { limit: 10 }
-      ) : { transcripts: [] },
-      msftClientId ? o365API.searchEmails(
-        currentProduction || searchKeywords[0] || 'brand', 
-        { days: 30 }
-      ) : []
+      hubspotApiKey ? searchHubSpot(userMessage, projectId, 50) : { brands: [], productions: [] },
+      firefliesApiKey ? searchFireflies(firefliesSearchTerm, { limit: 20 }) : { transcripts: [] },
+      msftClientId ? o365API.searchEmails(emailSearchTerm, { days: 30 }) : []
     ]);
     
     if (hubspotData.brands?.length > 0) {
