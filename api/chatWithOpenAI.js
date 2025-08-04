@@ -847,22 +847,21 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         return false;
       });
       
-      // Priority 1: Creative/Genre Match (highest weight)
+      // Priority 1: Creative/Genre Match (only if strong match)
       if (productionContext.genre && brand.category) {
         const genreMatch = checkGenreMatch(productionContext.genre, brand.category);
         if (genreMatch) {
           tags.push('Creative Match');
-          score += 40; // Highest weight
+          score += 40;
           primaryReason = `Perfect creative fit: ${brand.category} aligns with ${productionContext.genre} genre`;
         }
       }
       
-      // Check for creative alignment from meetings/emails
-      if (meetingMention && (meetingMention.context.includes('creative') || meetingMention.context.includes('integration'))) {
-        if (!tags.includes('Creative Match')) {
-          tags.push('Creative Match');
-          score += 35;
-        }
+      // Check for creative alignment from meetings/emails (don't double-tag)
+      if (!tags.includes('Creative Match') && meetingMention && 
+          (meetingMention.context.includes('creative') || meetingMention.context.includes('integration'))) {
+        tags.push('Creative Match');
+        score += 35;
         primaryReason = `Creative synergy discussed in "${meetingMention.title}" - ${meetingMention.context}`;
       }
       
@@ -914,9 +913,8 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       }
       
       // Priority 5: Strategic fits
-      // Check for strategic alignment indicators
       const isStrategic = 
-        (brand.hasPartner && tags.includes('Creative Match')) ||
+        (brand.hasPartner && tags.length > 0) || // Has agency AND other positive signals
         (brand.lifecyclestage === 'opportunity' && brand.budget !== 'TBD') ||
         (meetingMention && meetingMention.actionItems) ||
         (brand.category && isEmergingCategory(brand.category));
@@ -935,9 +933,10 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         }
       }
       
-      // Additional context for meetings/emails that aren't "this week"
+      // Additional context tags (don't override primary reason)
       if (!tags.includes('This Week Meeting') && mentionedInFireflies && meetingMention) {
-        score += 20;
+        tags.push('Recent Meeting');
+        score += 15;
         if (!primaryReason) {
           primaryReason = `Discussed in "${meetingMention.title}" on ${meetingMention.date}`;
           if (meetingMention.actionItems) {
@@ -948,35 +947,44 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       }
       
       if (!tags.includes('This Week Email') && mentionedInEmails && emailMention) {
-        score += 15;
-        if (!primaryReason || primaryReason.includes('partner')) {
-          primaryReason = `Recent email: "${emailMention.subject}" from ${emailMention.from}`;
+        tags.push('Recent Email');
+        score += 10;
+        if (!primaryReason) {
+          primaryReason = `Email thread: "${emailMention.subject}" from ${emailMention.from}`;
         }
         brand.emailContext = emailMention;
       }
       
-      // Deal stage specifics for HubSpot
+      // Deal stage tags
       if (brand.lifecyclestage === 'opportunity' && !tags.includes('Current Client')) {
+        tags.push('Active Deal');
         score += 15;
         if (!primaryReason) {
           primaryReason = 'Active opportunity in pipeline';
         }
       }
       
-      // If no tags yet, check for other valuable signals
+      // Agency backing (only if not already tagged Strategic)
+      if (brand.hasPartner && !tags.includes('Strategic')) {
+        tags.push('Agency Partner');
+        score += 10;
+        if (!primaryReason) {
+          primaryReason = `Backed by ${brand.partnerAgency}`;
+        }
+      }
+      
+      // If no significant tags, don't force Creative Match
       if (tags.length === 0) {
-        if (brand.hasPartner) {
-          tags.push('Strategic');
-          score += 15;
-          primaryReason = `Agency-backed: ${brand.partnerAgency} partnership ready`;
-        } else if (brand.numContacts && parseInt(brand.numContacts) >= 3) {
-          tags.push('Strategic');
-          score += 10;
-          primaryReason = `${brand.numContacts} contacts engaged - multiple stakeholders involved`;
-        } else {
+        // Only add Creative Match if there's actually a genre match
+        if (productionContext.genre && brand.category && 
+            checkGenreMatch(productionContext.genre, brand.category)) {
           tags.push('Creative Match');
+          score += 20;
+          primaryReason = `Potential fit for ${productionContext.genre} production`;
+        } else {
+          tags.push('New Opportunity');
           score += 5;
-          primaryReason = `Potential creative fit for ${productionContext.genre || 'production'}`;
+          primaryReason = `Explore partnership potential`;
         }
       }
       
@@ -1625,7 +1633,9 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
             title: title,
             synopsis: synopsis,
             hubspotDetails: partnershipDetails,
-            context: productionContext
+            context: productionContext,
+            hubspotUrl: partnershipDetails ? `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.PARTNERSHIPS}/${partnershipDetails.id}` : null,
+            projectUrl: `https://www.google.com/search?q=${encodeURIComponent(title)}` // Google search URL
           },
           topBrands: topBrands.slice(0, 15),
           brandSuggestions: topBrands.slice(0, 15).map(brand => ({
