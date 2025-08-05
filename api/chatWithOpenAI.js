@@ -1004,61 +1004,112 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
     });
 
     const systemPrompt = `You are an expert brand partnership strategist. Analyze brands for production fit. Return JSON with "results" array of top 15 brands. Consider: category match to content genre, partnership/deal history, client status/type. Each result needs: "id", "relevanceScore" (0-100), "tags" (descriptive strings), "reason" (concise explanation).`;
-    const userPrompt = `Production/Request: "${userMessage}"\n\nBrand List:\n\`\`\`json\n${JSON.stringify(brandsForAI, null, 2)}\n\`\`\``;
+    
+    // Truncate userMessage if too long to avoid token limits
+    const truncatedUserMessage = userMessage.length > 500 ? userMessage.slice(0, 500) + '...' : userMessage;
+    const userPrompt = `Production/Request: "${truncatedUserMessage}"\n\nBrand List:\n\`\`\`json\n${JSON.stringify(brandsForAI, null, 2)}\n\`\`\``;
 
     console.log('[DEBUG narrowWithIntelligentTags] Calling OpenAI for ranking...');
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-        response_format: { type: "json_object" },
-        temperature: 0.2
-      }),
-    });
-
-    if (!response.ok) {
-      console.error('[DEBUG narrowWithIntelligentTags] OpenAI API error:', response.status);
-      throw new Error(`AI ranking API error: ${response.status}`);
-    }
     
-    const data = await response.json();
-    console.log('[DEBUG narrowWithIntelligentTags] OpenAI response received');
+    // Add timeout using AbortController
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15 second timeout
     
-    const rankedData = JSON.parse(data.choices[0].message.content);
-    const rankedResults = rankedData.results || [];
-    console.log('[DEBUG narrowWithIntelligentTags] AI ranked', rankedResults.length, 'brands');
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+          response_format: { type: "json_object" },
+          temperature: 0.2,
+          max_tokens: 1000 // Limit response size
+        }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeout);
 
-    const taggedBrands = rankedResults.map(rankedBrand => {
-      const originalBrand = hubspotBrands.find(b => b.id === rankedBrand.id);
-
-      if (!originalBrand) {
-        console.warn('[DEBUG narrowWithIntelligentTags] Could not find brand with ID:', rankedBrand.id);
-        return null;
+      if (!response.ok) {
+        console.error('[DEBUG narrowWithIntelligentTags] OpenAI API error:', response.status);
+        throw new Error(`AI ranking API error: ${response.status}`);
       }
+      
+      const data = await response.json();
+      console.log('[DEBUG narrowWithIntelligentTags] OpenAI response received');
+      
+      const rankedData = JSON.parse(data.choices[0].message.content);
+      const rankedResults = rankedData.results || [];
+      console.log('[DEBUG narrowWithIntelligentTags] AI ranked', rankedResults.length, 'brands');
 
-      return {
-        source: 'hubspot', 
-        id: originalBrand.id, 
-        name: originalBrand.properties.brand_name || '',
-        category: originalBrand.properties.main_category || 'General',
-        subcategories: originalBrand.properties.product_sub_category__multi_ || '',
-        clientStatus: originalBrand.properties.client_status || '',
-        clientType: originalBrand.properties.client_type || '',
-        partnershipCount: originalBrand.properties.partnership_count || '0',
-        dealsCount: originalBrand.properties.deals_count || '0',
-        lastActivity: originalBrand.properties.hs_lastmodifieddate,
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${originalBrand.id}`,
-        relevanceScore: rankedBrand.relevanceScore, 
-        tags: rankedBrand.tags, 
-        reason: rankedBrand.reason,
-      };
-    }).filter(Boolean);
+      const taggedBrands = rankedResults.map(rankedBrand => {
+        const originalBrand = hubspotBrands.find(b => b.id === rankedBrand.id);
 
-    const topBrands = taggedBrands.sort((a, b) => b.relevanceScore - a.relevanceScore);
-    console.log('[DEBUG narrowWithIntelligentTags] Returning', topBrands.length, 'tagged brands');
-    return { topBrands, taggedBrands };
+        if (!originalBrand) {
+          console.warn('[DEBUG narrowWithIntelligentTags] Could not find brand with ID:', rankedBrand.id);
+          return null;
+        }
+
+        return {
+          source: 'hubspot', 
+          id: originalBrand.id, 
+          name: originalBrand.properties.brand_name || '',
+          category: originalBrand.properties.main_category || 'General',
+          subcategories: originalBrand.properties.product_sub_category__multi_ || '',
+          clientStatus: originalBrand.properties.client_status || '',
+          clientType: originalBrand.properties.client_type || '',
+          partnershipCount: originalBrand.properties.partnership_count || '0',
+          dealsCount: originalBrand.properties.deals_count || '0',
+          lastActivity: originalBrand.properties.hs_lastmodifieddate,
+          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${originalBrand.id}`,
+          relevanceScore: rankedBrand.relevanceScore, 
+          tags: rankedBrand.tags, 
+          reason: rankedBrand.reason,
+        };
+      }).filter(Boolean);
+
+      const topBrands = taggedBrands.sort((a, b) => b.relevanceScore - a.relevanceScore);
+      console.log('[DEBUG narrowWithIntelligentTags] Returning', topBrands.length, 'tagged brands');
+      return { topBrands, taggedBrands };
+      
+    } catch (fetchError) {
+      clearTimeout(timeout);
+      
+      if (fetchError.name === 'AbortError') {
+        console.error('[DEBUG narrowWithIntelligentTags] OpenAI request timed out');
+      } else {
+        console.error('[DEBUG narrowWithIntelligentTags] OpenAI request failed:', fetchError.message);
+      }
+      
+      // Fallback: return brands sorted by activity
+      console.log('[DEBUG narrowWithIntelligentTags] Using fallback sorting by activity');
+      const fallbackBrands = hubspotBrands
+        .sort((a, b) => {
+          const scoreA = parseInt(a.properties.partnership_count || 0) + parseInt(a.properties.deals_count || 0);
+          const scoreB = parseInt(b.properties.partnership_count || 0) + parseInt(b.properties.deals_count || 0);
+          return scoreB - scoreA;
+        })
+        .slice(0, 15)
+        .map(brand => ({
+          source: 'hubspot',
+          id: brand.id,
+          name: brand.properties.brand_name || '',
+          category: brand.properties.main_category || 'General',
+          subcategories: brand.properties.product_sub_category__multi_ || '',
+          clientStatus: brand.properties.client_status || '',
+          clientType: brand.properties.client_type || '',
+          partnershipCount: brand.properties.partnership_count || '0',
+          dealsCount: brand.properties.deals_count || '0',
+          lastActivity: brand.properties.hs_lastmodifieddate,
+          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+          relevanceScore: 50,
+          tags: ['Fallback Ranking'],
+          reason: 'Ranked by activity count'
+        }));
+      
+      return { topBrands: fallbackBrands, taggedBrands: fallbackBrands };
+    }
   } catch (error) {
     console.error("[DEBUG narrowWithIntelligentTags] Error:", error);
     console.error("[DEBUG narrowWithIntelligentTags] Stack trace:", error.stack);
@@ -1400,11 +1451,11 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'get_brand_activity',
-        description: 'Gets all recent activity (meetings, emails, contacts) for a specific brand name.',
+        description: 'Use this tool for any request about a specific brand\'s activity. This includes asking for meetings, emails, calls, contacts, or general status updates like "what\'s new with...", "have we talked to...", "pull the file for...", "show me activity for...", "any updates on...", or "what\'s happening with...".',
         parameters: {
           type: 'object',
           properties: {
-            brand_name: { type: 'string', description: 'The name of the brand to look up.' }
+            brand_name: { type: 'string', description: 'The name of the brand to look up, e.g., "Nike" or "Paramount".' }
           },
           required: ['brand_name']
         }
