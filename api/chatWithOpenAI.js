@@ -65,56 +65,146 @@ const hubspotAPI = {
     CONTACTS: 'contacts'
   },
   
-  async searchBrands(filters = {}) {
-    try {
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${hubspotApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          filterGroups: filters.filterGroups || [
-            {
-              filters: []
-            }
-          ],
-          properties: [
-            'brand_name',
-            'client_status',
-            'client_type',
-            'brand_website_url',
-            'brand_category',
-            'media_spend_m_',
-            'partner_agency_name',
-            'notes_last_contacted',
-            'notes_last_updated',
-            'num_associated_contacts',
-            'description',
-            'industry',
-            'domain',
-            'hubspot_owner_id',
-            'hs_lastmodifieddate'
-          ],
-          limit: filters.limit || 50,
-          sorts: [{ 
-            propertyName: 'hs_lastmodifieddate', 
-            direction: 'DESCENDING' 
-          }]
-        })
-      });
+async searchBrands(filters = {}) {
+  console.log('[DEBUG searchBrands] Starting with filters:', filters);
+  try {
+    let searchBody = {
+      properties: [
+        'id',
+        'brand_name', 
+        'client_status', 
+        'client_type',
+        'main_category',
+        'product_sub_category__multi_',
+        'partnership_count',
+        'deals_count',
+        'target_gender_',
+        'target_geography',
+        'hs_lastmodifieddate'
+      ],
+      limit: filters.limit || 50,
+      sorts: [{ 
+        propertyName: 'partnership_count', 
+        direction: 'DESCENDING' 
+      }]
+    };
+
+    // If a query (like a synopsis) is passed, use category matching
+    if (filters.query && filters.query.length > 50) {
+      console.log('[DEBUG searchBrands] Detected synopsis, extracting genre...');
       
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
+      // Extract genre from synopsis for category matching
+      const genreMap = {
+        'action': ['Automotive', 'Electronics & Appliances', 'Sports & Fitness'],
+        'comedy': ['Food & Beverage', 'Entertainment'],
+        'drama': ['Fashion & Apparel', 'Health & Beauty', 'Home & Garden'],
+        'romance': ['Floral', 'Fashion & Apparel', 'Health & Beauty'],
+        'family': ['Food & Beverage', 'Baby Care', 'Entertainment'],
+        'horror': ['Entertainment', 'Gaming'],
+        'crime': ['Automotive', 'Security', 'Electronics & Appliances'],
+        'thriller': ['Automotive', 'Security', 'Electronics & Appliances'],
+        'sci-fi': ['Electronics & Appliances', 'Gaming', 'Automotive']
+      };
+      
+      // Simple genre detection
+      const queryLower = filters.query.toLowerCase();
+      let categories = [];
+      
+      for (const [genre, cats] of Object.entries(genreMap)) {
+        if (queryLower.includes(genre)) {
+          categories = [...categories, ...cats];
+        }
       }
       
-      const data = await response.json();
-      return data;
-    } catch (error) {
-      return { results: [] };
+      // Remove duplicates
+      categories = [...new Set(categories)];
+      
+      // Build filter groups - MUST have active status
+      searchBody.filterGroups = [
+        {
+          filters: [
+            {
+              propertyName: 'client_status',
+              operator: 'IN',
+              values: ['Active', 'In Negotiation', 'Contract']
+            }
+          ]
+        }
+      ];
+      
+      // Add category filter if we found matching categories
+      if (categories.length > 0) {
+        searchBody.filterGroups.push({
+          filters: [{
+            propertyName: 'main_category',
+            operator: 'IN',
+            values: categories
+          }]
+        });
+      }
+      
+    } else if (filters.query) {
+      // Short keyword search - search by brand name
+      searchBody.query = filters.query;
+      searchBody.filterGroups = [
+        {
+          filters: [
+            {
+              propertyName: 'client_status',
+              operator: 'IN',
+              values: ['Active', 'In Negotiation', 'Contract', 'Pending']
+            }
+          ]
+        }
+      ];
+    } else {
+      // Default: Get low hanging fruit - active brands with high activity
+      searchBody.filterGroups = [
+        {
+          filters: [
+            {
+              propertyName: 'client_status',
+              operator: 'IN',
+              values: ['Active', 'Contract']
+            },
+            {
+              propertyName: 'partnership_count',
+              operator: 'GTE',
+              value: '5'
+            }
+          ]
+        }
+      ];
+      
+      // Sort by deals count for commercial opportunities
+      searchBody.sorts = [{ 
+        propertyName: 'deals_count', 
+        direction: 'DESCENDING' 
+      }];
     }
-  },
+
+    console.log('[DEBUG searchBrands] Making HubSpot API request...');
+    const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${hubspotApiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(searchBody)
+    });
+    
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error('[DEBUG searchBrands] HubSpot API error:', response.status, errorBody);
+      throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
+    }
+    
+    const result = await response.json();
+    console.log('[DEBUG searchBrands] Success, got', result.results?.length || 0, 'brands');
+    return result;
+  } catch (error) {
+    console.error("[DEBUG searchBrands] Error:", error);
+    console.error("[DEBUG searchBrands] Stack trace:", error.stack);
+    return { results: [] };
+  }
+},
 
   async searchProductions(filters = {}) {
     try {
@@ -685,6 +775,29 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
   return { searchType, records: [], total: 0 };
 }
 
+// ADD THIS NEW HELPER FUNCTION
+async function extractKeywordsForHubSpot(synopsis) {
+  if (!openAIApiKey) return '';
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: "Extract 2-4 industry/category keywords that brands would use. Focus on: product categories (luxury, fashion, automotive, tech, beverage), target demographics (family, youth, professional), or brand attributes (premium, eco-friendly, innovative). Examples: 'luxury fashion jewelry', 'automotive tech', 'premium beverage', 'family entertainment'. Return ONLY keywords, no names or locations." },
+          { role: 'user', content: synopsis }
+        ],
+        temperature: 0, max_tokens: 30
+      }),
+    });
+    const data = await response.json();
+    return data.choices[0].message.content.trim();
+  } catch (error) {
+    return '';
+  }
+}
+
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
   try {
     const allBrands = [...hubspotBrands];
@@ -698,48 +811,34 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefli
   }
 }
 
+// REPLACE your old searchHubSpot function with this corrected version
 async function searchHubSpot(query, projectId, limit = 50) {
   if (!hubspotApiKey) {
     return { brands: [], productions: [] };
   }
-  
+ 
   try {
     const isConnected = await hubspotAPI.testConnection();
     if (!isConnected) {
       return { brands: [], productions: [] };
     }
     
-    const searchTerm = await extractSearchKeyword(query);
-    
-    let brandFilters = {};
-    
-    if (searchTerm) {
-      brandFilters = {
-        query: searchTerm
-      };
-    } else {
-      brandFilters = {
-        filterGroups: [
-          {
-            filters: [
-              { 
-                propertyName: 'brand_name', 
-                operator: 'HAS_PROPERTY' 
-              }
-            ]
-          },
-          {
-            filters: [
-              { 
-                propertyName: 'lifecyclestage', 
-                operator: 'IN',
-                values: ['customer', 'opportunity', 'salesqualifiedlead']
-              }
-            ]
-          }
-        ]
-      };
-    }
+    // The logic to extract a keyword has been removed, as the AI now handles this.
+    // We will now use a more general filter to get relevant brands.
+    const brandFilters = {
+      filterGroups: [
+        {
+          filters: [
+            { propertyName: 'brand_name', operator: 'HAS_PROPERTY' }
+          ]
+        },
+        {
+          filters: [
+            { propertyName: 'lifecyclestage', operator: 'IN', values: ['customer', 'opportunity', 'salesqualifiedlead'] }
+          ]
+        }
+      ]
+    };
 
     const brandsData = await hubspotAPI.searchBrands({
       ...brandFilters,
@@ -754,370 +853,120 @@ async function searchHubSpot(query, projectId, limit = 50) {
     };
 
   } catch (error) {
+    console.error("Error in searchHubSpot:", error);
     return { brands: [], productions: [] };
   }
 }
 
+// REPLACE your old narrowWithIntelligentTags function with this
 async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, emails, userMessage) {
+  console.log('[DEBUG narrowWithIntelligentTags] Starting with', hubspotBrands?.length || 0, 'brands');
+  
+  if (!hubspotBrands || hubspotBrands.length === 0) {
+    console.log('[DEBUG narrowWithIntelligentTags] No brands provided, returning empty');
+    return { topBrands: [], taggedBrands: [] };
+  }
+  if (!openAIApiKey) {
+    console.warn("[DEBUG narrowWithIntelligentTags] OpenAI API key not found. Returning unranked brands.");
+    return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
+  }
+
   try {
-    const productionContext = extractProductionContext(userMessage);
-    
-    const taggedBrands = hubspotBrands.map(b => {
-      const brand = {
-        source: 'hubspot',
+    console.log('[DEBUG narrowWithIntelligentTags] Preparing brands for AI analysis...');
+    const brandsForAI = hubspotBrands.map(b => {
+      const brandData = {
         id: b.id,
-        name: b.properties.brand_name || b.properties.name || '',
-        category: b.properties.brand_category || b.properties.industry || 'General',
-        budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 'TBD',
-        summary: (b.properties.description || '').slice(0, 100),
-        lastActivity: b.properties.notes_last_contacted || b.properties.notes_last_updated || b.properties.hs_lastmodifieddate,
-        hasPartner: !!b.properties.partner_agency_name,
-        partnerAgency: b.properties.partner_agency_name,
-        website: b.properties.domain,
-        lifecyclestage: b.properties.lifecyclestage,
-        clientStatus: b.properties.client_status, // Add this field
-        clientType: b.properties.client_type, // Add this field
-        numContacts: b.properties.num_associated_contacts || '0',
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`,
-        tags: [],
-        relevanceScore: 0,
-        reason: ''
+        name: b.properties.brand_name || 'Unknown',
+        category: b.properties.main_category || 'General',
+        subcategories: b.properties.product_sub_category__multi_ || '',
+        partnershipCount: parseInt(b.properties.partnership_count || 0),
+        dealsCount: parseInt(b.properties.deals_count || 0),
+        clientStatus: b.properties.client_status || '',
+        clientType: b.properties.client_type || '',
+        helper_tags: []
       };
-      
-      const tags = [];
-      let score = 0;
-      let primaryReason = '';
-      
-      const brandNameLower = brand.name.toLowerCase();
-      let meetingMention = null;
-      let emailMention = null;
-      
-      const mentionedInFireflies = firefliesTranscripts && firefliesTranscripts.some(t => {
-        const overview = (t.summary?.overview || '').toLowerCase();
-        const title = (t.title || '').toLowerCase();
-        const topics = (t.summary?.topics_discussed || '').toLowerCase();
-        const actionItems = (t.summary?.action_items || []).join(' ').toLowerCase();
-        
-        // Build searchable text
-        const searchText = `${title} ${overview} ${topics} ${actionItems}`;
-        
-        // Smart brand matching
-        const brandNameClean = brand.name.toLowerCase()
-          .replace(/\s*(inc\.?|llc|ltd|corp|corporation|company|co\.?)\s*$/i, '') // Remove company suffixes
-          .replace(/[''\'s]/g, '') // Remove possessives
-          .trim();
-        
-        // For single-word brands, require exact match
-        if (!brandNameClean.includes(' ')) {
-          if (searchText.includes(` ${brandNameClean} `) || 
-              searchText.includes(` ${brandNameClean}.`) ||
-              searchText.includes(` ${brandNameClean},`)) {
-            meetingMention = {
-              title: t.title,
-              url: t.transcript_url,
-              context: overview.slice(0, 150) || actionItems[0] || `Discussed ${brand.name}`,
-              date: t.dateString || t.date,
-              actionItems: actionItems[0] || null
-            };
-            return true;
-          }
-        } else {
-          // For multi-word brands, check if the core name is mentioned
-          const coreBrandName = brandNameClean.split(' ')[0]; // First word is usually the key
-          if (coreBrandName.length > 3 && searchText.includes(coreBrandName)) {
-            // Verify it's in a brand context
-            const contextCheck = searchText.includes(`${coreBrandName} brand`) ||
-                                searchText.includes(`${coreBrandName} partnership`) ||
-                                searchText.includes(`${coreBrandName} integration`) ||
-                                searchText.includes(`${coreBrandName} deal`);
-            if (contextCheck || searchText.includes(brandNameClean)) {
-              meetingMention = {
-                title: t.title,
-                url: t.transcript_url,
-                context: overview.slice(0, 150) || actionItems[0] || `Mentioned ${brand.name}`,
-                date: t.dateString || t.date,
-                actionItems: actionItems[0] || null
-              };
-              return true;
-            }
-          }
-        }
-        
-        return false;
-      });
-      
-      const mentionedInEmails = emails && emails.some(e => {
-        const subject = (e.subject || '').toLowerCase();
-        const preview = (e.preview || '').toLowerCase();
-        
-        // Smart email matching - look for brand in subject or key parts of preview
-        const brandNameClean = brand.name.toLowerCase()
-          .replace(/\s*(inc\.?|llc|ltd|corp|corporation|company|co\.?)\s*$/i, '')
-          .trim();
-        
-        // Check subject first (most reliable)
-        if (subject.includes(brandNameClean) || 
-            (brandNameClean.includes(' ') && subject.includes(brandNameClean.split(' ')[0]))) {
-          emailMention = {
-            subject: e.subject,
-            preview: preview.slice(0, 150),
-            from: e.fromName || e.from,
-            date: e.receivedDate,
-            webLink: e.webLink || null
-          };
-          return true;
-        }
-        
-        // Check preview for brand + context words
-        const contextWords = ['partnership', 'integration', 'brand', 'deal', 'proposal', 'opportunity'];
-        if (preview.includes(brandNameClean) || 
-            (brandNameClean.length > 4 && contextWords.some(ctx => preview.includes(`${brandNameClean.split(' ')[0]} ${ctx}`)))) {
-          emailMention = {
-            subject: e.subject,
-            preview: preview.slice(0, 150),
-            from: e.fromName || e.from,
-            date: e.receivedDate,
-            webLink: e.webLink || null
-          };
-          return true;
-        }
-        
-        return false;
-      });
-      
-      // Priority 1: Creative/Genre Match (only if strong match)
-      if (productionContext.genre && brand.category) {
-        const genreMatch = checkGenreMatch(productionContext.genre, brand.category);
-        if (genreMatch) {
-          tags.push('Creative Match');
-          score += 40;
-          primaryReason = `Perfect creative fit: ${brand.category} aligns with ${productionContext.genre} genre`;
-        }
+
+      // Add meaningful tags based on reliable data
+      if (brandData.clientStatus === 'Active' || brandData.clientStatus === 'Contract') {
+        brandData.helper_tags.push('Active Client');
+      }
+      if (brandData.clientType === 'Retainer') {
+        brandData.helper_tags.push('Retainer Client (Premium)');
+      }
+      if (brandData.partnershipCount >= 10) {
+        brandData.helper_tags.push(`Proven Partner (${brandData.partnershipCount} partnerships)`);
+      }
+      if (brandData.dealsCount >= 5) {
+        brandData.helper_tags.push(`High Activity (${brandData.dealsCount} deals)`);
       }
       
-      // Check for creative alignment from meetings/emails (don't double-tag)
-      if (!tags.includes('Creative Match') && meetingMention && 
-          (meetingMention.context.includes('creative') || meetingMention.context.includes('integration'))) {
-        tags.push('Creative Match');
-        score += 35;
-        primaryReason = `Creative synergy discussed in "${meetingMention.title}" - ${meetingMention.context}`;
-      }
-      
-      // Priority 2: Big Budget
-      if (brand.budget && brand.budget !== 'TBD') {
-        const budgetValue = parseFloat(brand.budget.match(/\d+\.?\d*/)?.[0] || 0);
-        if (budgetValue > 5) {
-          tags.push('Big Budget');
-          score += 30;
-          if (!primaryReason) {
-            primaryReason = `${brand.budget} media spend available for integrations`;
-          }
-        }
-      }
-      
-      // Priority 3: Current Client
-      if (brand.clientStatus === 'Active' || brand.clientStatus === 'Customer') {
-        tags.push('Current Client');
-        score += 35;
-        if (!primaryReason) {
-          primaryReason = 'Active client ready for new integration';
-        }
-      }
-      
-      // Priority 4: This Week Activity (Email or Meeting)
-      if (brand.lastActivity) {
-        const lastActivityDate = new Date(brand.lastActivity);
-        const daysSinceActivity = (new Date() - lastActivityDate) / (1000 * 60 * 60 * 24);
-        
-        if (daysSinceActivity < 7) {
-          if (mentionedInEmails && emailMention) {
-            tags.push('This Week Email');
-            score += 25;
-            if (!primaryReason) {
-              primaryReason = `Fresh momentum: "${emailMention.subject}" from ${emailMention.from}`;
-            }
-          }
-          
-          if (mentionedInFireflies && meetingMention) {
-            const meetingDate = new Date(meetingMention.date);
-            const daysSinceMeeting = (new Date() - meetingDate) / (1000 * 60 * 60 * 24);
-            if (daysSinceMeeting < 7) {
-              tags.push('This Week Meeting');
-              score += 30;
-              primaryReason = `Just discussed in "${meetingMention.title}" - ${meetingMention.actionItems || 'ready to move forward'}`;
-            }
-          }
-        }
-      }
-      
-      // Priority 5: Strategic fits
-      const isStrategic = 
-        (brand.hasPartner && tags.length > 0) || // Has agency AND other positive signals
-        (brand.lifecyclestage === 'opportunity' && brand.budget !== 'TBD') ||
-        (meetingMention && meetingMention.actionItems) ||
-        (brand.category && isEmergingCategory(brand.category));
-      
-      if (isStrategic) {
-        tags.push('Strategic');
-        score += 20;
-        if (!primaryReason) {
-          if (brand.hasPartner) {
-            primaryReason = `Strategic opportunity: Agency partner ${brand.partnerAgency} can accelerate deal`;
-          } else if (meetingMention && meetingMention.actionItems) {
-            primaryReason = `Strategic next step: ${meetingMention.actionItems}`;
-          } else {
-            primaryReason = `Strategic ${brand.category} brand for portfolio expansion`;
-          }
-        }
-      }
-      
-      // Additional context tags (don't override primary reason)
-      if (!tags.includes('This Week Meeting') && mentionedInFireflies && meetingMention) {
-        tags.push('Recent Meeting');
-        score += 15;
-        if (!primaryReason) {
-          primaryReason = `Discussed in "${meetingMention.title}" on ${meetingMention.date}`;
-          if (meetingMention.actionItems) {
-            primaryReason += ` - Action: ${meetingMention.actionItems}`;
-          }
-        }
-        brand.meetingContext = meetingMention;
-      }
-      
-      if (!tags.includes('This Week Email') && mentionedInEmails && emailMention) {
-        tags.push('Recent Email');
-        score += 10;
-        if (!primaryReason) {
-          primaryReason = `Email thread: "${emailMention.subject}" from ${emailMention.from}`;
-        }
-        brand.emailContext = emailMention;
-      }
-      
-      // Deal stage tags
-      if (brand.lifecyclestage === 'opportunity' && !tags.includes('Current Client')) {
-        tags.push('Active Deal');
-        score += 15;
-        if (!primaryReason) {
-          primaryReason = 'Active opportunity in pipeline';
-        }
-      }
-      
-      // Agency backing (only if not already tagged Strategic)
-      if (brand.hasPartner && !tags.includes('Strategic')) {
-        tags.push('Agency Partner');
-        score += 10;
-        if (!primaryReason) {
-          primaryReason = `Backed by ${brand.partnerAgency}`;
-        }
-      }
-      
-      // If no significant tags, don't force Creative Match
-      if (tags.length === 0) {
-        // Only add Creative Match if there's actually a genre match
-        if (productionContext.genre && brand.category && 
-            checkGenreMatch(productionContext.genre, brand.category)) {
-          tags.push('Creative Match');
-          score += 20;
-          primaryReason = `Potential fit for ${productionContext.genre} production`;
-        } else {
-          tags.push('New Opportunity');
-          score += 5;
-          primaryReason = `Explore partnership potential`;
-        }
-      }
-      
-      brand.tags = tags;
-      brand.relevanceScore = score;
-      brand.reason = primaryReason;
-      
-      return brand;
+      return brandData;
     });
+
+    const systemPrompt = `You are an expert brand partnership strategist. Analyze brands for production fit. Return JSON with "results" array of top 15 brands. Consider: category match to content genre, partnership/deal history, client status/type. Each result needs: "id", "relevanceScore" (0-100), "tags" (descriptive strings), "reason" (concise explanation).`;
+    const userPrompt = `Production/Request: "${userMessage}"\n\nBrand List:\n\`\`\`json\n${JSON.stringify(brandsForAI, null, 2)}\n\`\`\``;
+
+    console.log('[DEBUG narrowWithIntelligentTags] Calling OpenAI for ranking...');
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        response_format: { type: "json_object" },
+        temperature: 0.2
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('[DEBUG narrowWithIntelligentTags] OpenAI API error:', response.status);
+      throw new Error(`AI ranking API error: ${response.status}`);
+    }
     
-    const topBrands = taggedBrands
-      .filter(b => b.relevanceScore > 0)
-      .sort((a, b) => b.relevanceScore - a.relevanceScore)
-      .slice(0, 15);
+    const data = await response.json();
+    console.log('[DEBUG narrowWithIntelligentTags] OpenAI response received');
     
+    const rankedData = JSON.parse(data.choices[0].message.content);
+    const rankedResults = rankedData.results || [];
+    console.log('[DEBUG narrowWithIntelligentTags] AI ranked', rankedResults.length, 'brands');
+
+    const taggedBrands = rankedResults.map(rankedBrand => {
+      const originalBrand = hubspotBrands.find(b => b.id === rankedBrand.id);
+
+      if (!originalBrand) {
+        console.warn('[DEBUG narrowWithIntelligentTags] Could not find brand with ID:', rankedBrand.id);
+        return null;
+      }
+
+      return {
+        source: 'hubspot', 
+        id: originalBrand.id, 
+        name: originalBrand.properties.brand_name || '',
+        category: originalBrand.properties.main_category || 'General',
+        subcategories: originalBrand.properties.product_sub_category__multi_ || '',
+        clientStatus: originalBrand.properties.client_status || '',
+        clientType: originalBrand.properties.client_type || '',
+        partnershipCount: originalBrand.properties.partnership_count || '0',
+        dealsCount: originalBrand.properties.deals_count || '0',
+        lastActivity: originalBrand.properties.hs_lastmodifieddate,
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${originalBrand.id}`,
+        relevanceScore: rankedBrand.relevanceScore, 
+        tags: rankedBrand.tags, 
+        reason: rankedBrand.reason,
+      };
+    }).filter(Boolean);
+
+    const topBrands = taggedBrands.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    console.log('[DEBUG narrowWithIntelligentTags] Returning', topBrands.length, 'tagged brands');
     return { topBrands, taggedBrands };
-    
   } catch (error) {
+    console.error("[DEBUG narrowWithIntelligentTags] Error:", error);
+    console.error("[DEBUG narrowWithIntelligentTags] Stack trace:", error.stack);
     return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
   }
 }
 
-function extractProductionContext(message) {
-  if (!message || typeof message !== 'string') {
-    return {
-      title: null,
-      genre: null,
-      budget: null,
-      distributor: null,
-      targetDemo: null
-    };
-  }
-  
-  const context = {
-    title: null,
-    genre: null,
-    budget: null,
-    distributor: null,
-    targetDemo: null
-  };
-  
-  const titlePatterns = [
-    /Title:\s*([^\n]+)/i,
-    /Production:\s*([^\n]+)/i,
-    /Film:\s*([^\n]+)/i,
-    /Show:\s*([^\n]+)/i,
-    /Project:\s*([^\n]+)/i,
-    /^([A-Z][^:\n]+)[\n\s]+Synopsis:/im,
-    /for\s+["']([^"']+)["']/i,
-    /(?:the\s+production\s+)?["']([^"']+)["']/i
-  ];
-  
-  for (const pattern of titlePatterns) {
-    const match = message.match(pattern);
-    if (match && match[1]) {
-      context.title = match[1].trim();
-      break;
-    }
-  }
-  
-  const synopsisMatch = message.match(/Synopsis:\s*([\s\S]+?)(?:\n\n|$)/i);
-  const synopsisText = synopsisMatch ? synopsisMatch[1] : message;
-  
-  const genrePatterns = {
-    action: /\b(action|fight|chase|explosion|battle|war|combat|hero|villain)\b/i,
-    comedy: /\b(comedy|funny|humor|hilarious|laugh|sitcom|comedic)\b/i,
-    drama: /\b(drama|emotional|family|relationship|struggle|journey)\b/i,
-    horror: /\b(horror|scary|terror|thriller|suspense|supernatural)\b/i,
-    documentary: /\b(documentary|docu|non-fiction|true story|real|factual)\b/i,
-    sports: /\b(sports|athletic|fitness|game|match|competition|championship)\b/i,
-    scifi: /\b(sci-fi|science fiction|future|space|alien|technology|dystopian)\b/i,
-    romance: /\b(romance|love|romantic|relationship|dating)\b/i,
-    crime: /\b(crime|detective|investigation|murder|police|criminal|con\s*artist|con\s*woman|heist)\b/i,
-    thriller: /\b(thriller|suspense|psychological|mystery|twist)\b/i
-  };
-  
-  for (const [genre, pattern] of Object.entries(genrePatterns)) {
-    if (pattern.test(synopsisText)) {
-      context.genre = genre;
-      break;
-    }
-  }
-  
-  const budgetMatch = message.match(/(?:budget|fee).*?\$(\d+)([MmKk])?/i);
-  if (budgetMatch) {
-    context.budget = budgetMatch[0];
-  }
-  
-  const distributorMatch = message.match(/Distributor:\s*([^\n]+)/i);
-  if (distributorMatch) {
-    context.distributor = distributorMatch[1].trim();
-  }
-  
-  return context;
-}
+
 
 function analyzeBrandInsights(brandDetails, meetings, emails) {
   const insights = {
@@ -1397,505 +1246,191 @@ function checkGenreMatch(productionGenre, brandCategory) {
   
   return false;
 }
+async function routeUserIntent(userMessage, conversationContext) {
+  if (!openAIApiKey) return { tool: 'answer_general_question' };
 
-async function extractSearchKeyword(query) {
-  if (!openAIApiKey) return '';
-  
+  const tools = [
+    {
+      type: 'function',
+      function: {
+        name: 'find_brands',
+        description: 'Use this tool when the user asks to find, search for, or get recommendations for brands. This includes simple keyword searches (e.g., "beverage brands") and complex requests that include a full production synopsis.',
+        parameters: {
+          type: 'object',
+          properties: {
+            search_term: { type: 'string', description: 'The user\'s full request, including any keywords or synopsis text.' }
+          },
+          required: ['search_term']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_brand_activity',
+        description: 'Gets all recent activity (meetings, emails, contacts) for a specific brand name.',
+        parameters: {
+          type: 'object',
+          properties: {
+            brand_name: { type: 'string', description: 'The name of the brand to look up.' }
+          },
+          required: ['brand_name']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'answer_general_question',
+        description: 'Use for any general conversation or questions that do not require searching internal databases.',
+        parameters: { type: 'object', properties: {} }
+      }
+    }
+  ];
+
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [{
-          role: 'system',
-          content: 'Extract the search keyword from this query about meetings. If asking about "latest meeting" with no specific topic, return empty string. If asking about a specific brand/person/topic, return just that term. Return ONLY the keyword or empty string, nothing else.'
-        }, {
-          role: 'user',
-          content: query
-        }],
-        temperature: 0,
-        max_tokens: 20
-      }),
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: 'You are an expert at routing a user request to the correct tool. If the user mentions ANY of these: synopsis, production, show, movie, series, script, story, plot, genre, mood, vibe, or asks to convert/analyze content for brand matching, use find_brands. Extract the FULL user message into search_term.' },
+          { role: 'user', content: userMessage }
+        ],
+        tools: tools,
+        tool_choice: 'auto'
+      })
     });
-    
+
+    if (!response.ok) throw new Error('AI router failed');
     const data = await response.json();
-    if (data.choices && data.choices.length > 0 && data.choices[0].message) {
-      const keyword = data.choices[0].message.content.trim();
-      return keyword;
+    const toolCall = data.choices[0].message.tool_calls?.[0];
+
+    if (toolCall) {
+      const args = JSON.parse(toolCall.function.arguments);
+      if (toolCall.function.name === 'find_brands' && !args.search_term) {
+          args.search_term = userMessage;
+      }
+      return { tool: toolCall.function.name, args: args };
     }
-    
-    return '';
-    
+    return { tool: 'answer_general_question' };
   } catch (error) {
-    return '';
+    console.error('Error in AI router:', error);
+    return { tool: 'answer_general_question' };
   }
 }
 
-async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId, conversationContext) {
-  if (!anthropicApiKey) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext) {
+  if (!anthropicApiKey) return null;
+
+  const intent = await routeUserIntent(userMessage, conversationContext);
+
+  if (!intent || intent.tool === 'answer_general_question') {
     return null;
   }
   
-  let currentProduction = null;
-  if (conversationContext) {
-    const productionPatterns = [
-      /(?:Title|Production|Film|Show):\s*([^\n]+)/i,
-      /(?:for|about|regarding)\s+["']?([A-Z][^"'\n]+?)["']?\s*(?:\n|Starting Fee:|Distributor:)/i
-    ];
-    
-    for (const pattern of productionPatterns) {
-      const match = conversationContext.match(pattern) || userMessage.match(pattern);
-      if (match && match[1]) {
-        currentProduction = match[1].trim();
-        break;
-      }
-    }
-  }
-  
+  const mcpThinking = [];
+
   try {
-    const mcpThinking = [];
-    
-    const slashCommand = userMessage.match(/^\/(\w+)\s+(.+)/);
-    if (slashCommand) {
-      const [_, command, brandName] = slashCommand;
-      mcpThinking.push(`🎯 Slash command: /${command} ${brandName}`);
+    switch (intent.tool) {
       
-      if (command === 'meetings' || command === 'meeting' || command === 'calls' || command === 'call') {
-        const firefliesData = await searchFireflies(brandName, { limit: 10 });
-        mcpThinking.push(`✅ Found ${firefliesData.transcripts?.length || 0} meetings`);
-        
-        return {
-          organizedData: {
-            slashCommand: true,
-            commandType: 'meetings',
-            brandName: brandName,
-            meetings: firefliesData.transcripts || [],
-            currentProduction: currentProduction
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-      
-      if (command === 'emails' || command === 'email') {
-        const o365Data = await o365API.searchEmails(brandName, { days: 30 });
-        mcpThinking.push(`✅ Found ${o365Data?.length || 0} emails`);
-        
-        return {
-          organizedData: {
-            slashCommand: true,
-            commandType: 'emails',
-            brandName: brandName,
-            emails: o365Data || [],
-            currentProduction: currentProduction
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-      
-      if (command === 'contact' || command === 'contacts') {
-        const brand = await hubspotAPI.searchSpecificBrand(brandName);
-        if (brand) {
-          const contacts = await hubspotAPI.getContactsForBrand(brand.id);
-          return {
-            organizedData: {
-              slashCommand: true,
-              commandType: 'contacts',
-              brand: brand,
-              contacts: contacts,
-              brandName: brandName
-            },
-            mcpThinking,
-            usedMCP: true
-          };
+      case 'find_brands': {
+        const { search_term } = intent.args;
+        if (search_term.length > 50) {
+            mcpThinking.push(`🎬 Synopsis detected. Performing deep analysis to find brands...`);
+            
+            // Get both creative matches and commercial opportunities
+            const [
+              creativeMatches, commercialWinners, firefliesContext, emailContext
+            ] = await Promise.all([
+              hubspotAPI.searchBrands({ query: search_term, limit: 30 }),
+              hubspotAPI.searchBrands({ limit: 20 }), // Gets low hanging fruit
+              firefliesApiKey ? searchFireflies(search_term, { limit: 5 }) : { transcripts: [] },
+              msftClientId ? o365API.searchEmails(search_term, { days: 180 }) : []
+            ]);
+
+            // Combine unique brands from both searches
+            const allBrands = new Map();
+            creativeMatches.results.forEach(brand => {
+              allBrands.set(brand.id, { ...brand, matchType: 'creative' });
+            });
+            commercialWinners.results.forEach(brand => {
+              if (allBrands.has(brand.id)) {
+                allBrands.get(brand.id).matchType = 'both';
+              } else {
+                allBrands.set(brand.id, { ...brand, matchType: 'commercial' });
+              }
+            });
+            
+            const mixedBrandList = Array.from(allBrands.values());
+            
+            mcpThinking.push(`🧠 Analyzing ${mixedBrandList.length} brands (creative + commercial opportunities)...`);
+            const { topBrands } = await narrowWithIntelligentTags(
+              mixedBrandList, firefliesContext.transcripts || [], emailContext || [], search_term
+            );
+            
+            mcpThinking.push(`✨ Prepared ${topBrands.length} tailored recommendations.`);
+            return {
+              organizedData: {
+                dataType: 'BRAND_RECOMMENDATIONS', 
+                productionContext: search_term,
+                brandSuggestions: topBrands.slice(0, 15),
+                supportingContext: { meetings: firefliesContext.transcripts || [], emails: emailContext || [] }
+              },
+              mcpThinking, usedMCP: true
+            };
+        } else {
+            mcpThinking.push(`🔍 Searching for brands matching "${search_term}"...`);
+            const brandsData = await hubspotAPI.searchBrands({ query: search_term, limit: 15 });
+            mcpThinking.push(`✅ Found ${brandsData.results.length} brands.`);
+            return {
+              organizedData: {
+                dataType: 'BRAND_SEARCH_RESULTS', 
+                searchQuery: search_term,
+                brandSuggestions: brandsData.results.map(b => ({
+                    id: b.id, 
+                    name: b.properties.brand_name || '',
+                    category: b.properties.main_category || 'General',
+                    subcategories: b.properties.product_sub_category__multi_ || '',
+                    clientStatus: b.properties.client_status || '',
+                    partnershipCount: b.properties.partnership_count || '0',
+                    hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`
+                }))
+              },
+              mcpThinking, usedMCP: true
+            };
         }
       }
-    }
-    
-    const brandLookupMatch = userMessage.match(/(?:contact|who is|point of contact|poc|calls?|meetings?|emails?).*?(?:with|for|at|about)\s+([A-Z][^\?\.,]+)/i);
-    if (brandLookupMatch) {
-      const brandName = brandLookupMatch[1].trim();
-      mcpThinking.push(`🔍 Looking up ${brandName} with recent activity...`);
-      
-      const [brand, firefliesData, o365Data] = await Promise.all([
-        hubspotAPI.searchSpecificBrand(brandName),
-        firefliesApiKey ? searchFireflies(brandName, { limit: 5 }) : { transcripts: [] },
-        msftClientId ? o365API.searchEmails(brandName, { days: 30 }) : []
-      ]);
-      
-      if (brand) {
-        mcpThinking.push('✅ Found brand in HubSpot');
-        const contacts = await hubspotAPI.getContactsForBrand(brand.id);
-        
-        const brandMeetings = firefliesData.transcripts?.filter(t => {
-          const searchText = `${t.title} ${t.summary?.overview || ''} ${t.summary?.topics_discussed || ''}`.toLowerCase();
-          return searchText.includes(brandName.toLowerCase());
-        }) || [];
-        
-        const brandEmails = o365Data?.filter(e => {
-          const searchText = `${e.subject} ${e.preview || ''}`.toLowerCase();
-          return searchText.includes(brandName.toLowerCase());
-        }) || [];
-        
-        if (brandMeetings.length > 0) {
-          mcpThinking.push(`✅ Found ${brandMeetings.length} recent meetings`);
+
+      case 'get_brand_activity': {
+        const { brand_name } = intent.args;
+        mcpThinking.push(`🔍 Looking up recent activity for "${brand_name}"...`);
+        const [brand, firefliesData] = await Promise.all([
+          hubspotAPI.searchSpecificBrand(brand_name),
+          firefliesApiKey ? searchFireflies(brand_name, { limit: 5 }) : { transcripts: [] }
+        ]);
+        if (!brand) {
+          return { organizedData: { error: `Brand "${brand_name}" not found.` }, mcpThinking, usedMCP: true };
         }
-        if (brandEmails.length > 0) {
-          mcpThinking.push(`✅ Found ${brandEmails.length} recent emails`);
-        }
-        
+        const [contacts, o365Data] = await Promise.all([
+            hubspotAPI.getContactsForBrand(brand.id),
+            msftClientId ? o365API.searchEmails(brand_name, { days: 90 }) : []
+        ]);
         return {
           organizedData: {
-            specificBrandWithContext: true,
-            brand: brand,
-            contacts: contacts,
-            recentMeetings: brandMeetings,
-            recentEmails: brandEmails,
-            brandName: brandName
-          },
-          mcpThinking,
-          usedMCP: true
+            dataType: 'BRAND_ACTIVITY', brand: brand.properties,
+            contacts: contacts.map(c => c.properties),
+            meetings: firefliesData.transcripts || [], emails: o365Data || []
+          }, mcpThinking, usedMCP: true
         };
       }
+
+      default:
+        return null;
     }
-    
-    const partnershipPatterns = [
-      /(?:partnerships?|productions?|shows?|films?|movies?).*?(?:suitable|good|match|for|new|recent|added|available)/i,
-      /(?:what|which|show|list).*?(?:partnerships?|productions?|shows?|films?|movies?)/i,
-      /new partnership opportunities/i,
-      /partnership.*?opportunities/i
-    ];
-    
-    const isPartnershipQuery = partnershipPatterns.some(pattern => pattern.test(userMessage));
-    
-    if (isPartnershipQuery) {
-      mcpThinking.push('🎬 Searching for partnership/production opportunities...');
-      
-      const partnershipsData = await hubspotAPI.searchProductions({ limit: 20 });
-      
-      if (partnershipsData.results?.length > 0) {
-        mcpThinking.push(`✅ Found ${partnershipsData.results.length} partnership opportunities`);
-        
-        const partnerships = partnershipsData.results.map(p => ({
-          id: p.id,
-          name: p.properties.partnership_name || p.properties.production_name || p.properties.name,
-          synopsis: p.properties.synopsis,
-          contentType: p.properties.content_type,
-          distributor: p.properties.distributor,
-          stage: p.properties.partnership_status || p.properties.hs_pipeline_stage,
-          fee: p.properties.hollywood_branded_fee,
-          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.PARTNERSHIPS}/${p.id}`,
-          projectUrl: `https://www.google.com/search?q=${encodeURIComponent(p.properties.partnership_name || p.properties.production_name || p.properties.name || '')}`, // Google search URL
-          lastModified: p.properties.hs_lastmodifieddate
-        }));
-        
-        return {
-          organizedData: {
-            partnershipSearch: true,
-            partnerships: partnerships,
-            queryType: 'partnership_opportunities'
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-    }
-    
-    const productionMatch = userMessage.match(/Title:\s*([^\n]+)[\s\S]*Synopsis:\s*([\s\S]+)/i);
-    if (productionMatch) {
-      const title = productionMatch[1].trim();
-      const synopsis = productionMatch[2].trim();
-      
-      mcpThinking.push(`🎬 Production shared: "${title}"`);
-      mcpThinking.push('🔍 Searching for this specific partnership in HubSpot...');
-      
-      const partnershipSearch = await hubspotAPI.searchProductions({
-        filterGroups: [{
-          filters: [{
-            propertyName: 'partnership_name',
-            operator: 'CONTAINS_TOKEN',
-            value: title
-          }]
-        }],
-        limit: 5
-      });
-      
-      let partnershipDetails = null;
-      if (partnershipSearch.results?.length > 0) {
-        partnershipDetails = partnershipSearch.results[0];
-        mcpThinking.push('✅ Found partnership in HubSpot');
-      } else {
-        mcpThinking.push('⚠️ Partnership not found in HubSpot - will use provided details');
-      }
-      
-      const [firefliesData, o365Data] = await Promise.all([
-        firefliesApiKey ? searchFireflies(title, { limit: 10 }) : { transcripts: [] },
-        msftClientId ? o365API.searchEmails(title, { days: 60 }) : []
-      ]);
-      
-      if (firefliesData.transcripts?.length > 0) {
-        mcpThinking.push(`✅ Found ${firefliesData.transcripts.length} meetings about this production`);
-      }
-      if (o365Data?.length > 0) {
-        mcpThinking.push(`✅ Found ${o365Data.length} emails about this production`);
-      }
-      
-      mcpThinking.push('🎯 Finding suitable brands for this production...');
-      
-      const hubspotBrands = await hubspotAPI.searchBrands({ limit: 50 });
-      
-      const productionContext = {
-        title: title,
-        synopsis: synopsis,
-        genre: extractGenreFromSynopsis(synopsis),
-        contentType: partnershipDetails?.properties.content_type,
-        distributor: partnershipDetails?.properties.distributor
-      };
-      
-      const { topBrands } = await narrowWithIntelligentTags(
-        hubspotBrands.results || [],
-        firefliesData.transcripts || [],
-        o365Data || [],
-        `${userMessage}\nProduction Context: ${JSON.stringify(productionContext)}`
-      );
-      
-      return {
-        organizedData: {
-          productionShared: true,
-          production: {
-            title: title,
-            synopsis: synopsis,
-            hubspotDetails: partnershipDetails,
-            context: productionContext,
-            hubspotUrl: partnershipDetails ? `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.PARTNERSHIPS}/${partnershipDetails.id}` : null,
-            projectUrl: `https://www.google.com/search?q=${encodeURIComponent(title)}` // Google search URL
-          },
-          topBrands: topBrands.slice(0, 15),
-          brandSuggestions: topBrands.slice(0, 15).map(brand => ({
-            id: brand.id,
-            name: brand.name,
-            score: brand.relevanceScore,
-            tag: brand.tags[0] || 'Potential Match',
-            tags: brand.tags,
-            reason: brand.reason,
-            budget: brand.budget,
-            hasAgency: brand.hasPartner,
-            agencyName: brand.partnerAgency,
-            hubspotUrl: brand.hubspotUrl,
-            meetingUrl: brand.meetingContext?.url || null,
-            meetingTitle: brand.meetingContext?.title || null,
-            emailSubject: brand.emailContext?.subject || null
-          })),
-          relatedMeetings: firefliesData.transcripts?.slice(0, 5) || [],
-          relatedEmails: o365Data?.slice(0, 5) || [],
-          currentProduction: title,
-          productionContext: productionContext
-        },
-        mcpThinking,
-        usedMCP: true
-      };
-    }
-    const contextPatterns = [
-      /(?:meetings?|calls?|discussions?).*?(?:with|about|regarding)?\s*(?:brands?|partners?|companies)/i,
-      /(?:valuable|important|key|recent|latest).*?(?:meetings?|calls?|emails?)/i,
-      /(?:what|which|show|list).*?(?:meetings?|calls?|emails?).*?(?:this month|last month|recent)/i,
-      /(?:meetings?|emails?|calls?).*?(?:this month|last month|this week|recently)/i,
-      /(?:any|all|show).*?(?:meetings?|emails?|activity).*?(?:with|from|about)/i
-    ];
-    
-    const isContextQuery = contextPatterns.some(pattern => pattern.test(userMessage));
-    
-    if (isContextQuery) {
-      mcpThinking.push('📊 Analyzing meeting and email activity...');
-      
-      let daysToSearch = 30;
-      if (userMessage.includes('this week')) daysToSearch = 7;
-      if (userMessage.includes('today')) daysToSearch = 1;
-      if (userMessage.includes('this month')) {
-        const now = new Date();
-        daysToSearch = now.getDate();
-      }
-      
-      const [firefliesData, o365Data] = await Promise.all([
-        firefliesApiKey ? searchFireflies('', { 
-          limit: 20, 
-          fromDate: new Date(Date.now() - daysToSearch * 24 * 60 * 60 * 1000).toISOString()
-        }) : { transcripts: [] },
-        msftClientId ? o365API.searchEmails('', { days: daysToSearch }) : []
-      ]);
-      
-      const valuableMeetings = firefliesData.transcripts?.map(meeting => {
-        const overview = (meeting.summary?.overview || '').toLowerCase();
-        const topics = (meeting.summary?.topics_discussed || '').toLowerCase();
-        
-        const hasActionItems = meeting.summary?.action_items?.length > 0;
-        const hasBudgetDiscussion = overview.includes('budget') || overview.includes('spend') || overview.includes('investment');
-        const hasDecisionMaker = meeting.participants?.some(p => 
-          p.toLowerCase().includes('ceo') || 
-          p.toLowerCase().includes('vp') || 
-          p.toLowerCase().includes('director')
-        );
-        
-        let valueScore = 0;
-        if (hasActionItems) valueScore += 30;
-        if (hasBudgetDiscussion) valueScore += 40;
-        if (hasDecisionMaker) valueScore += 30;
-        if (overview.includes('partnership') || overview.includes('integration')) valueScore += 20;
-        
-        return {
-          ...meeting,
-          valueScore,
-          valueIndicators: {
-            hasActionItems,
-            hasBudgetDiscussion,
-            hasDecisionMaker
-          }
-        };
-      }).sort((a, b) => b.valueScore - a.valueScore) || [];
-      
-      if (valuableMeetings.length > 0) {
-        mcpThinking.push(`✅ Found ${valuableMeetings.length} meetings this month`);
-        mcpThinking.push(`🏆 Identified ${valuableMeetings.filter(m => m.valueScore > 50).length} high-value meetings`);
-      }
-      
-      return {
-        organizedData: {
-          contextAnalysis: true,
-          queryType: userMessage.includes('valuable') ? 'valuable_meetings' : 'all_activity',
-          valuableMeetings: valuableMeetings.slice(0, 10),
-          emails: o365Data || [],
-          timeFrame: `Last ${daysToSearch} days`,
-          currentProduction: currentProduction
-        },
-        mcpThinking,
-        usedMCP: true
-      };
-    }
-    
-    mcpThinking.push('🔍 Starting brand partnership search...');
-    
-    const fullContext = (userMessage + ' ' + (conversationContext || ''));
-    const productionContext = extractProductionContext(fullContext);
-    
-    if (productionContext.genre) {
-      mcpThinking.push(`🎯 Focusing on ${productionContext.genre} genre`);
-    }
-    
-    const searchKeywords = [];
-    if (currentProduction) {
-      const titleWords = currentProduction.split(' ').filter(w => w.length > 3);
-      searchKeywords.push(...titleWords);
-    }
-    if (productionContext.genre) {
-      searchKeywords.push(productionContext.genre);
-    }
-    
-    if (searchKeywords.length === 0) {
-      searchKeywords.push('brand', 'partnership');
-    }
-    
-    // Smart search strategy based on query type
-    let firefliesSearchTerm = '';
-    let emailSearchTerm = '';
-    
-    // If we have a current production, search for it
-    if (currentProduction) {
-      firefliesSearchTerm = currentProduction;
-      emailSearchTerm = currentProduction;
-    } 
-    // If it's a genre-based query, search for genre keywords
-    else if (productionContext.genre) {
-      // Genre terms that actually appear in meetings/emails
-      const genreSearchTerms = {
-        action: 'action',
-        comedy: 'comedy',
-        drama: 'drama',
-        horror: 'thriller',
-        documentary: 'documentary',
-        sports: 'sports',
-        scifi: 'sci-fi',
-        romance: 'romantic',
-        crime: 'crime'
-      };
-      firefliesSearchTerm = genreSearchTerms[productionContext.genre] || '';
-      emailSearchTerm = firefliesSearchTerm;
-    }
-    // For general brand searches, look for common terms
-    else if (userMessage.toLowerCase().includes('brand')) {
-      firefliesSearchTerm = 'brand integration';
-      emailSearchTerm = 'partnership';
-    }
-    
-    const [hubspotData, firefliesData, o365Data] = await Promise.all([
-      hubspotApiKey ? searchHubSpot(userMessage, projectId, 50) : { brands: [], productions: [] },
-      firefliesApiKey ? searchFireflies(firefliesSearchTerm, { limit: 20 }) : { transcripts: [] },
-      msftClientId ? o365API.searchEmails(emailSearchTerm, { days: 30 }) : []
-    ]);
-    
-    if (hubspotData.brands?.length > 0) {
-      mcpThinking.push(`✅ Found ${hubspotData.brands.length} brands in HubSpot`);
-    }
-    if (firefliesData.transcripts?.length > 0) {
-      mcpThinking.push(`✅ Found ${firefliesData.transcripts.length} meeting transcripts`);
-    }
-    if (o365Data?.length > 0) {
-      mcpThinking.push(`✅ Found ${o365Data.length} email threads`);
-    }
-    
-    mcpThinking.push('🧠 Analyzing brand relevance...');
-    
-    const { topBrands } = await narrowWithIntelligentTags(
-      hubspotData.brands || [],
-      firefliesData.transcripts || [],
-      o365Data || [],
-      userMessage
-    );
-    
-    const brandSuggestions = topBrands.slice(0, 15).map(brand => {
-      // Debug logging
-      if (brand.tags.length > 1) {
-        console.log(`Brand ${brand.name} has ${brand.tags.length} tags:`, brand.tags);
-      }
-      
-      return {
-        id: brand.id,
-        name: brand.name,
-        score: brand.relevanceScore,
-        tag: brand.tags[0] || 'Potential Match',
-        tags: brand.tags,
-        reason: brand.reason,
-        budget: brand.budget,
-        hasAgency: brand.hasPartner,
-        agencyName: brand.partnerAgency,
-        hubspotUrl: brand.hubspotUrl,
-        brandUrl: `https://www.google.com/search?q=${encodeURIComponent(brand.name)}`,
-        meetingUrl: brand.meetingContext?.url || null,
-        meetingTitle: brand.meetingContext?.title || null,
-        emailSubject: brand.emailContext?.subject || null
-      };
-    });
-    
-    mcpThinking.push(`✨ Prepared ${brandSuggestions.length} recommendations`);
-    
-    return {
-      organizedData: {
-        topBrands: topBrands.slice(0, 10),
-        brandSuggestions: brandSuggestions,
-        firefliesTranscripts: firefliesData.transcripts?.slice(0, 3) || [],
-        o365Emails: o365Data?.slice(0, 3) || [],
-        currentProduction: currentProduction,
-        productionContext: productionContext
-      },
-      mcpThinking,
-      usedMCP: true
-    };
-    
   } catch (error) {
+    console.error(`Error executing tool "${intent.tool}":`, error);
     return null;
   }
 }
@@ -2080,87 +1615,6 @@ async function generateVeo3Video({
   }
 }
 
-async function shouldUseSearch(userMessage, conversationContext) {
-  if (!openAIApiKey) return false;
-  
-  try {
-    const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
-    const messageClues = userMessage.toLowerCase();
-    
-    // IMMEDIATE DETECTION for production formats
-    if (userMessage.match(/Title:\s*[^\n]+[\s\S]*Synopsis:/i)) {
-      return true;
-    }
-    
-    // Check for production patterns
-    if (messageClues.includes('synopsis:') && (messageClues.includes('title:') || messageClues.includes('talent:') || messageClues.includes('distributor:'))) {
-      return true;
-    }
-    
-    // Check for brand/partnership queries
-    if (messageClues.match(/\b(brands?|partnerships?|integrations?|matches|suitable|opportunities)\b/i)) {
-      return true;
-    }
-    
-    // For everything else, let AI decide intelligently
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [{
-          role: 'system',
-          content: `You are a query classifier for a Hollywood production company's AI assistant. The assistant has access to:
-- HubSpot CRM (brands, companies, contacts)
-- Fireflies meeting transcripts
-- Email archives
-- Production/film/show databases
-
-Return "true" ONLY if the query is asking to:
-- Search for brands, companies, or partnerships
-- Look up meetings, calls, or transcripts
-- Find emails or messages
-- Match brands to a production/film/show
-- Access any business data from these systems
-
-Return "false" for:
-- General knowledge questions
-- Casual conversation
-- Questions about how things work
-- Advice or recommendations not requiring database searches
-- Any query that can be answered without searching internal systems
-
-Just return "true" or "false", nothing else.`
-        }, {
-          role: 'user',
-          content: `Query: "${userMessage}"
-Recent context: "${contextClues.slice(-300)}"
-
-Should I search the internal databases for this?`
-        }],
-        temperature: 0,
-        max_tokens: 10
-      }),
-    });
-    
-    const data = await response.json();
-    const result = data.choices[0].message.content.toLowerCase().trim();
-    return result === 'true';
-    
-  } catch (error) {
-    // Enhanced fallback patterns
-    const patterns = [
-      /Title:\s*[^\n]+/i,
-      /Synopsis:/i,
-      /\b(brand|partnership|integration|hubspot|fireflies|meeting|email)\b/i,
-      /\b(find|search|look for|match|suitable)\s+\w*\s*(brands?|partners?)/i
-    ];
-    return patterns.some(pattern => userMessage.match(pattern));
-  }
-}
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -2561,708 +2015,81 @@ export default async function handler(req, res) {
         } catch (error) {
           res.status(500).json({ error: 'Error processing audio data.', details: error.message });
         }
+      // This is the complete and final code to paste inside the 'else if (userMessage) { ... }' block
       } else if (userMessage) {
+        console.log('[DEBUG] Starting message processing for:', userMessage);
         try {
           let aiReply = '';
-          let mcpThinking = [];
+          let mcpSteps = [];
           let usedMCP = false;
+          let structuredData = null;
 
-          let claudeOrganizedData = null;
-          if (shouldSearchDatabases && anthropicApiKey) {
-            const claudeResult = await handleClaudeSearch(
-              userMessage, 
-              knowledgeBaseInstructions, 
-              projectId, 
-              sessionId,
+          console.log('[DEBUG] Calling handleClaudeSearch...');
+          const claudeResult = await handleClaudeSearch(
+              userMessage,
+              projectId,
               conversationContext
-            );
-            
-            if (claudeResult) {
-              claudeOrganizedData = claudeResult.organizedData;
-              mcpThinking = claudeResult.mcpThinking || [];
-              
-              if (claudeResult.mcpThinking && Array.isArray(claudeResult.mcpThinking)) {
-                claudeResult.mcpThinking.forEach((step, index) => {
-                  mcpRawOutput.push({
-                    text: step,
-                    timestamp: Date.now() - mcpStartTime + (index * 200)
-                  });
-                });
-              }
-              
+          );
+          console.log('[DEBUG] handleClaudeSearch returned:', claudeResult ? 'data' : 'null');
+
+          if (claudeResult) {
+              // A tool was successfully used!
               usedMCP = true;
-              mcpRawOutput.push({
-                text: '✅ Claude MCP successfully gathered and organized data',
-                timestamp: Date.now() - mcpStartTime
-              });
-            } else {
-              mcpRawOutput.push({
-                text: '⚠️ Claude MCP failed - using standard OpenAI',
-                timestamp: Date.now() - mcpStartTime
-              });
-            }
+              mcpSteps = claudeResult.mcpThinking || [];
+              structuredData = claudeResult.organizedData;
+
+              console.log('[DEBUG] Generating text summary with OpenAI...');
+              let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
+              systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
+
+**CRITICAL RULE: If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT, under any circumstances, invent or hallucinate information, brands, or meeting details.**`;
+
+              systemMessageContent += '\n\n```json\n';
+              systemMessageContent += JSON.stringify(structuredData, null, 2);
+              systemMessageContent += '\n```';
+
+              aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+              console.log('[DEBUG] OpenAI response received');
+
           } else {
-            if (!shouldSearchDatabases) {
-            }
-            if (!anthropicApiKey) {
-            }
+              // No tool was used, so it's a general conversation.
+              console.log('[DEBUG] No tool used, generating general response...');
+              usedMCP = false;
+              let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in brand integration into Hollywood entertainment.";
+              if (conversationContext) {
+                  systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+              }
+              aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
           }
-          
-          if (!aiReply) {
-            mcpRawOutput.push({
-              text: '📝 Using OpenAI for response generation',
-              timestamp: Date.now() - mcpStartTime
-            });
-            
-            let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
-            
-            if (claudeOrganizedData) {
-              if (claudeOrganizedData.pitchRequest) {
-                systemMessageContent += `\n\n**BRAND PITCH ANALYSIS:**\n`;
-                
-                if (claudeOrganizedData.brands?.length > 0) {
-                  claudeOrganizedData.brands.forEach((brandData, index) => {
-                    systemMessageContent += `\n\n## ${index + 1}. ${brandData.brand.name}\n`;
-                    systemMessageContent += `Category: ${brandData.brand.category || 'Not specified'}\n`;
-                    systemMessageContent += `Status: ${brandData.brand.clientStatus || 'Unknown'}\n`;
-                    if (brandData.brand.budget) {
-                      systemMessageContent += `Budget: ${brandData.brand.budget}\n`;
-                    }
-                    if (brandData.brand.agencyPartner) {
-                      systemMessageContent += `Agency: ${brandData.brand.agencyPartner}\n`;
-                    }
-                    systemMessageContent += `HubSpot: ${brandData.brand.hubspotUrl}\n`;
-                    
-                    systemMessageContent += `\n### BRAND INSIGHTS:\n`;
-                    systemMessageContent += `Engagement Level: ${brandData.insights.engagementLevel}\n`;
-                    if (brandData.insights.lastTouchpoint) {
-                      const daysSince = Math.floor((new Date() - brandData.insights.lastTouchpoint.date) / (1000 * 60 * 60 * 24));
-                      systemMessageContent += `Last Contact: ${brandData.insights.lastTouchpoint.type} "${brandData.insights.lastTouchpoint.title}" (${daysSince} days ago)\n`;
-                    }
-                    systemMessageContent += `Sentiment: ${brandData.insights.sentimentTrend}\n`;
-                    
-                    if (brandData.insights.keyTopics.length > 0) {
-                      systemMessageContent += `Key Discussion Topics: ${brandData.insights.keyTopics.join(', ')}\n`;
-                    }
-                    
-                    if (brandData.insights.decisionMakers.length > 0) {
-                      systemMessageContent += `\nKey Contacts:\n`;
-                      brandData.insights.decisionMakers.forEach(dm => {
-                        systemMessageContent += `- ${dm.name} (${dm.interactions} interactions)\n`;
-                      });
-                    }
-                    
-                    if (brandData.meetings.length > 0) {
-                      systemMessageContent += `\nRecent Meetings:\n`;
-                      brandData.meetings.slice(0, 3).forEach(m => {
-                        systemMessageContent += `- "${m.title}" on ${m.date}\n`;
-                        if (m.actionItems && m.actionItems.length > 0) {
-                          systemMessageContent += `  Action: ${m.actionItems[0]}\n`;
-                        }
-                      });
-                    }
-                    
-                    if (brandData.emails.length > 0) {
-                      systemMessageContent += `\nRecent Emails:\n`;
-                      brandData.emails.slice(0, 3).forEach(e => {
-                        systemMessageContent += `- "${e.subject}" from ${e.from}\n`;
-                      });
-                    }
-                    
-                    systemMessageContent += `\n### INTEGRATION IDEAS:\n`;
-                    brandData.integrationIdeas.forEach((idea, i) => {
-                      systemMessageContent += `\n${i + 1}. **${idea.type}**\n`;
-                      systemMessageContent += `   ${idea.description}\n`;
-                      systemMessageContent += `   Why it works: ${idea.rationale}\n`;
-                    });
-                    
-                    if (brandData.insights.opportunities.length > 0) {
-                      systemMessageContent += `\n### OPPORTUNITIES:\n`;
-                      brandData.insights.opportunities.forEach(opp => {
-                        systemMessageContent += `- ${opp}\n`;
-                      });
-                    }
-                    
-                    if (brandData.insights.painPoints.length > 0) {
-                      systemMessageContent += `\n### CONSIDERATIONS:\n`;
-                      brandData.insights.painPoints.forEach(pain => {
-                        systemMessageContent += `- ${pain}\n`;
-                      });
-                    }
-                  });
-                } else {
-                  systemMessageContent += `\nNo brands found matching: ${claudeOrganizedData.requestedBrands.join(', ')}\n`;
-                }
-                
-                systemMessageContent += `\n\n**INSTRUCTIONS FOR PITCH CREATION:**\n`;
-                systemMessageContent += `- Create compelling, personalized pitches for each brand\n`;
-                systemMessageContent += `- Reference specific meetings and conversations to show continuity\n`;
-                systemMessageContent += `- Address any pain points mentioned in past discussions\n`;
-                systemMessageContent += `- Emphasize the integration ideas that best fit their brand goals\n`;
-                systemMessageContent += `- Include next steps based on their engagement level\n`;
-                systemMessageContent += `- Make each pitch feel like a natural continuation of your relationship\n`;
-                systemMessageContent += `- Format brand names with HubSpot links like: Brand Name (HubSpot: URL)\n`;
-                systemMessageContent += `- In HB Insights, include Fireflies meeting links when referencing meetings\n`;
-                systemMessageContent += `- Keep HB Insights focused on actual data points, no fluff\n`;
-                
-                if (claudeOrganizedData.currentProduction) {
-                  systemMessageContent += `- Tie all pitches to the production: ${claudeOrganizedData.currentProduction}\n`;
-                }
-              }
-              else if (claudeOrganizedData.partnershipSearch) {
-                systemMessageContent += `\n\n**PARTNERSHIP/PRODUCTION OPPORTUNITIES:**\n`;
-                
-                if (claudeOrganizedData.partnerships?.length > 0) {
-                  systemMessageContent += `\nFound ${claudeOrganizedData.partnerships.length} partnership opportunities:\n`;
-                  claudeOrganizedData.partnerships.forEach((p, i) => {
-                    systemMessageContent += `\n${i + 1}. ${p.name}\n`;
-                    if (p.synopsis) {
-                      systemMessageContent += `   Synopsis: ${p.synopsis.slice(0, 150)}...\n`;
-                    }
-                    if (p.contentType) {
-                      systemMessageContent += `   Type: ${p.contentType}\n`;
-                    }
-                    if (p.distributor) {
-                      systemMessageContent += `   Distributor: ${p.distributor}\n`;
-                    }
-                    if (p.stage) {
-                      systemMessageContent += `   Stage: ${p.stage}\n`;
-                    }
-                    if (p.fee) {
-                      systemMessageContent += `   Fee: ${p.fee}\n`;
-                    }
-                    systemMessageContent += `   HubSpot: ${p.hubspotUrl}\n`;
-                  });
-                }
-                
-                systemMessageContent += `\n**INSTRUCTIONS:**\n`;
-                systemMessageContent += `- Present these as exciting opportunities\n`;
-                systemMessageContent += `- Highlight any that match the user's criteria\n`;
-                systemMessageContent += `- Include the HubSpot links for easy access\n`;
-              }
-              else if (claudeOrganizedData.productionShared) {
-                systemMessageContent += `\n\n**PRODUCTION ANALYSIS:**\n`;
-                systemMessageContent += `Title: ${claudeOrganizedData.production.title}\n`;
-                systemMessageContent += `Synopsis: ${claudeOrganizedData.production.synopsis}\n`;
-                
-                if (claudeOrganizedData.production.hubspotDetails) {
-                  const details = claudeOrganizedData.production.hubspotDetails.properties;
-                  systemMessageContent += `\n**HubSpot Details:**\n`;
-                  if (details.content_type) systemMessageContent += `Type: ${details.content_type}\n`;
-                  if (details.distributor) systemMessageContent += `Distributor: ${details.distributor}\n`;
-                  if (details.partnership_stage) systemMessageContent += `Stage: ${details.partnership_stage}\n`;
-                }
-                
-                if (claudeOrganizedData.relatedMeetings?.length > 0) {
-                  systemMessageContent += `\n**Related Meetings:**\n`;
-                  claudeOrganizedData.relatedMeetings.forEach(m => {
-                    systemMessageContent += `- "${m.title}" on ${m.dateString}: ${m.transcript_url}\n`;
-                  });
-                }
-                
-                systemMessageContent += `\n**RECOMMENDED BRANDS FOR THIS PRODUCTION:**\n`;
-                if (claudeOrganizedData.topBrands?.length > 0) {
-                  claudeOrganizedData.topBrands.forEach((brand, index) => {
-                    systemMessageContent += `\n${index + 1}. ${brand.name}\n`;
-                    systemMessageContent += `   Tags: ${brand.tags.join(', ')}\n`;
-                    systemMessageContent += `   Why: ${brand.reason}\n`;
-                    if (brand.budget !== 'TBD') {
-                      systemMessageContent += `   Budget: ${brand.budget}\n`;
-                    }
-                    if (brand.hasPartner) {
-                      systemMessageContent += `   Agency: ${brand.partnerAgency}\n`;
-                    }
-                    if (brand.hubspotUrl) {
-                      systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
-                    }
-                  });
-                  
-                  systemMessageContent += `\n**INSTRUCTIONS:**\n`;
-                  systemMessageContent += `- Explain why each brand is a good fit for this specific production\n`;
-                  systemMessageContent += `- Reference the genre (${claudeOrganizedData.production.context.genre}) when explaining matches\n`;
-                  systemMessageContent += `- Highlight brands with recent activity or meetings\n`;
-                  systemMessageContent += `- Make it clear these are data-driven recommendations\n`;
-                }
-              }
-              else if (claudeOrganizedData.queryIntent) {
-                const intent = claudeOrganizedData.queryIntent;
-                
-                switch (intent.type) {
-                  case 'urgent_deals':
-                    systemMessageContent += `\n\n**URGENT ATTENTION NEEDED:**\n`;
-                    if (claudeOrganizedData.topBrands?.length > 0) {
-                      systemMessageContent += `\nFound ${claudeOrganizedData.topBrands.length} brands requiring immediate attention:\n`;
-                      claudeOrganizedData.topBrands.forEach((brand, i) => {
-                        systemMessageContent += `\n${i + 1}. ${brand.name} - ${brand.reason}\n`;
-                        if (brand.meetingContext) {
-                          systemMessageContent += `   Last discussed: "${brand.meetingContext.title}" on ${brand.meetingContext.date}\n`;
-                          systemMessageContent += `   Meeting: ${brand.meetingContext.url}\n`;
-                          if (brand.meetingContext.actionItems) {
-                            systemMessageContent += `   ⚡ ACTION NEEDED: ${brand.meetingContext.actionItems}\n`;
-                          }
-                        }
-                        systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
-                      });
-                    } else {
-                      systemMessageContent += `\nNo urgent deals found at this time.\n`;
-                    }
-                    systemMessageContent += `\n**INSTRUCTIONS:** Focus on brands with pending action items and upcoming deadlines. Be specific about what needs to be done.\n`;
-                    break;
-                    
-                  case 'budget_filter':
-                    systemMessageContent += `\n\n**BRANDS MATCHING BUDGET CRITERIA:**\n`;
-                    if (intent.focus.minBudget) {
-                      systemMessageContent += `\nShowing brands with budgets over ${intent.focus.minBudget}M:\n`;
-                    }
-                    if (claudeOrganizedData.topBrands?.length > 0) {
-                      claudeOrganizedData.topBrands.forEach((brand, i) => {
-                        systemMessageContent += `\n${i + 1}. ${brand.name} - ${brand.budget} budget\n`;
-                        systemMessageContent += `   ${brand.reason}\n`;
-                        systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
-                      });
-                    }
-                    systemMessageContent += `\n**INSTRUCTIONS:** Emphasize budget amounts and potential integration value.\n`;
-                    break;
-                    
-                  case 'pipeline_stage':
-                    systemMessageContent += `\n\n**BRANDS READY TO CLOSE:**\n`;
-                    if (claudeOrganizedData.topBrands?.length > 0) {
-                      systemMessageContent += `\n${claudeOrganizedData.topBrands.length} brands are in final stages:\n`;
-                      claudeOrganizedData.topBrands.forEach((brand, i) => {
-                        systemMessageContent += `\n${i + 1}. ${brand.name} - ${brand.lifecyclestage || 'Active Deal'}\n`;
-                        systemMessageContent += `   Status: ${brand.reason}\n`;
-                        if (brand.hasPartner) {
-                          systemMessageContent += `   ✅ Agency Partner: ${brand.partnerAgency}\n`;
-                        }
-                        systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
-                      });
-                    }
-                    systemMessageContent += `\n**INSTRUCTIONS:** Highlight brands closest to signing and suggest immediate next steps.\n`;
-                    break;
-                    
-                  case 'relationship_health':
-                    systemMessageContent += `\n\n**BRANDS NEEDING FOLLOW-UP:**\n`;
-                    if (claudeOrganizedData.topBrands?.length > 0) {
-                      systemMessageContent += `\nThese brands haven't had recent activity and may need attention:\n`;
-                      claudeOrganizedData.topBrands.forEach((brand, i) => {
-                        systemMessageContent += `\n${i + 1}. ${brand.name}\n`;
-                        systemMessageContent += `   Last Activity: ${brand.lastActivity ? new Date(brand.lastActivity).toLocaleDateString() : 'Unknown'}\n`;
-                        systemMessageContent += `   Status: ${brand.lifecyclestage}\n`;
-                        systemMessageContent += `   Suggestion: Reach out to re-engage\n`;
-                        systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
-                      });
-                    }
-                    systemMessageContent += `\n**INSTRUCTIONS:** Suggest specific re-engagement strategies for each brand.\n`;
-                    break;
-                    
-                  case 'activity_summary':
-                    systemMessageContent += `\n\n**YOUR ACTIVITY SUMMARY:**\n`;
-                    systemMessageContent += `\n${claudeOrganizedData.summary}\n`;
-                    
-                    if (claudeOrganizedData.recentMeetings?.length > 0) {
-                      systemMessageContent += `\n**Recent Meetings:**\n`;
-                      claudeOrganizedData.recentMeetings.forEach(m => {
-                        systemMessageContent += `- "${m.title}" on ${m.dateString}: ${m.transcript_url}\n`;
-                      });
-                    }
-                    
-                    if (claudeOrganizedData.recentEmails?.length > 0) {
-                      systemMessageContent += `\n**Recent Emails:**\n`;
-                      claudeOrganizedData.recentEmails.forEach(e => {
-                        systemMessageContent += `- "${e.subject}" from ${e.fromName || e.from}\n`;
-                      });
-                    }
-                    
-                    if (claudeOrganizedData.topBrands?.length > 0) {
-                      systemMessageContent += `\n**Active Brands:**\n`;
-                      claudeOrganizedData.topBrands.slice(0, 5).forEach(b => {
-                        systemMessageContent += `- ${b.name}: ${b.tags.join(', ')}\n`;
-                      });
-                    }
-                    systemMessageContent += `\n**INSTRUCTIONS:** Provide a conversational summary of what's happening.\n`;
-                    break;
-                    
-                  default:
-                    if (claudeOrganizedData.topBrands?.length > 0) {
-                      systemMessageContent += "\n\n**BRAND PARTNERSHIP RECOMMENDATIONS:**\n";
-                      
-                      if (claudeOrganizedData.currentProduction) {
-                        systemMessageContent += `\nFor Production: ${claudeOrganizedData.currentProduction}\n`;
-                      }
-                      
-                      claudeOrganizedData.topBrands.forEach((brand, index) => {
-                        systemMessageContent += `\n${index + 1}. ${brand.name}\n`;
-                        systemMessageContent += `   Tags: ${brand.tags.join(', ')}\n`;
-                        systemMessageContent += `   Why: ${brand.reason}\n`;
-                        if (brand.budget !== 'TBD') {
-                          systemMessageContent += `   Budget: ${brand.budget}\n`;
-                        }
-                        if (brand.hasPartner) {
-                          systemMessageContent += `   Agency: ${brand.partnerAgency}\n`;
-                        }
-                        if (brand.hubspotUrl) {
-                          systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
-                        }
-                        if (brand.meetingContext) {
-                          systemMessageContent += `   Meeting: "${brand.meetingContext.title}" (${brand.meetingContext.date})\n`;
-                          systemMessageContent += `   Meeting Link: ${brand.meetingContext.url}\n`;
-                        }
-                      });
-                    }
-                }
-                
-                systemMessageContent += `\n**GENERAL INSTRUCTIONS:**\n`;
-                systemMessageContent += `- Respond naturally and conversationally\n`;
-                systemMessageContent += `- Always include clickable links\n`;
-                systemMessageContent += `- Be specific and actionable\n`;
-                systemMessageContent += `- Don't just list data - provide insights\n`;
-              }
-              else if (claudeOrganizedData.slashCommand) {
-                systemMessageContent += `\n\n**/${claudeOrganizedData.commandType.toUpperCase()} RESULTS FOR: ${claudeOrganizedData.brandName}**\n`;
-                
-                if (claudeOrganizedData.commandType === 'meetings' && claudeOrganizedData.meetings?.length > 0) {
-                  claudeOrganizedData.meetings.forEach(meeting => {
-                    systemMessageContent += `\n✅ "${meeting.title}" on ${meeting.dateString}\n`;
-                    systemMessageContent += `Link: ${meeting.transcript_url}\n`;
-                    if (meeting.summary?.overview) {
-                      systemMessageContent += `Summary: ${meeting.summary.overview.slice(0, 150)}...\n`;
-                    }
-                  });
-                } else if (claudeOrganizedData.commandType === 'emails' && claudeOrganizedData.emails?.length > 0) {
-                  claudeOrganizedData.emails.forEach(email => {
-                    systemMessageContent += `\n✉️ "${email.subject}" from ${email.fromName || email.from}\n`;
-                    systemMessageContent += `Date: ${new Date(email.receivedDate).toLocaleDateString()}\n`;
-                    if (email.preview) {
-                      systemMessageContent += `Preview: ${email.preview}...\n`;
-                    }
-                  });
-                } else if (claudeOrganizedData.commandType === 'contacts' && claudeOrganizedData.contacts?.length > 0) {
-                  systemMessageContent += `\nContacts at ${claudeOrganizedData.brand.properties.name}:\n`;
-                  claudeOrganizedData.contacts.forEach(contact => {
-                    systemMessageContent += `- ${contact.properties.firstname || ''} ${contact.properties.lastname || ''} - ${contact.properties.email || 'No email'}\n`;
-                  });
-                } else {
-                  systemMessageContent += `\nNo ${claudeOrganizedData.commandType} found for "${claudeOrganizedData.brandName}".\n`;
-                }
-                
-                systemMessageContent += `\n**TIP:** You can use slash commands for quick lookups:\n`;
-                systemMessageContent += `- /meetings [brand name]\n`;
-                systemMessageContent += `- /emails [brand name]\n`;
-                systemMessageContent += `- /contacts [brand name]\n`;
-              }
-              else if (claudeOrganizedData.specificBrandWithContext) {
-                systemMessageContent += `\n\n**${claudeOrganizedData.brandName} - RECENT ACTIVITY:**\n`;
-                
-                const brand = claudeOrganizedData.brand.properties;
-                systemMessageContent += `\nBrand: ${brand.brand_name || brand.name}\n`;
-                systemMessageContent += `HubSpot: https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.BRANDS}/${claudeOrganizedData.brand.id}\n`;
-                
-                if (claudeOrganizedData.recentMeetings?.length > 0) {
-                  systemMessageContent += `\n**RECENT MEETINGS:**\n`;
-                  claudeOrganizedData.recentMeetings.forEach(meeting => {
-                    systemMessageContent += `\nYes, there was a call titled "${meeting.title}" on ${meeting.dateString}\n`;
-                    systemMessageContent += `Link: ${meeting.transcript_url}\n`;
-                    
-                    if (meeting.summary?.overview) {
-                      const takeaway = meeting.summary.overview.slice(0, 150);
-                      systemMessageContent += `Key Discussion: ${takeaway}...\n`;
-                    }
-                    
-                    if (meeting.summary?.action_items && Array.isArray(meeting.summary.action_items) && meeting.summary.action_items.length > 0) {
-                      systemMessageContent += `Action Items: ${meeting.summary.action_items[0]}\n`;
-                    }
-                    
-                    if (meeting.participants?.length > 0) {
-                      systemMessageContent += `Participants: ${meeting.participants.slice(0, 3).join(', ')}\n`;
-                    }
-                  });
-                } else {
-                  systemMessageContent += `\nNo recent meetings found with ${claudeOrganizedData.brandName} in the last 30 days.\n`;
-                }
-                
-                if (claudeOrganizedData.recentEmails?.length > 0) {
-                  systemMessageContent += `\n**RECENT EMAILS:**\n`;
-                  claudeOrganizedData.recentEmails.forEach(email => {
-                    systemMessageContent += `\nEmail on ${new Date(email.receivedDate).toLocaleDateString()}: "${email.subject}"\n`;
-                    systemMessageContent += `From: ${email.fromName || email.from}\n`;
-                    if (email.preview) {
-                      const quote = email.preview.slice(0, 100);
-                      systemMessageContent += `They mentioned: "${quote}..."\n`;
-                    }
-                  });
-                } else {
-                  systemMessageContent += `\nNo recent emails found with ${claudeOrganizedData.brandName}.\n`;
-                }
-                
-                if (claudeOrganizedData.contacts?.length > 0) {
-                  systemMessageContent += `\n**CONTACTS:**\n`;
-                  claudeOrganizedData.contacts.forEach(contact => {
-                    systemMessageContent += `- ${contact.properties.firstname || ''} ${contact.properties.lastname || ''} (${contact.properties.email || 'No email'})\n`;
-                  });
-                }
-                
-                systemMessageContent += `\n**INSTRUCTIONS:**\n`;
-                systemMessageContent += `- Format meetings as: "Yes, there was a call titled 'Meeting Name' on [date]..."\n`;
-                systemMessageContent += `- Always make meeting titles clickable with the full Fireflies URL\n`;
-                systemMessageContent += `- Quote specific takeaways from meetings and emails\n`;
-                systemMessageContent += `- Provide dates for all activities\n`;
-                systemMessageContent += `- If no meetings/emails found, say so clearly\n`;
-              }
-              else if (claudeOrganizedData.specificBrandLookup) {
-                systemMessageContent += "\n\n**BRAND CONTACT INFORMATION:**\n";
-                const brand = claudeOrganizedData.brand.properties;
-                systemMessageContent += `Brand: ${brand.brand_name || brand.name}\n`;
-                if (brand.partner_agency_name) {
-                  systemMessageContent += `Partner Agency: ${brand.partner_agency_name}\n`;
-                }
-                if (claudeOrganizedData.contacts && claudeOrganizedData.contacts.length > 0) {
-                  systemMessageContent += "\nMain Contacts:\n";
-                  claudeOrganizedData.contacts.forEach((contact, i) => {
-                    systemMessageContent += `${i + 1}. ${contact.properties.firstname || ''} ${contact.properties.lastname || ''}\n`;
-                    systemMessageContent += `   Email: ${contact.properties.email || 'Not available'}\n`;
-                    systemMessageContent += `   Title: ${contact.properties.jobtitle || 'Not specified'}\n`;
-                  });
-                } else {
-                  systemMessageContent += "No contacts found in HubSpot for this brand.\n";
-                }
-                systemMessageContent += "\nProvide this contact information clearly to the user.\n";
-              }
-              else if (claudeOrganizedData.contextAnalysis) {
-                if (claudeOrganizedData.queryType === 'valuable_meetings') {
-                  systemMessageContent += `\n\n**MOST VALUABLE MEETINGS ${claudeOrganizedData.timeFrame.toUpperCase()}:**\n`;
-                  
-                  const highValueMeetings = claudeOrganizedData.valuableMeetings.filter(m => m.valueScore > 50);
-                  
-                  if (highValueMeetings.length > 0) {
-                    highValueMeetings.forEach((meeting, index) => {
-                      systemMessageContent += `\n${index + 1}. "${meeting.title}" on ${meeting.dateString}\n`;
-                      systemMessageContent += `   Link: ${meeting.transcript_url}\n`;
-                      systemMessageContent += `   Value Score: ${meeting.valueScore}/100\n`;
-                      
-                      const reasons = [];
-                      if (meeting.valueIndicators.hasActionItems) {
-                        reasons.push(`${meeting.summary.action_items.length} action items`);
-                      }
-                      if (meeting.valueIndicators.hasBudgetDiscussion) {
-                        reasons.push('budget discussed');
-                      }
-                      if (meeting.valueIndicators.hasDecisionMaker) {
-                        reasons.push('senior stakeholders present');
-                      }
-                      
-                      systemMessageContent += `   Why valuable: ${reasons.join(', ')}\n`;
-                      
-                      if (meeting.summary?.overview) {
-                        systemMessageContent += `   Key discussion: ${meeting.summary.overview.slice(0, 100)}...\n`;
-                      }
-                    });
-                    
-                    systemMessageContent += `\n💡 KEY INSIGHTS:\n`;
-                    systemMessageContent += `- ${highValueMeetings.length} high-value meetings identified\n`;
-                    systemMessageContent += `- Meetings with action items and budget discussions rank highest\n`;
-                    systemMessageContent += `- Senior stakeholder involvement increases meeting value\n`;
-                  } else {
-                    systemMessageContent += `\nNo high-value meetings found in the specified timeframe.\n`;
-                  }
-                } else {
-                  systemMessageContent += `\n\n**RECENT ACTIVITY ${claudeOrganizedData.timeFrame.toUpperCase()}:**\n`;
-                  
-                  if (claudeOrganizedData.valuableMeetings?.length > 0) {
-                    systemMessageContent += `\n**MEETINGS:**\n`;
-                    claudeOrganizedData.valuableMeetings.slice(0, 5).forEach(meeting => {
-                      systemMessageContent += `- "${meeting.title}" on ${meeting.dateString}\n`;
-                      systemMessageContent += `  Link: ${meeting.transcript_url}\n`;
-                    });
-                  }
-                  
-                  if (claudeOrganizedData.emails?.length > 0) {
-                    systemMessageContent += `\n**EMAILS:**\n`;
-                    claudeOrganizedData.emails.slice(0, 5).forEach(email => {
-                      systemMessageContent += `- "${email.subject}" from ${email.fromName || email.from}\n`;
-                    });
-                  }
-                }
-                
-                systemMessageContent += `\n**INSTRUCTIONS:**\n`;
-                systemMessageContent += `- Always provide specific meeting titles and dates\n`;
-                systemMessageContent += `- Include clickable Fireflies links\n`;
-                systemMessageContent += `- Explain WHY meetings are valuable (action items, budget, stakeholders)\n`;
-                systemMessageContent += `- Rank meetings by value score when asked about "valuable" meetings\n`;
-              }
-              else if (claudeOrganizedData.contextOnly) {
-                systemMessageContent += "\n\n**RECENT CONTEXT AND INSIGHTS:**\n";
-                
-                if (claudeOrganizedData.firefliesTranscripts?.length > 0) {
-                  systemMessageContent += "\n**RECENT MEETINGS WITH KEY INSIGHTS:**\n";
-                  claudeOrganizedData.firefliesTranscripts.forEach(t => {
-                    systemMessageContent += `\nMeeting: "${t.title}" on ${t.dateString}\n`;
-                    systemMessageContent += `Link: ${t.transcript_url}\n`;
-                    systemMessageContent += `Participants: ${t.participants?.slice(0, 3).join(', ') || 'Not specified'}\n`;
-                    
-                    const overview = t.summary?.overview || '';
-                    const topics = t.summary?.topics_discussed || '';
-                    
-                    const brandMentions = [];
-                    if (claudeOrganizedData.topBrands) {
-                      claudeOrganizedData.topBrands.forEach(brand => {
-                        if (overview.toLowerCase().includes(brand.name.toLowerCase()) || 
-                            topics.toLowerCase().includes(brand.name.toLowerCase())) {
-                          brandMentions.push(brand.name);
-                        }
-                      });
-                    }
-                    
-                    if (brandMentions.length > 0) {
-                      systemMessageContent += `Brands Discussed: ${brandMentions.join(', ')}\n`;
-                    }
-                    
-                    if (t.summary?.action_items && Array.isArray(t.summary.action_items) && t.summary.action_items.length > 0) {
-                      systemMessageContent += `Action Items: ${t.summary.action_items.slice(0, 3).join('; ')}\n`;
-                    }
-                    
-                    if (overview) {
-                      systemMessageContent += `Key Discussion: ${overview.slice(0, 200)}...\n`;
-                    }
-                    
-                    systemMessageContent += "\n";
-                  });
-                }
-                
-                if (claudeOrganizedData.o365Emails?.length > 0) {
-                  systemMessageContent += "\n**RECENT EMAIL THREADS:**\n";
-                  claudeOrganizedData.o365Emails.forEach(e => {
-                    systemMessageContent += `\nEmail: "${e.subject}"\n`;
-                    systemMessageContent += `From: ${e.fromName || e.from} (${new Date(e.receivedDate).toLocaleDateString()})\n`;
-                    systemMessageContent += `Content: ${e.preview}...\n`;
-                    
-                    const urgencyWords = ['urgent', 'asap', 'immediately', 'deadline', 'tomorrow', 'today'];
-                    const hasUrgency = urgencyWords.some(word => 
-                      e.subject.toLowerCase().includes(word) || 
-                      e.preview.toLowerCase().includes(word)
-                    );
-                    
-                    if (hasUrgency) {
-                      systemMessageContent += `⚡ URGENT: This email indicates time-sensitive action needed\n`;
-                    }
-                  });
-                }
-                
-                systemMessageContent += "\n**INSTRUCTIONS FOR CONTEXT QUERIES:**\n";
-                systemMessageContent += "- Identify 'low hanging fruit' by looking for: urgent emails, pending action items, brands mentioned multiple times\n";
-                systemMessageContent += "- Quote specific insights from meetings/emails\n";
-                systemMessageContent += "- Always include meeting links when referencing them\n";
-                systemMessageContent += "- Highlight any time-sensitive opportunities\n";
-                systemMessageContent += "- If asked about 'last email' with specific contacts, provide the actual email details above\n";
-              }
-              else {
-                systemMessageContent += "\n\n**BRAND PARTNERSHIP RECOMMENDATIONS:**\n";
-                
-                if (claudeOrganizedData.currentProduction) {
-                  systemMessageContent += `\nFor Production: ${claudeOrganizedData.currentProduction}\n`;
-                }
-                
-                if (claudeOrganizedData.topBrands?.length > 0) {
-                  systemMessageContent += "\n**TOP BRANDS:**\n";
-                  claudeOrganizedData.topBrands.forEach((brand, index) => {
-                    systemMessageContent += `\n${index + 1}. ${brand.name}\n`;
-                    systemMessageContent += `   Tags: ${brand.tags.join(', ')}\n`;
-                    systemMessageContent += `   Why: ${brand.reason}\n`;
-                    if (brand.budget !== 'TBD') {
-                      systemMessageContent += `   Budget: ${brand.budget}\n`;
-                    }
-                    if (brand.hasPartner) {
-                      systemMessageContent += `   Agency: ${brand.partnerAgency}\n`;
-                    }
-                    if (brand.hubspotUrl) {
-                      systemMessageContent += `   HubSpot: ${brand.hubspotUrl}\n`;
-                    }
-                    if (brand.meetingContext) {
-                      systemMessageContent += `   Meeting: "${brand.meetingContext.title}" (${brand.meetingContext.date})\n`;
-                      systemMessageContent += `   Meeting Link: ${brand.meetingContext.url}\n`;
-                      if (brand.meetingContext.actionItems) {
-                        systemMessageContent += `   Action Item: ${brand.meetingContext.actionItems}\n`;
-                      }
-                      systemMessageContent += `   Discussion: ${brand.meetingContext.context}\n`;
-                    }
-                    if (brand.emailContext) {
-                      systemMessageContent += `   Email: "${brand.emailContext.subject}"\n`;
-                      systemMessageContent += `   From: ${brand.emailContext.from} on ${new Date(brand.emailContext.date).toLocaleDateString()}\n`;
-                      systemMessageContent += `   Preview: ${brand.emailContext.preview}\n`;
-                    }
-                  });
-                }
-                
-                if (claudeOrganizedData.firefliesTranscripts?.length > 0) {
-                  systemMessageContent += "\n**ALL RELEVANT MEETINGS:**\n";
-                  claudeOrganizedData.firefliesTranscripts.forEach(t => {
-                    systemMessageContent += `- "${t.title}" on ${t.dateString}\n`;
-                    systemMessageContent += `  Link: ${t.transcript_url}\n`;
-                    if (t.summary?.action_items && Array.isArray(t.summary.action_items) && t.summary.action_items.length > 0) {
-                      systemMessageContent += `  Action Items: ${t.summary.action_items.slice(0, 2).join('; ')}\n`;
-                    }
-                    if (t.summary?.overview) {
-                      systemMessageContent += `  Summary: ${t.summary.overview.slice(0, 150)}...\n`;
-                    }
-                    systemMessageContent += "\n";
-                  });
-                }
-                
-                if (claudeOrganizedData.o365Emails?.length > 0) {
-                  systemMessageContent += "\n**ALL RECENT EMAILS:**\n";
-                  claudeOrganizedData.o365Emails.forEach(e => {
-                    systemMessageContent += `- "${e.subject}" from ${e.fromName || e.from} (${new Date(e.receivedDate).toLocaleDateString()})\n`;
-                    systemMessageContent += `  Preview: ${e.preview}...\n\n`;
-                  });
-                }
-                
-                systemMessageContent += "\n**INSTRUCTIONS:**\n";
-                systemMessageContent += "- When mentioning meetings, ALWAYS include the meeting title and link\n";
-                systemMessageContent += "- Quote specific insights from emails/meetings when explaining brand relevance\n";
-                systemMessageContent += "- For 'low hanging fruit', identify brands with recent email threads or upcoming action items\n";
-                systemMessageContent += "- Always provide specific context, not generic statements\n";
-                systemMessageContent += "- Format meeting links as: Meeting: [Title] Link: [URL]\n";
-              }
-            }
-            
-            if (conversationContext) {
-              systemMessageContent += `\n\nConversation history: ${conversationContext}`;
-            }
-            systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
-            if (projectId && projectId !== 'default') {
-              systemMessageContent += ` You are assisting with the ${projectId} project.`;
-            }
-            
-            const openAIResponse = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-            aiReply = openAIResponse;
-          }
-          
+
           if (aiReply) {
-            updateAirtableConversation(
-              sessionId, 
-              projectId, 
-              chatUrl, 
-              headersAirtable, 
-              `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
-              existingRecordId
-            ).catch(err => {});
-            
-            const response = { 
-              reply: aiReply,
-              mcpThinking: mcpThinking || [],
-              mcpRawOutput: mcpRawOutput || [],
-              usedMCP: usedMCP
-            };
-            
-            if (claudeOrganizedData && claudeOrganizedData.brandSuggestions) {
-              response.brandSuggestions = claudeOrganizedData.brandSuggestions;
-            }
-            
-            return res.json(response);
+              console.log('[DEBUG] Updating Airtable conversation...');
+              updateAirtableConversation(
+                  sessionId, projectId, chatUrl, headersAirtable,
+                  `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
+                  existingRecordId
+              ).catch(err => console.error('[DEBUG] Airtable update error:', err));
+
+              console.log('[DEBUG] Sending successful response');
+              // The final response now includes mcpSteps for the frontend
+              return res.json({
+                  reply: aiReply,
+                  structuredData: structuredData,
+                  mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
+                  usedMCP: usedMCP
+              });
           } else {
-            return res.status(500).json({ error: 'No text reply received.' });
+              console.error('[DEBUG] No AI reply received');
+              return res.status(500).json({ error: 'No text reply received.' });
           }
         } catch (error) {
-          return res.status(500).json({ error: 'Error fetching response.', details: error.message });
+          console.error("[CRASH DETECTED IN HANDLER]:", error);
+          console.error("[STACK TRACE]:", error.stack);
+          return res.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+          });
         }
       }
     } catch (error) {
@@ -3272,6 +2099,13 @@ export default async function handler(req, res) {
     res.setHeader("Allow", ["POST", "OPTIONS"]);
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
+}
+
+async function shouldUseSearch(userMessage, conversationContext) {
+  // Simple keyword-based check for now
+  const searchKeywords = ['brand', 'production', 'show', 'movie', 'series', 'find', 'search', 'recommend', 'suggestion', 'partner'];
+  const messageLower = userMessage.toLowerCase();
+  return searchKeywords.some(keyword => messageLower.includes(keyword));
 }
 
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
