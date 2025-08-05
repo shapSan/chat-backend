@@ -1140,7 +1140,7 @@ function checkGenreMatch(productionGenre, brandCategory) {
   
   return false;
 }
-// ADD THIS NEW FUNCTION TO YOUR FILE
+// REPLACE your entire routeUserIntent function with this
 async function routeUserIntent(userMessage, conversationContext) {
   console.log('[DEBUG routeUserIntent] Starting with message:', userMessage);
   
@@ -1153,29 +1153,14 @@ async function routeUserIntent(userMessage, conversationContext) {
     {
       type: 'function',
       function: {
-        name: 'process_production_content',
-        description: 'Use this whenever the user provides a movie/show synopsis, production details, or describes a creative project. This includes when they paste text with "Synopsis:", mention talent/distributors/dates, or describe any entertainment content. Always use this tool for entertainment industry content, whether or not they explicitly ask for brands.',
+        name: 'find_brands',
+        description: 'Use this tool when the user asks to find, search for, or get recommendations for brands. This includes simple keyword searches (e.g., "beverage brands") and complex requests that include a full production synopsis.',
         parameters: {
           type: 'object',
           properties: {
-            content: { type: 'string', description: 'The full content provided by the user including synopsis, talent, distributor, and any other details.' },
-            explicit_brand_request: { type: 'boolean', description: 'True if user explicitly mentions wanting brands/partners/recommendations. False if they just provided content without specific instructions.' }
+            search_term: { type: 'string', description: 'The user\'s full request, including any keywords or synopsis text.' }
           },
-          required: ['content', 'explicit_brand_request']
-        }
-      }
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'search_brands_by_keyword',
-        description: 'Use for direct brand searches by category or keyword, like "show me beverage brands" or "luxury brands" or "tech companies". Use when user wants to search brands WITHOUT providing a production synopsis.',
-        parameters: {
-          type: 'object',
-          properties: {
-            search_terms: { type: 'string', description: 'The category, keyword, or type of brands to search for.' }
-          },
-          required: ['search_terms']
+          required: ['search_term']
         }
       }
     },
@@ -1183,10 +1168,12 @@ async function routeUserIntent(userMessage, conversationContext) {
       type: 'function',
       function: {
         name: 'get_brand_activity',
-        description: 'Gets all recent activity (meetings, emails, contacts) for a specific brand name. Use for questions like "What\'s new with Nike?" or "Find meetings with Coca-Cola".',
+        description: 'Gets all recent activity (meetings, emails, contacts) for a specific brand name.',
         parameters: {
           type: 'object',
-          properties: { brand_name: { type: 'string', description: 'The name of the brand to look up.' } },
+          properties: {
+            brand_name: { type: 'string', description: 'The name of the brand to look up.' }
+          },
           required: ['brand_name']
         }
       }
@@ -1194,23 +1181,8 @@ async function routeUserIntent(userMessage, conversationContext) {
     {
       type: 'function',
       function: {
-        name: 'get_deep_dive_on_brands',
-        description: 'Performs a deep, focused search on a specific list of brands to generate integration ideas. Use when the user has already selected specific brands to analyze.',
-        parameters: {
-          type: 'object',
-          properties: {
-            brand_ids: { type: 'array', items: { type: 'string' }, description: 'An array of HubSpot brand IDs to perform a deep dive on.' },
-            production_context: { type: 'string', description: 'The synopsis or theme of the production these brands are being considered for.'}
-          },
-          required: ['brand_ids', 'production_context']
-        }
-      }
-    },
-    {
-      type: 'function',
-      function: {
         name: 'search_deals',
-        description: 'Searches the HubSpot CRM for deals. Can be used for general queries like "show me recent deals" or "find deals in the pipeline".',
+        description: 'Searches the HubSpot CRM for deals.',
         parameters: {
           type: 'object',
           properties: {
@@ -1238,7 +1210,7 @@ async function routeUserIntent(userMessage, conversationContext) {
       type: 'function',
       function: {
         name: 'answer_general_question',
-        description: 'Use ONLY for general conversation, greetings, or questions that have nothing to do with brands, productions, or business data.',
+        description: 'Use for any general conversation or questions that do not require searching internal databases.',
         parameters: { type: 'object', properties: {} }
       }
     }
@@ -1252,8 +1224,8 @@ async function routeUserIntent(userMessage, conversationContext) {
       body: JSON.stringify({
         model: 'gpt-4o',
         messages: [
-          { role: 'system', content: 'You are an expert at routing a user request to the correct tool. You must choose one of the available tools.' },
-          { role: 'user', content: `Previous conversation: ${conversationContext.slice(-500)}\n\nUser request: "${userMessage}"` }
+          { role: 'system', content: 'You are an expert at routing a user request to the correct tool. Your primary job is to extract the user\'s text into the search_term parameter if they are asking to find brands.' },
+          { role: 'user', content: userMessage }
         ],
         tools: tools,
         tool_choice: 'auto'
@@ -1271,9 +1243,14 @@ async function routeUserIntent(userMessage, conversationContext) {
     const toolCall = data.choices[0].message.tool_calls?.[0];
 
     if (toolCall) {
+      const args = JSON.parse(toolCall.function.arguments);
+      // If the AI hallucinates an empty search term, default to the user message
+      if (toolCall.function.name === 'find_brands' && !args.search_term) {
+          args.search_term = userMessage;
+      }
       const result = {
         tool: toolCall.function.name,
-        args: JSON.parse(toolCall.function.arguments)
+        args: args
       };
       console.log('[DEBUG routeUserIntent] Tool selected:', result.tool);
       return result;
