@@ -1413,6 +1413,24 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
     {
       type: 'function',
       function: {
+        name: 'create_pitches_for_brands',
+        description: 'Use this when the user asks to "create pitches", "generate ideas", "do a deep dive", or "create integration ideas" for one or more specific brand names.',
+        parameters: {
+          type: 'object',
+          properties: {
+            brand_names: { 
+              type: 'array', 
+              items: { type: 'string' },
+              description: 'An array of the specific brand names the user mentioned.' 
+            }
+          },
+          required: ['brand_names']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
         name: 'answer_general_question',
         description: 'Use for any general conversation or questions that do not require searching internal databases.',
         parameters: { type: 'object', properties: {} }
@@ -1600,6 +1618,70 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             emails: o365Data || []
           }, 
           mcpThinking, 
+          usedMCP: true
+        };
+      }
+
+      case 'create_pitches_for_brands': {
+        const { brand_names } = intent.args;
+        
+        // Use the last known project context or create a generic one
+        const contextDescription = lastProductionContext ? 'the last discussed project' : 'general integration ideas';
+        
+        mcpThinking.push({ 
+          type: 'start', 
+          text: `🔬 Performing deep dive on ${brand_names.length} brand(s) for ${contextDescription}...` 
+        });
+        
+        // Search for each brand's detailed information
+        mcpThinking.push({ type: 'search', text: '🔍 Gathering brand details from HubSpot...' });
+        mcpThinking.push({ type: 'search', text: '🎙️ Searching for relevant meetings in Fireflies...' });
+        mcpThinking.push({ type: 'search', text: '✉️ Searching for relevant emails in O365...' });
+        
+        const brandDataPromises = brand_names.map(name => 
+          Promise.all([
+            hubspotAPI.searchSpecificBrand(name),
+            firefliesApiKey ? searchFireflies(`${name} ${lastProductionContext || ''}`, { limit: 5 }) : { transcripts: [] },
+            msftClientId ? o365API.searchEmails(`${name} ${lastProductionContext || ''}`, { days: 180 }) : []
+          ])
+        );
+
+        const allBrandData = await Promise.all(brandDataPromises);
+
+        const organizedBrands = allBrandData.map(([brand, firefliesData, o365Data], index) => {
+          if (!brand) {
+            mcpThinking.push({ 
+              type: 'error', 
+              text: `❌ Brand "${brand_names[index]}" not found in HubSpot.` 
+            });
+            return null;
+          }
+          
+          mcpThinking.push({ 
+            type: 'result', 
+            text: `✅ Found ${firefliesData.transcripts?.length || 0} meetings and ${o365Data?.length || 0} emails for ${brand_names[index]}.` 
+          });
+          
+          return {
+            details: brand.properties,
+            meetings: firefliesData.transcripts || [],
+            emails: o365Data || []
+          };
+        }).filter(Boolean);
+
+        mcpThinking.push({ 
+          type: 'complete', 
+          text: `✨ Deep dive completed for ${organizedBrands.length} brand(s).` 
+        });
+
+        return {
+          organizedData: {
+            dataType: 'DEEP_DIVE_ANALYSIS',
+            productionContext: lastProductionContext || 'General brand integration analysis',
+            brands: organizedBrands,
+            requestedBrands: brand_names
+          },
+          mcpThinking,
           usedMCP: true
         };
       }
