@@ -65,56 +65,43 @@ const hubspotAPI = {
     CONTACTS: 'contacts'
   },
   
-  async searchBrands(filters = {}) {
-    try {
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${hubspotApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          filterGroups: filters.filterGroups || [
-            {
-              filters: []
-            }
-          ],
-          properties: [
-            'brand_name',
-            'client_status',
-            'client_type',
-            'brand_website_url',
-            'brand_category',
-            'media_spend_m_',
-            'partner_agency_name',
-            'notes_last_contacted',
-            'notes_last_updated',
-            'num_associated_contacts',
-            'description',
-            'industry',
-            'domain',
-            'hubspot_owner_id',
-            'hs_lastmodifieddate'
-          ],
-          limit: filters.limit || 50,
-          sorts: [{ 
-            propertyName: 'hs_lastmodifieddate', 
-            direction: 'DESCENDING' 
-          }]
-        })
-      });
-      
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
+// This is the NEW code you will paste in its place
+async searchBrands(filters = {}) {
+  try {
+    let searchBody = {
+      properties: ['brand_name', 'client_status', 'client_type', 'brand_website_url', 'brand_category', 'media_spend_m_', 'partner_agency_name', 'notes_last_contacted', 'notes_last_updated', 'num_associated_contacts', 'description', 'industry', 'domain', 'hubspot_owner_id', 'hs_lastmodifieddate', 'lifecyclestage'],
+      limit: filters.limit || 50,
+      sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
+    };
+
+    // If a query (like a synopsis) is passed, perform a smart keyword search
+    if (filters.query) {
+      const keywords = await extractKeywordsForHubSpot(filters.query);
+      if (keywords) {
+        searchBody.query = keywords; // Use keywords for a "vibe-matched" search
       }
-      
-      const data = await response.json();
-      return data;
-    } catch (error) {
-      return { results: [] };
+    } else {
+      // Otherwise, get the general "hot" list
+      searchBody.filterGroups = filters.filterGroups || [{ filters: [{ propertyName: 'brand_name', operator: 'HAS_PROPERTY' }] }];
     }
-  },
+
+    const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${hubspotApiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(searchBody)
+    });
+    
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Error in hubspotAPI.searchBrands:", error);
+    return { results: [] };
+  }
+},
 
   async searchProductions(filters = {}) {
     try {
@@ -685,6 +672,29 @@ async function searchAirtable(query, projectId, searchType = 'auto', limit = 100
   return { searchType, records: [], total: 0 };
 }
 
+// ADD THIS NEW HELPER FUNCTION
+async function extractKeywordsForHubSpot(synopsis) {
+  if (!openAIApiKey) return '';
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: "You are an expert at extracting keywords. From the following synopsis, extract 3-5 relevant brand categories, themes, or demographic keywords suitable for a HubSpot CRM search. For example, for a sci-fi movie, you might return 'tech, automotive, gaming, futuristic'. Return ONLY a single, space-separated string of keywords." },
+          { role: 'user', content: synopsis }
+        ],
+        temperature: 0, max_tokens: 30
+      }),
+    });
+    const data = await response.json();
+    return data.choices[0].message.content.trim();
+  } catch (error) {
+    return '';
+  }
+}
+
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
   try {
     const allBrands = [...hubspotBrands];
@@ -1231,25 +1241,63 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
         };
       }
 
-      case 'find_brand_recommendations_for_production': {
-        const { production_synopsis } = intent.args;
-        mcpThinking.push(`🎬 Analyzing production to find suitable brands...`);
-const hubspotData = await hubspotApiKey ? hubspotAPI.searchBrands({ limit: 50 }) : { brands: [], productions: [] };
-        mcpThinking.push(`🧠 Analyzing ${hubspotData.results.length} brands for relevance...`);
+// In handleClaudeSearch, REPLACE the entire 'find_brand_recommendations_for_production' case with this
+case 'find_brand_recommendations_for_production': {
+  const { production_synopsis } = intent.args;
+  mcpThinking.push(`🎬 Analyzing production to create a custom brand strategy...`);
 
-        const { topBrands } = await narrowWithIntelligentTags(
-          hubspotData.results || [], [], [], production_synopsis
-        );
-        
-        mcpThinking.push(`✨ Prepared ${topBrands.length} recommendations.`);
-        return {
-          organizedData: {
-            dataType: 'BRAND_RECOMMENDATIONS',
-            productionContext: production_synopsis,
-            brandSuggestions: topBrands.slice(0, 15)
-          }, mcpThinking, usedMCP: true
-        };
+  // --- Start of New Hybrid Search Logic ---
+  // Run all our data gathering in parallel for speed
+  const [
+    vibeMatchedBrandsData,
+    hotBrandsData,
+    firefliesContext,
+    emailContext
+  ] = await Promise.all([
+    // 1. Get brands that match the "vibe" of the production
+    hubspotAPI.searchBrands({ query: production_synopsis, limit: 20 }),
+    // 2. Get the general "hot" brands (active deals, recent activity)
+    hubspotAPI.searchBrands({ limit: 20 }),
+    // 3. Find any mentions of the production in past meetings
+    firefliesApiKey ? searchFireflies(production_synopsis, { limit: 5 }) : { transcripts: [] },
+    // 4. Find any mentions of the production in recent emails
+    msftClientId ? o365API.searchEmails(production_synopsis, { days: 180 }) : []
+  ]);
+  // --- End of New Hybrid Search Logic ---
+
+  mcpThinking.push(`🤝 Combining vibe-matched brands with high-priority active deals...`);
+
+  // Create the "nice mix" of brands, removing duplicates
+  const allBrands = new Map();
+  vibeMatchedBrandsData.results.forEach(brand => allBrands.set(brand.id, brand));
+  hotBrandsData.results.forEach(brand => allBrands.set(brand.id, brand));
+  const mixedBrandList = Array.from(allBrands.values());
+
+  mcpThinking.push(`🧠 Analyzing ${mixedBrandList.length} unique brands for relevance...`);
+  
+  // Now, call the AI ranker with the mixed list AND the new context
+  const { topBrands } = await narrowWithIntelligentTags(
+    mixedBrandList,
+    firefliesContext.transcripts || [], // Pass in the new context
+    emailContext || [],                 // Pass in the new context
+    production_synopsis
+  );
+  
+  mcpThinking.push(`✨ Prepared ${topBrands.length} tailored recommendations.`);
+  return {
+    organizedData: {
+      dataType: 'BRAND_RECOMMENDATIONS',
+      productionContext: production_synopsis,
+      brandSuggestions: topBrands.slice(0, 15),
+      supportingContext: {
+        meetings: firefliesContext.transcripts || [],
+        emails: emailContext || []
       }
+    },
+    mcpThinking,
+    usedMCP: true
+  };
+}
         
       case 'get_deep_dive_on_brands': {
         const { brand_ids, production_context } = intent.args;
