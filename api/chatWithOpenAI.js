@@ -812,6 +812,12 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
 
     const taggedBrands = rankedResults.map(rankedBrand => {
       const originalBrand = hubspotBrands.find(b => b.id === rankedBrand.id);
+
+      // If the AI returned an ID we can't find, safely skip it.
+      if (!originalBrand) {
+        return null;
+      }
+
       return {
         source: 'hubspot', id: originalBrand.id, name: originalBrand.properties.brand_name || originalBrand.properties.name || '',
         category: originalBrand.properties.brand_category || originalBrand.properties.industry || 'General',
@@ -821,7 +827,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${originalBrand.id}`,
         relevanceScore: rankedBrand.relevanceScore, tags: rankedBrand.tags, reason: rankedBrand.reason,
       };
-    });
+    }).filter(Boolean); // This line removes any null entries we may have added.
 
     const topBrands = taggedBrands.sort((a, b) => b.relevanceScore - a.relevanceScore);
     return { topBrands, taggedBrands };
