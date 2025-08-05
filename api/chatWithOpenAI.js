@@ -1005,9 +1005,30 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
 
     const systemPrompt = `You are an expert brand partnership strategist. Analyze brands for production fit. Return JSON with "results" array of top 15 brands. Consider: category match to content genre, partnership/deal history, client status/type. Each result needs: "id", "relevanceScore" (0-100), "tags" (descriptive strings), "reason" (concise explanation).`;
     
-    // Truncate userMessage if too long to avoid token limits
-    const truncatedUserMessage = userMessage.length > 500 ? userMessage.slice(0, 500) + '...' : userMessage;
-    const userPrompt = `Production/Request: "${truncatedUserMessage}"\n\nBrand List:\n\`\`\`json\n${JSON.stringify(brandsForAI, null, 2)}\n\`\`\``;
+    // Truncate and escape userMessage to avoid JSON parsing issues
+    let truncatedUserMessage = userMessage.length > 500 ? userMessage.slice(0, 500) + '...' : userMessage;
+    // Escape special characters that break JSON
+    truncatedUserMessage = truncatedUserMessage
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t');
+    
+    // Also escape the brand data to prevent JSON issues
+    const brandsForAISafe = JSON.stringify(brandsForAI, (key, value) => {
+      if (typeof value === 'string') {
+        return value
+          .replace(/\\/g, '\\\\')
+          .replace(/"/g, '\\"')
+          .replace(/\n/g, '\\n')
+          .replace(/\r/g, '\\r')
+          .replace(/\t/g, '\\t');
+      }
+      return value;
+    });
+    
+    const userPrompt = `Production/Request: "${truncatedUserMessage}"\n\nBrand List:\n\`\`\`json\n${brandsForAISafe}\n\`\`\``;
 
     console.log('[DEBUG narrowWithIntelligentTags] Calling OpenAI for ranking...');
     
@@ -1039,7 +1060,25 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       const data = await response.json();
       console.log('[DEBUG narrowWithIntelligentTags] OpenAI response received');
       
-      const rankedData = JSON.parse(data.choices[0].message.content);
+      let rankedData;
+      try {
+        rankedData = JSON.parse(data.choices[0].message.content);
+      } catch (parseError) {
+        console.error('[DEBUG narrowWithIntelligentTags] JSON parse error:', parseError);
+        console.error('[DEBUG narrowWithIntelligentTags] Raw response:', data.choices[0].message.content);
+        // Try to extract results with regex as fallback
+        const resultsMatch = data.choices[0].message.content.match(/"results"\s*:\s*\[([\s\S]*?)\]/);
+        if (resultsMatch) {
+          try {
+            rankedData = { results: JSON.parse(`[${resultsMatch[1]}]`) };
+          } catch (e) {
+            throw parseError; // Re-throw original error if regex fallback fails
+          }
+        } else {
+          throw parseError;
+        }
+      }
+      
       const rankedResults = rankedData.results || [];
       console.log('[DEBUG narrowWithIntelligentTags] AI ranked', rankedResults.length, 'brands');
 
