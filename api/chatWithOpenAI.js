@@ -698,48 +698,34 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefli
   }
 }
 
+// REPLACE your old searchHubSpot function with this corrected version
 async function searchHubSpot(query, projectId, limit = 50) {
   if (!hubspotApiKey) {
     return { brands: [], productions: [] };
   }
-  
+ 
   try {
     const isConnected = await hubspotAPI.testConnection();
     if (!isConnected) {
       return { brands: [], productions: [] };
     }
     
-    const searchTerm = await extractSearchKeyword(query);
-    
-    let brandFilters = {};
-    
-    if (searchTerm) {
-      brandFilters = {
-        query: searchTerm
-      };
-    } else {
-      brandFilters = {
-        filterGroups: [
-          {
-            filters: [
-              { 
-                propertyName: 'brand_name', 
-                operator: 'HAS_PROPERTY' 
-              }
-            ]
-          },
-          {
-            filters: [
-              { 
-                propertyName: 'lifecyclestage', 
-                operator: 'IN',
-                values: ['customer', 'opportunity', 'salesqualifiedlead']
-              }
-            ]
-          }
-        ]
-      };
-    }
+    // The logic to extract a keyword has been removed, as the AI now handles this.
+    // We will now use a more general filter to get relevant brands.
+    const brandFilters = {
+      filterGroups: [
+        {
+          filters: [
+            { propertyName: 'brand_name', operator: 'HAS_PROPERTY' }
+          ]
+        },
+        {
+          filters: [
+            { propertyName: 'lifecyclestage', operator: 'IN', values: ['customer', 'opportunity', 'salesqualifiedlead'] }
+          ]
+        }
+      ]
+    };
 
     const brandsData = await hubspotAPI.searchBrands({
       ...brandFilters,
@@ -754,6 +740,7 @@ async function searchHubSpot(query, projectId, limit = 50) {
     };
 
   } catch (error) {
+    console.error("Error in searchHubSpot:", error);
     return { brands: [], productions: [] };
   }
 }
