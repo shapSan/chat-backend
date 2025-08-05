@@ -1153,28 +1153,29 @@ async function routeUserIntent(userMessage, conversationContext) {
     {
       type: 'function',
       function: {
-        name: 'find_brand_recommendations_for_production',
-        description: 'Use this tool ONLY when the user provides a full, detailed movie or show synopsis and explicitly asks to find brand partners for it.',
+        name: 'process_production_content',
+        description: 'Use this whenever the user provides a movie/show synopsis, production details, or describes a creative project. This includes when they paste text with "Synopsis:", mention talent/distributors/dates, or describe any entertainment content. Always use this tool for entertainment industry content, whether or not they explicitly ask for brands.',
         parameters: {
           type: 'object',
           properties: {
-            production_synopsis: { type: 'string', description: 'The full synopsis or creative text provided by the user.' }
+            content: { type: 'string', description: 'The full content provided by the user including synopsis, talent, distributor, and any other details.' },
+            explicit_brand_request: { type: 'boolean', description: 'True if user explicitly mentions wanting brands/partners/recommendations. False if they just provided content without specific instructions.' }
           },
-          required: ['production_synopsis']
+          required: ['content', 'explicit_brand_request']
         }
       }
     },
     {
       type: 'function',
       function: {
-        name: 'search_for_brands',
-        description: 'Use for general or simple brand searches based on keywords, categories, or themes, like "find me beverage brands" or "easy money brands".',
+        name: 'search_brands_by_keyword',
+        description: 'Use for direct brand searches by category or keyword, like "show me beverage brands" or "luxury brands" or "tech companies". Use when user wants to search brands WITHOUT providing a production synopsis.',
         parameters: {
           type: 'object',
           properties: {
-            search_query: { type: 'string', description: 'The keywords or category to search for.' }
+            search_terms: { type: 'string', description: 'The category, keyword, or type of brands to search for.' }
           },
-          required: ['search_query']
+          required: ['search_terms']
         }
       }
     },
@@ -1237,7 +1238,7 @@ async function routeUserIntent(userMessage, conversationContext) {
       type: 'function',
       function: {
         name: 'answer_general_question',
-        description: 'Use for any general conversation, questions, or requests that do not require searching internal databases.',
+        description: 'Use ONLY for general conversation, greetings, or questions that have nothing to do with brands, productions, or business data.',
         parameters: { type: 'object', properties: {} }
       }
     }
