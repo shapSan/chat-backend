@@ -1192,6 +1192,34 @@ async function routeUserIntent(userMessage, conversationContext) {
     {
       type: 'function',
       function: {
+        name: 'search_deals',
+        description: 'Searches the HubSpot CRM for deals. Can be used for general queries like "show me recent deals" or "find deals in the pipeline".',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Optional search terms to filter the deals.' }
+          },
+          required: []
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_transcript_details',
+        description: 'Retrieves the full, detailed transcript for a single meeting using its unique ID.',
+        parameters: {
+          type: 'object',
+          properties: {
+            transcript_id: { type: 'string', description: 'The unique identifier of the Fireflies transcript to retrieve.' }
+          },
+          required: ['transcript_id']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
         name: 'answer_general_question',
         description: 'Use for any general conversation, questions, or requests that do not require searching internal databases.',
         parameters: { type: 'object', properties: {} }
@@ -1442,6 +1470,69 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
             mcpSteps, 
             usedMCP: true
           }
+        }
+
+        case 'search_deals': {
+          console.log('[DEBUG handleClaudeSearch] Executing search_deals');
+          
+          mcpSteps.push({
+            text: `🔍 Searching HubSpot for deals...`,
+            timestamp: Date.now() - startTime
+          });
+          
+          const dealsData = await hubspotAPI.searchDeals(); // The query from intent.args can be passed in here if needed
+
+          mcpSteps.push({
+            text: `✅ Found ${dealsData.results.length} deals.`,
+            timestamp: Date.now() - startTime
+          });
+          
+          return {
+            organizedData: {
+              dataType: 'DEAL_SEARCH_RESULTS',
+              deals: dealsData.results.map(d => d.properties)
+            },
+            mcpSteps,
+            usedMCP: true
+          };
+        }
+
+        case 'get_transcript_details': {
+          console.log('[DEBUG handleClaudeSearch] Executing get_transcript_details');
+          const { transcript_id } = intent.args;
+          
+          mcpSteps.push({
+            text: `📄 Retrieving full transcript for ID: ${transcript_id}...`,
+            timestamp: Date.now() - startTime
+          });
+          
+          const transcript = await firefliesAPI.getTranscript(transcript_id);
+
+          if (!transcript) {
+            mcpSteps.push({
+              text: `⚠️ Transcript with ID ${transcript_id} not found.`,
+              timestamp: Date.now() - startTime
+            });
+            return { 
+              organizedData: { error: `Transcript not found.` }, 
+              mcpSteps, 
+              usedMCP: true 
+            };
+          }
+          
+          mcpSteps.push({
+            text: `✅ Transcript found: "${transcript.title}"`,
+            timestamp: Date.now() - startTime
+          });
+          
+          return {
+            organizedData: {
+              dataType: 'TRANSCRIPT_DETAILS',
+              transcript: transcript
+            },
+            mcpSteps,
+            usedMCP: true
+          };
         }
 
         default:
