@@ -1323,7 +1323,84 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
       console.log('[DEBUG handleClaudeSearch] Executing tool:', intent.tool);
       switch (intent.tool) {
         
-        case 'get_brand_activity': {
+        case 'process_production_content': {
+          console.log('[DEBUG handleClaudeSearch] Executing process_production_content');
+          const { content, explicit_brand_request } = intent.args;
+          
+          // Always run brand search for production content - that's why they're using this tool!
+          mcpSteps.push({
+            text: `🎬 Processing production content...`,
+            timestamp: Date.now() - startTime
+          });
+
+          try {
+            console.log('[DEBUG] Searching for brands based on production content...');
+            
+            mcpSteps.push({
+              text: '🔍 Searching HubSpot for relevant brand partners...',
+              timestamp: Date.now() - startTime
+            });
+            
+            const vibeMatchedBrandsData = await hubspotAPI.searchBrands({ 
+              query: content, 
+              limit: 30 
+            });
+            console.log('[DEBUG] searchBrands returned:', vibeMatchedBrandsData?.results?.length || 0, 'brands');
+
+            if (!vibeMatchedBrandsData || !vibeMatchedBrandsData.results || vibeMatchedBrandsData.results.length === 0) {
+                mcpSteps.push({
+                  text: `⚠️ No brands found matching this production.`,
+                  timestamp: Date.now() - startTime
+                });
+                return { 
+                  organizedData: { 
+                    dataType: 'BRAND_RECOMMENDATIONS',
+                    productionContext: content,
+                    brandSuggestions: [],
+                    message: 'No matching brands found in the database for this production.' 
+                  }, 
+                  mcpSteps, 
+                  usedMCP: true 
+                };
+            }
+
+            mcpSteps.push({
+              text: `🧠 Analyzing ${vibeMatchedBrandsData.results.length} potential brand partners...`,
+              timestamp: Date.now() - startTime
+            });
+            
+            console.log('[DEBUG] Running AI analysis on brands...');
+            const { topBrands } = await narrowWithIntelligentTags(
+              vibeMatchedBrandsData.results,
+              [],
+              [],
+              content
+            );
+            console.log('[DEBUG] AI ranked', topBrands.length, 'brands');
+            
+            mcpSteps.push({
+              text: `✨ Identified ${topBrands.length} recommended brand partners.`,
+              timestamp: Date.now() - startTime
+            });
+            
+            return {
+              organizedData: {
+                dataType: 'BRAND_RECOMMENDATIONS',
+                productionContext: content,
+                brandSuggestions: topBrands.slice(0, 15),
+                explicitRequest: explicit_brand_request
+              },
+              mcpSteps,
+              usedMCP: true
+            };
+          } catch (error) {
+            console.error('[DEBUG] Error in process_production_content:', error);
+            console.error('[DEBUG] Stack trace:', error.stack);
+            throw error;
+          }
+        }
+
+        case 'search_brands_by_keyword': {
           console.log('[DEBUG handleClaudeSearch] Executing get_brand_activity');
           const { brand_name } = intent.args;
           
