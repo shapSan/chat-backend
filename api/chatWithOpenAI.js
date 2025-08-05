@@ -198,6 +198,31 @@ async searchBrands(filters = {}) {
     
     const result = await response.json();
     console.log('[DEBUG searchBrands] Success, got', result.results?.length || 0, 'brands');
+    
+    // Include the search context in the result
+    if (filters.query && result.results) {
+      // Attach the genre categories that were used (if any)
+      const queryLower = filters.query.toLowerCase();
+      const genreMap = {
+        'action': ['Automotive', 'Electronics & Appliances', 'Sports & Fitness'],
+        'comedy': ['Food & Beverage', 'Entertainment'],
+        'drama': ['Fashion & Apparel', 'Health & Beauty', 'Home & Garden'],
+        'romance': ['Floral', 'Fashion & Apparel', 'Health & Beauty'],
+        'thriller': ['Automotive', 'Security', 'Electronics & Appliances']
+      };
+      
+      let detectedGenres = [];
+      for (const [genre, cats] of Object.entries(genreMap)) {
+        if (queryLower.includes(genre)) {
+          detectedGenres.push(genre);
+        }
+      }
+      
+      if (detectedGenres.length > 0) {
+        result.searchContext = detectedGenres.join(', ');
+      }
+    }
+    
     return result;
   } catch (error) {
     console.error("[DEBUG searchBrands] Error:", error);
@@ -1470,7 +1495,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             ]);
 
             // Report results
-            mcpThinking.push({ type: 'result', text: `✅ Found ${creativeMatches.results.length} genre-matched brands.` });
+            if (creativeMatches.searchContext) {
+                mcpThinking.push({ type: 'result', text: `✅ Found ${creativeMatches.results.length} brands matching "${creativeMatches.searchContext}" genres.` });
+            } else {
+                mcpThinking.push({ type: 'result', text: `✅ Found ${creativeMatches.results.length} genre-matched brands.` });
+            }
             mcpThinking.push({ type: 'result', text: `✅ Found ${commercialWinners.results.length} commercial opportunity brands.` });
             mcpThinking.push({ type: 'result', text: `✅ Found ${firefliesContext.transcripts?.length || 0} relevant meeting(s) in Fireflies.` });
             mcpThinking.push({ type: 'result', text: `✅ Found ${emailContext?.length || 0} relevant email(s) in O365.` });
