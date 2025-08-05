@@ -1166,11 +1166,25 @@ async function routeUserIntent(userMessage, conversationContext) {
       type: 'function',
       function: {
         name: 'find_brand_recommendations_for_production',
-        description: 'Analyzes a production title and synopsis to find and rank the most suitable brand partners. Use when the user submits a new production brief.',
+        description: 'Use this tool ONLY when the user explicitly asks to find, match, get, or search for brand partners, brand recommendations, or brand opportunities for a production.',
         parameters: {
           type: 'object',
           properties: { production_synopsis: { type: 'string', description: 'The full synopsis, title, and any other details about the production.' } },
           required: ['production_synopsis']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'analyze_production',
+        description: 'Performs a general analysis, summary, or "vibe check" of a production synopsis or creative text. Use this when the user asks to "analyze," "summarize," or "convert" a text, and is NOT explicitly asking for brand recommendations.',
+        parameters: {
+          type: 'object',
+          properties: {
+            text_to_analyze: { type: 'string', description: 'The text of the production synopsis to be analyzed.' }
+          },
+          required: ['text_to_analyze']
         }
       }
     },
@@ -1470,6 +1484,27 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
             mcpSteps, 
             usedMCP: true
           }
+        }
+
+        case 'analyze_production': {
+          console.log('[DEBUG handleClaudeSearch] Executing analyze_production');
+          const { text_to_analyze } = intent.args;
+          
+          mcpSteps.push({
+            text: `✍️ Performing general analysis on the provided text...`,
+            timestamp: Date.now() - startTime
+          });
+          
+          // This tool doesn't need to search databases. It just prepares data for the final AI.
+          // We return the text here so the final prompt knows what was analyzed.
+          return {
+            organizedData: {
+              dataType: 'TEXT_ANALYSIS',
+              sourceText: text_to_analyze
+            },
+            mcpSteps,
+            usedMCP: true
+          };
         }
 
         case 'search_deals': {
