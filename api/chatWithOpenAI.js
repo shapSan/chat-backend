@@ -1234,7 +1234,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
       case 'find_brand_recommendations_for_production': {
         const { production_synopsis } = intent.args;
         mcpThinking.push(`🎬 Analyzing production to find suitable brands...`);
-        const hubspotData = await hubspotAPI.searchBrands({ limit: 50 });
+const hubspotData = await hubspotApiKey ? hubspotAPI.searchBrands({ limit: 50 }) : { brands: [], productions: [] };
         mcpThinking.push(`🧠 Analyzing ${hubspotData.results.length} brands for relevance...`);
 
         const { topBrands } = await narrowWithIntelligentTags(
