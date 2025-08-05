@@ -67,7 +67,6 @@ const hubspotAPI = {
   
 // This is the NEW code you will paste in its place
 async searchBrands(filters = {}) {
-  console.log('[DEBUG searchBrands] Starting with filters:', filters);
   try {
     let searchBody = {
       properties: ['brand_name', 'client_status', 'client_type', 'brand_website_url', 'brand_category', 'media_spend_m_', 'partner_agency_name', 'notes_last_contacted', 'notes_last_updated', 'num_associated_contacts', 'description', 'industry', 'domain', 'hubspot_owner_id', 'hs_lastmodifieddate', 'lifecyclestage'],
@@ -77,9 +76,7 @@ async searchBrands(filters = {}) {
 
     // If a query (like a synopsis) is passed, perform a smart keyword search
     if (filters.query) {
-      console.log('[DEBUG searchBrands] Extracting keywords for query:', filters.query);
       const keywords = await extractKeywordsForHubSpot(filters.query);
-      console.log('[DEBUG searchBrands] Keywords extracted:', keywords);
       if (keywords) {
         searchBody.query = keywords; // Use keywords for a "vibe-matched" search
       }
@@ -88,7 +85,6 @@ async searchBrands(filters = {}) {
       searchBody.filterGroups = filters.filterGroups || [{ filters: [{ propertyName: 'brand_name', operator: 'HAS_PROPERTY' }] }];
     }
 
-    console.log('[DEBUG searchBrands] Making HubSpot API request...');
     const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${hubspotApiKey}`, 'Content-Type': 'application/json' },
@@ -97,16 +93,12 @@ async searchBrands(filters = {}) {
     
     if (!response.ok) {
       const errorBody = await response.text();
-      console.error('[DEBUG searchBrands] HubSpot API error:', response.status, errorBody);
       throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
     }
     
-    const result = await response.json();
-    console.log('[DEBUG searchBrands] Success, got', result.results?.length || 0, 'brands');
-    return result;
+    return await response.json();
   } catch (error) {
-    console.error("[DEBUG searchBrands] Error:", error);
-    console.error("[DEBUG searchBrands] Stack trace:", error.stack);
+    console.error("Error in hubspotAPI.searchBrands:", error);
     return { results: [] };
   }
 },
@@ -765,19 +757,15 @@ async function searchHubSpot(query, projectId, limit = 50) {
 
 // REPLACE your old narrowWithIntelligentTags function with this
 async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, emails, userMessage) {
-  console.log('[DEBUG narrowWithIntelligentTags] Starting with', hubspotBrands?.length || 0, 'brands');
-  
   if (!hubspotBrands || hubspotBrands.length === 0) {
-    console.log('[DEBUG narrowWithIntelligentTags] No brands provided, returning empty');
     return { topBrands: [], taggedBrands: [] };
   }
   if (!openAIApiKey) {
-    console.warn("[DEBUG narrowWithIntelligentTags] OpenAI API key not found. Returning unranked brands.");
+    console.warn("OpenAI API key not found. Returning unranked brands.");
     return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
   }
 
   try {
-    console.log('[DEBUG narrowWithIntelligentTags] Preparing brands for AI analysis...');
     const brandsForAI = hubspotBrands.map(b => {
       const brandData = {
         id: b.id,
@@ -806,7 +794,6 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
     const systemPrompt = `You are an expert brand partnership strategist. Your task is to analyze a list of brands for a given request and return a JSON object with a single key "results", which is an array of the top 15 most relevant brands. Pay special attention to the \`helper_tags\` field. Each object in the "results" array must have: "id", "relevanceScore" (0-100), "tags" (an array of descriptive strings), and "reason" (a concise sentence).`;
     const userPrompt = `User Request: "${userMessage}"\n\nBrand List:\n\`\`\`json\n${JSON.stringify(brandsForAI, null, 2)}\n\`\`\``;
 
-    console.log('[DEBUG narrowWithIntelligentTags] Calling OpenAI for ranking...');
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
@@ -818,24 +805,16 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       }),
     });
 
-    if (!response.ok) {
-      console.error('[DEBUG narrowWithIntelligentTags] OpenAI API error:', response.status);
-      throw new Error(`AI ranking API error: ${response.status}`);
-    }
-    
+    if (!response.ok) throw new Error(`AI ranking API error: ${response.status}`);
     const data = await response.json();
-    console.log('[DEBUG narrowWithIntelligentTags] OpenAI response received');
-    
     const rankedData = JSON.parse(data.choices[0].message.content);
     const rankedResults = rankedData.results || [];
-    console.log('[DEBUG narrowWithIntelligentTags] AI ranked', rankedResults.length, 'brands');
 
     const taggedBrands = rankedResults.map(rankedBrand => {
       const originalBrand = hubspotBrands.find(b => b.id === rankedBrand.id);
 
       // If the AI returned an ID we can't find, safely skip it.
       if (!originalBrand) {
-        console.warn('[DEBUG narrowWithIntelligentTags] Could not find brand with ID:', rankedBrand.id);
         return null;
       }
 
@@ -851,11 +830,9 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
     }).filter(Boolean); // This line removes any null entries we may have added.
 
     const topBrands = taggedBrands.sort((a, b) => b.relevanceScore - a.relevanceScore);
-    console.log('[DEBUG narrowWithIntelligentTags] Returning', topBrands.length, 'tagged brands');
     return { topBrands, taggedBrands };
   } catch (error) {
-    console.error("[DEBUG narrowWithIntelligentTags] Error:", error);
-    console.error("[DEBUG narrowWithIntelligentTags] Stack trace:", error.stack);
+    console.error("Error in AI-powered brand tagging:", error);
     return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
   }
 }
@@ -1142,12 +1119,7 @@ function checkGenreMatch(productionGenre, brandCategory) {
 }
 // ADD THIS NEW FUNCTION TO YOUR FILE
 async function routeUserIntent(userMessage, conversationContext) {
-  console.log('[DEBUG routeUserIntent] Starting with message:', userMessage);
-  
-  if (!openAIApiKey) {
-    console.log('[DEBUG routeUserIntent] No OpenAI API key, returning default');
-    return { tool: 'answer_general_question' };
-  }
+  if (!openAIApiKey) return { tool: 'answer_general_question' };
 
   const tools = [
     {
@@ -1200,7 +1172,6 @@ async function routeUserIntent(userMessage, conversationContext) {
   ];
 
   try {
-    console.log('[DEBUG routeUserIntent] Calling OpenAI...');
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
@@ -1215,174 +1186,134 @@ async function routeUserIntent(userMessage, conversationContext) {
       })
     });
 
-    if (!response.ok) {
-      console.error('[DEBUG routeUserIntent] OpenAI API error:', response.status);
-      throw new Error('AI router failed');
-    }
-    
+    if (!response.ok) throw new Error('AI router failed');
     const data = await response.json();
-    console.log('[DEBUG routeUserIntent] OpenAI response received');
-    
     const toolCall = data.choices[0].message.tool_calls?.[0];
 
     if (toolCall) {
-      const result = {
+      return {
         tool: toolCall.function.name,
         args: JSON.parse(toolCall.function.arguments)
       };
-      console.log('[DEBUG routeUserIntent] Tool selected:', result.tool);
-      return result;
     }
-    console.log('[DEBUG routeUserIntent] No tool selected, returning default');
     return { tool: 'answer_general_question' };
   } catch (error) {
-    console.error('[DEBUG routeUserIntent] Error:', error);
-    console.error('[DEBUG routeUserIntent] Stack trace:', error.stack);
+    console.error('Error in AI router:', error);
     return { tool: 'answer_general_question' };
   }
 }
 
 // REPLACE your old handleClaudeSearch function with this
 async function handleClaudeSearch(userMessage, projectId, conversationContext) {
-  console.log('[DEBUG handleClaudeSearch] Starting with message:', userMessage);
-  
-  if (!anthropicApiKey) {
-    console.log('[DEBUG handleClaudeSearch] No Anthropic API key, returning null');
+  if (!anthropicApiKey) return null;
+
+  const intent = await routeUserIntent(userMessage, conversationContext);
+
+  if (intent.tool === 'answer_general_question') {
     return null;
   }
+  
+  const mcpThinking = [];
 
   try {
-    console.log('[DEBUG handleClaudeSearch] Calling routeUserIntent...');
-    const intent = await routeUserIntent(userMessage, conversationContext);
-    console.log('[DEBUG handleClaudeSearch] Intent detected:', intent);
+    switch (intent.tool) {
+      
+      case 'get_brand_activity': {
+        const { brand_name } = intent.args;
+        mcpThinking.push(`🔍 Looking up recent activity for "${brand_name}"...`);
 
-    if (intent.tool === 'answer_general_question') {
-      console.log('[DEBUG handleClaudeSearch] General question detected, returning null');
-      return null;
-    }
-    
-    const mcpThinking = [];
+        const [brand, firefliesData] = await Promise.all([
+          hubspotAPI.searchSpecificBrand(brand_name),
+          firefliesApiKey ? searchFireflies(brand_name, { limit: 5 }) : { transcripts: [] }
+        ]);
 
-    try {
-      console.log('[DEBUG handleClaudeSearch] Executing tool:', intent.tool);
-      switch (intent.tool) {
+        if (!brand) {
+          mcpThinking.push(`⚠️ Could not find "${brand_name}" in HubSpot.`);
+          return { organizedData: { error: `Brand "${brand_name}" not found.` }, mcpThinking, usedMCP: true };
+        }
         
-        case 'get_brand_activity': {
-          console.log('[DEBUG handleClaudeSearch] Executing get_brand_activity');
-          const { brand_name } = intent.args;
-          mcpThinking.push(`🔍 Looking up recent activity for "${brand_name}"...`);
+        mcpThinking.push('✅ Found brand. Retrieving contacts and emails...');
+        const [contacts, o365Data] = await Promise.all([
+            hubspotAPI.getContactsForBrand(brand.id),
+            msftClientId ? o365API.searchEmails(brand_name, { days: 90 }) : []
+        ]);
 
-          const [brand, firefliesData] = await Promise.all([
-            hubspotAPI.searchSpecificBrand(brand_name),
-            firefliesApiKey ? searchFireflies(brand_name, { limit: 5 }) : { transcripts: [] }
-          ]);
-
-          if (!brand) {
-            mcpThinking.push(`⚠️ Could not find "${brand_name}" in HubSpot.`);
-            return { organizedData: { error: `Brand "${brand_name}" not found.` }, mcpThinking, usedMCP: true };
-          }
-          
-          mcpThinking.push('✅ Found brand. Retrieving contacts and emails...');
-          const [contacts, o365Data] = await Promise.all([
-              hubspotAPI.getContactsForBrand(brand.id),
-              msftClientId ? o365API.searchEmails(brand_name, { days: 90 }) : []
-          ]);
-
-          return {
-            organizedData: {
-              dataType: 'BRAND_ACTIVITY', brand: brand.properties,
-              contacts: contacts.map(c => c.properties),
-              meetings: firefliesData.transcripts || [], emails: o365Data || []
-            }, mcpThinking, usedMCP: true
-          };
-        }
-
-        // In handleClaudeSearch, REPLACE the entire 'find_brand_recommendations_for_production' case with this
-        case 'find_brand_recommendations_for_production': {
-          console.log('[DEBUG handleClaudeSearch] Executing find_brand_recommendations_for_production');
-          const { production_synopsis } = intent.args;
-          mcpThinking.push(`🎬 Analyzing production to find suitable brands...`);
-
-          try {
-            console.log('[DEBUG] Calling hubspotAPI.searchBrands...');
-            // --- Start of New SIMPLIFIED Search Logic ---
-            // We are temporarily removing the parallel searches to ensure stability.
-            // This will get a targeted list of brands based on the synopsis.
-            const vibeMatchedBrandsData = await hubspotAPI.searchBrands({ 
-              query: production_synopsis, 
-              limit: 30 
-            });
-            console.log('[DEBUG] searchBrands returned:', vibeMatchedBrandsData ? 'data' : 'null');
-            // --- End of New SIMPLIFIED Search Logic ---
-
-            if (!vibeMatchedBrandsData || !vibeMatchedBrandsData.results) {
-                mcpThinking.push(`⚠️ No brands found matching the production vibe.`);
-                return { organizedData: { error: 'No relevant brands found.' }, mcpThinking, usedMCP: true };
-            }
-
-            mcpThinking.push(`🧠 Analyzing ${vibeMatchedBrandsData.results.length} vibe-matched brands for relevance...`);
-            
-            console.log('[DEBUG] Calling narrowWithIntelligentTags...');
-            // Call the AI ranker with just this clean, targeted list.
-            const { topBrands } = await narrowWithIntelligentTags(
-              vibeMatchedBrandsData.results,
-              [], // No Fireflies context for now
-              [], // No email context for now
-              production_synopsis
-            );
-            console.log('[DEBUG] narrowWithIntelligentTags returned', topBrands.length, 'brands');
-            
-            mcpThinking.push(`✨ Prepared ${topBrands.length} tailored recommendations.`);
-            return {
-              organizedData: {
-                dataType: 'BRAND_RECOMMENDATIONS',
-                productionContext: production_synopsis,
-                brandSuggestions: topBrands.slice(0, 15),
-                supportingContext: { meetings: [], emails: [] }
-              },
-              mcpThinking,
-              usedMCP: true
-            };
-          } catch (error) {
-            console.error('[DEBUG] Error in find_brand_recommendations_for_production:', error);
-            console.error('[DEBUG] Stack trace:', error.stack);
-            throw error;
-          }
-        }
-                
-        case 'get_deep_dive_on_brands': {
-          console.log('[DEBUG handleClaudeSearch] Executing get_deep_dive_on_brands');
-          const { brand_ids, production_context } = intent.args;
-          mcpThinking.push(`🔬 Performing deep dive on ${brand_ids.length} selected brand(s)...`);
-          
-          const firstBrand = await hubspotAPI.searchSpecificBrand(brand_ids[0]); 
-
-          mcpThinking.push('Gathering related meetings and emails...');
-          const [firefliesData, o365Data] = await Promise.all([
-              firefliesApiKey ? searchFireflies(firstBrand.properties.name, { limit: 10 }) : { transcripts: [] },
-              msftClientId ? o365API.searchEmails(firstBrand.properties.name, { days: 180 }) : []
-          ]);
-          
-          return {
-            organizedData: {
-              dataType: 'DEEP_DIVE_ANALYSIS', productionContext: production_context,
-              brands: [{ details: firstBrand.properties, meetings: firefliesData.transcripts, emails: o365Data }]
-            }, mcpThinking, usedMCP: true
-          }
-        }
-
-        default:
-          console.log('[DEBUG handleClaudeSearch] Unknown tool:', intent.tool);
-          return null;
+        return {
+          organizedData: {
+            dataType: 'BRAND_ACTIVITY', brand: brand.properties,
+            contacts: contacts.map(c => c.properties),
+            meetings: firefliesData.transcripts || [], emails: o365Data || []
+          }, mcpThinking, usedMCP: true
+        };
       }
-    } catch (switchError) {
-      console.error(`[DEBUG handleClaudeSearch] Error in switch case:`, switchError);
-      console.error(`[DEBUG handleClaudeSearch] Stack trace:`, switchError.stack);
-      throw switchError;
+
+// In handleClaudeSearch, REPLACE the entire 'find_brand_recommendations_for_production' case with this
+case 'find_brand_recommendations_for_production': {
+  const { production_synopsis } = intent.args;
+  mcpThinking.push(`🎬 Analyzing production to find suitable brands...`);
+
+  // --- Start of New SIMPLIFIED Search Logic ---
+  // We are temporarily removing the parallel searches to ensure stability.
+  // This will get a targeted list of brands based on the synopsis.
+  const vibeMatchedBrandsData = await hubspotAPI.searchBrands({ 
+    query: production_synopsis, 
+    limit: 30 
+  });
+  // --- End of New SIMPLIFIED Search Logic ---
+
+  if (!vibeMatchedBrandsData || !vibeMatchedBrandsData.results) {
+      mcpThinking.push(`⚠️ No brands found matching the production vibe.`);
+      return { organizedData: { error: 'No relevant brands found.' }, mcpThinking, usedMCP: true };
+  }
+
+  mcpThinking.push(`🧠 Analyzing ${vibeMatchedBrandsData.results.length} vibe-matched brands for relevance...`);
+  
+  // Call the AI ranker with just this clean, targeted list.
+  const { topBrands } = await narrowWithIntelligentTags(
+    vibeMatchedBrandsData.results,
+    [], // No Fireflies context for now
+    [], // No email context for now
+    production_synopsis
+  );
+  
+  mcpThinking.push(`✨ Prepared ${topBrands.length} tailored recommendations.`);
+  return {
+    organizedData: {
+      dataType: 'BRAND_RECOMMENDATIONS',
+      productionContext: production_synopsis,
+      brandSuggestions: topBrands.slice(0, 15),
+      supportingContext: { meetings: [], emails: [] }
+    },
+    mcpThinking,
+    usedMCP: true
+  };
+}
+        
+      case 'get_deep_dive_on_brands': {
+        const { brand_ids, production_context } = intent.args;
+        mcpThinking.push(`🔬 Performing deep dive on ${brand_ids.length} selected brand(s)...`);
+        
+        const firstBrand = await hubspotAPI.searchSpecificBrand(brand_ids[0]); 
+
+        mcpThinking.push('Gathering related meetings and emails...');
+        const [firefliesData, o365Data] = await Promise.all([
+            firefliesApiKey ? searchFireflies(firstBrand.properties.name, { limit: 10 }) : { transcripts: [] },
+            msftClientId ? o365API.searchEmails(firstBrand.properties.name, { days: 180 }) : []
+        ]);
+        
+        return {
+          organizedData: {
+            dataType: 'DEEP_DIVE_ANALYSIS', productionContext: production_context,
+            brands: [{ details: firstBrand.properties, meetings: firefliesData.transcripts, emails: o365Data }]
+          }, mcpThinking, usedMCP: true
+        }
+      }
+
+      default:
+        return null;
     }
   } catch (error) {
-    console.error(`[DEBUG handleClaudeSearch] Error executing tool "${intent?.tool}":`, error);
-    console.error(`[DEBUG handleClaudeSearch] Stack trace:`, error.stack);
+    console.error(`Error executing tool "${intent.tool}":`, error);
     return null;
   }
 }
@@ -1968,80 +1899,6 @@ export default async function handler(req, res) {
           res.status(500).json({ error: 'Error processing audio data.', details: error.message });
         }
       // This is the complete and final code to paste inside the 'else if (userMessage) { ... }' block
-      } else if (userMessage) {
-        console.log('[DEBUG] Starting message processing for:', userMessage);
-        try {
-          let aiReply = '';
-          let mcpThinking = [];
-          let usedMCP = false;
-          let structuredData = null; // This will hold our "MCP Report"
-
-          console.log('[DEBUG] Calling handleClaudeSearch...');
-          // Call the new, lean handleClaudeSearch which now acts as the Tool Executor
-          const claudeResult = await handleClaudeSearch(
-              userMessage,
-              projectId,
-              conversationContext
-          );
-          console.log('[DEBUG] handleClaudeSearch returned:', claudeResult ? 'data' : 'null');
-
-          if (claudeResult) {
-              // A tool was successfully used!
-              usedMCP = true;
-              mcpThinking = claudeResult.mcpThinking || [];
-              structuredData = claudeResult.organizedData; // This is the structured data for the frontend!
-
-              console.log('[DEBUG] Generating text summary with OpenAI...');
-              // Now, generate the text summary for the user
-              let systemMessageContent = `You are an expert assistant specialized in brand integration for Hollywood entertainment. A search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.`;
-
-              systemMessageContent += '\n\n```json\n';
-              systemMessageContent += JSON.stringify(structuredData, null, 2);
-              systemMessageContent += '\n```';
-
-              aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-              console.log('[DEBUG] OpenAI response received');
-
-          } else {
-              // No tool was used, so it's a general conversation.
-              console.log('[DEBUG] No tool used, generating general response...');
-              usedMCP = false;
-              let systemMessageContent = "You are a helpful assistant specialized in brand integration into Hollywood entertainment.";
-              if (conversationContext) {
-                  systemMessageContent += `\n\nConversation history: ${conversationContext}`;
-              }
-              aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-          }
-
-          if (aiReply) {
-              console.log('[DEBUG] Updating Airtable conversation...');
-              updateAirtableConversation(
-                  sessionId, projectId, chatUrl, headersAirtable,
-                  `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
-                  existingRecordId
-              ).catch(err => console.error('[DEBUG] Airtable update error:', err));
-
-              console.log('[DEBUG] Sending successful response');
-              // The final response now contains BOTH the text reply AND the structured data
-              return res.json({
-                  reply: aiReply,
-                  structuredData: structuredData, // The "MCP Report" for your frontend!
-                  mcpThinking: mcpThinking,
-                  usedMCP: usedMCP
-              });
-          } else {
-              console.error('[DEBUG] No AI reply received');
-              return res.status(500).json({ error: 'No text reply received.' });
-          }
-        } catch (error) {
-          console.error("[CRASH DETECTED IN HANDLER]:", error);
-          console.error("[STACK TRACE]:", error.stack);
-          return res.status(500).json({ 
-            error: 'Internal server error', 
-            details: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-          });
-        }
       }
     } catch (error) {
       return res.status(500).json({ error: 'Internal server error', details: error.message });
@@ -2052,21 +1909,12 @@ export default async function handler(req, res) {
   }
 }
 
-async function shouldUseSearch(userMessage, conversationContext) {
-  // Simple keyword-based check for now
-  const searchKeywords = ['brand', 'production', 'show', 'movie', 'series', 'find', 'search', 'recommend', 'suggestion', 'partner'];
-  const messageLower = userMessage.toLowerCase();
-  return searchKeywords.some(keyword => messageLower.includes(keyword));
-}
-
 async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
   try {
     const messages = [
       { role: 'system', content: systemMessageContent },
       { role: 'user', content: userMessage }
     ];
-    
-    const totalLength = systemMessageContent.length + userMessage.length;
     
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -2084,7 +1932,7 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
     
     if (!response.ok) {
       const errorData = await response.text();
-      throw new Error(`OpenAI API error: ${response.status}`);
+      throw new Error(`OpenAI API error: ${response.status} - ${errorData}`);
     }
     
     const data = await response.json();
@@ -2123,9 +1971,10 @@ async function updateAirtableConversation(sessionId, projectId, chatUrl, headers
       await fetch(chatUrl, {
         method: 'POST',
         headers: headersAirtable,
-        body: JSON.stringify(recordData),
+        body: JSON.stringify({ records: [recordData] }), // Airtable create API expects a "records" array
       });
     }
   } catch (error) {
+    console.error("Airtable update failed:", error);
   }
 }
