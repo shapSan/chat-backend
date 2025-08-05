@@ -1338,9 +1338,14 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
       case 'find_brands': {
         const { search_term } = intent.args;
         if (search_term.length > 50) {
-            mcpThinking.push(`🎬 Synopsis detected. Performing deep analysis to find brands...`);
+            mcpThinking.push({ type: 'start', text: '🎬 Brand Matching detected. Initiating MCP search...' });
             
-            // Get both creative matches and commercial opportunities
+            // Launch all searches in parallel
+            mcpThinking.push({ type: 'search', text: '⭐ Searching HubSpot for genre-matched brands...' });
+            mcpThinking.push({ type: 'search', text: '🔥 Searching HubSpot for commercial opportunities...' });
+            mcpThinking.push({ type: 'search', text: '🎙️ Searching Fireflies for meeting context...' });
+            mcpThinking.push({ type: 'search', text: '✉️ Searching Office 365 for relevant emails...' });
+            
             const [
               creativeMatches, commercialWinners, firefliesContext, emailContext
             ] = await Promise.all([
@@ -1349,6 +1354,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
               firefliesApiKey ? searchFireflies(search_term, { limit: 5 }) : { transcripts: [] },
               msftClientId ? o365API.searchEmails(search_term, { days: 180 }) : []
             ]);
+
+            // Report results
+            mcpThinking.push({ type: 'result', text: `✅ Found ${creativeMatches.results.length} genre-matched brands.` });
+            mcpThinking.push({ type: 'result', text: `✅ Found ${commercialWinners.results.length} commercial opportunity brands.` });
+            mcpThinking.push({ type: 'result', text: `✅ Found ${firefliesContext.transcripts?.length || 0} relevant meeting(s) in Fireflies.` });
+            mcpThinking.push({ type: 'result', text: `✅ Found ${emailContext?.length || 0} relevant email(s) in O365.` });
 
             // Combine unique brands from both searches
             const allBrands = new Map();
@@ -1365,12 +1376,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
             
             const mixedBrandList = Array.from(allBrands.values());
             
-            mcpThinking.push(`🧠 Analyzing ${mixedBrandList.length} brands (creative + commercial opportunities)...`);
+            mcpThinking.push({ type: 'process', text: `🧠 Analyzing ${mixedBrandList.length} unique brands with AI...` });
             const { topBrands } = await narrowWithIntelligentTags(
               mixedBrandList, firefliesContext.transcripts || [], emailContext || [], search_term
             );
             
-            mcpThinking.push(`✨ Prepared ${topBrands.length} tailored recommendations.`);
+            mcpThinking.push({ type: 'complete', text: `✨ Prepared ${topBrands.length} tailored recommendations.` });
             return {
               organizedData: {
                 dataType: 'BRAND_RECOMMENDATIONS', 
@@ -1381,9 +1392,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
               mcpThinking, usedMCP: true
             };
         } else {
-            mcpThinking.push(`🔍 Searching for brands matching "${search_term}"...`);
+            mcpThinking.push({ type: 'start', text: `🔍 Searching for brands matching "${search_term}"...` });
             const brandsData = await hubspotAPI.searchBrands({ query: search_term, limit: 15 });
-            mcpThinking.push(`✅ Found ${brandsData.results.length} brands.`);
+            mcpThinking.push({ type: 'complete', text: `✅ Found ${brandsData.results.length} brands.` });
             return {
               organizedData: {
                 dataType: 'BRAND_SEARCH_RESULTS', 
@@ -1405,24 +1416,48 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
 
       case 'get_brand_activity': {
         const { brand_name } = intent.args;
-        mcpThinking.push(`🔍 Looking up recent activity for "${brand_name}"...`);
+        mcpThinking.push({ type: 'start', text: `🎬 Activity retrieval detected for "${brand_name}"...` });
+        
+        // Search for the brand and its activity
+        mcpThinking.push({ type: 'search', text: '🔍 Searching HubSpot for brand details...' });
+        mcpThinking.push({ type: 'search', text: '🎙️ Searching Fireflies for meetings...' });
+        
         const [brand, firefliesData] = await Promise.all([
           hubspotAPI.searchSpecificBrand(brand_name),
           firefliesApiKey ? searchFireflies(brand_name, { limit: 5 }) : { transcripts: [] }
         ]);
+        
         if (!brand) {
+          mcpThinking.push({ type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` });
           return { organizedData: { error: `Brand "${brand_name}" not found.` }, mcpThinking, usedMCP: true };
         }
+        
+        mcpThinking.push({ type: 'result', text: `✅ Found brand in HubSpot.` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${firefliesData.transcripts?.length || 0} meeting(s).` });
+        
+        // Get contacts and emails
+        mcpThinking.push({ type: 'search', text: '👥 Retrieving brand contacts...' });
+        mcpThinking.push({ type: 'search', text: '✉️ Searching O365 for emails...' });
+        
         const [contacts, o365Data] = await Promise.all([
             hubspotAPI.getContactsForBrand(brand.id),
             msftClientId ? o365API.searchEmails(brand_name, { days: 90 }) : []
         ]);
+        
+        mcpThinking.push({ type: 'result', text: `✅ Found ${contacts.length} contact(s).` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` });
+        mcpThinking.push({ type: 'complete', text: '✨ Activity report generated.' });
+        
         return {
           organizedData: {
-            dataType: 'BRAND_ACTIVITY', brand: brand.properties,
+            dataType: 'BRAND_ACTIVITY', 
+            brand: brand.properties,
             contacts: contacts.map(c => c.properties),
-            meetings: firefliesData.transcripts || [], emails: o365Data || []
-          }, mcpThinking, usedMCP: true
+            meetings: firefliesData.transcripts || [], 
+            emails: o365Data || []
+          }, 
+          mcpThinking, 
+          usedMCP: true
         };
       }
 
@@ -1431,6 +1466,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
     }
   } catch (error) {
     console.error(`Error executing tool "${intent.tool}":`, error);
+    mcpThinking.push({ type: 'error', text: `❌ Error: ${error.message}` });
     return null;
   }
 }
