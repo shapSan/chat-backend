@@ -758,20 +758,17 @@ async function searchHubSpot(query, projectId, limit = 50) {
   }
 }
 
+// REPLACE your old narrowWithIntelligentTags function with this
 async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, emails, userMessage) {
-  // If there are no brands to process, return immediately.
   if (!hubspotBrands || hubspotBrands.length === 0) {
     return { topBrands: [], taggedBrands: [] };
   }
-
-  // If the API key isn't configured, fall back to a simple, untagged list.
   if (!openAIApiKey) {
     console.warn("OpenAI API key not found. Returning unranked brands.");
     return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
   }
 
   try {
-    // 1. Pre-process the brands to add explicit "helper tags" for the AI.
     const brandsForAI = hubspotBrands.map(b => {
       const brandData = {
         id: b.id,
@@ -779,10 +776,9 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         category: b.properties.brand_category || b.properties.industry || 'General',
         description: (b.properties.description || '').slice(0, 150),
         budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 'TBD',
-        helper_tags: [] // This new field will hold our explicit business rules.
+        helper_tags: []
       };
 
-      // Add explicit tags based on your most important business rules.
       if (b.properties.client_status === 'Active' || b.properties.lifecyclestage === 'customer') {
         brandData.helper_tags.push('Current Client');
       }
@@ -790,176 +786,55 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         brandData.helper_tags.push('Active Deal');
       }
       if (b.properties.hs_lastmodifieddate) {
-        const lastActivityDate = new Date(b.properties.hs_lastmodifieddate);
-        const daysSinceActivity = (new Date() - lastActivityDate) / (1000 * 60 * 60 * 24);
+        const daysSinceActivity = (new Date() - new Date(b.properties.hs_lastmodifieddate)) / (1000 * 60 * 60 * 24);
         if (daysSinceActivity < 7) {
           brandData.helper_tags.push('Hot Lead (Active This Week)');
         }
       }
-      
       return brandData;
     });
 
-    // 2. Define the AI's task, telling it to pay attention to our helper tags.
-    const systemPrompt = `You are an expert brand partnership strategist for a Hollywood agency. Your task is to analyze a list of brands and determine the best partners for a given request.
+    const systemPrompt = `You are an expert brand partnership strategist. Your task is to analyze a list of brands for a given request and return a JSON object with a single key "results", which is an array of the top 15 most relevant brands. Pay special attention to the \`helper_tags\` field. Each object in the "results" array must have: "id", "relevanceScore" (0-100), "tags" (an array of descriptive strings), and "reason" (a concise sentence).`;
+    const userPrompt = `User Request: "${userMessage}"\n\nBrand List:\n\`\`\`json\n${JSON.stringify(brandsForAI, null, 2)}\n\`\`\``;
 
-I will provide you with a user's request and a list of brands in JSON format. Pay special attention to the \`helper_tags\` field, as these are important business indicators that you should prioritize in your analysis.
-
-Your job is to return a JSON object containing a single key "results" which is an array of the top 15 most relevant brands. Each object in the "results" array should have the following structure:
-- "id": The original brand ID.
-- "relevanceScore": An integer score from 0 to 100, representing the brand's overall fit.
-- "tags": An array of short, descriptive strings (e.g., "Creative Match", "Big Budget", "Recent Activity", "Active Deal").
-- "reason": A single, concise sentence explaining why this brand is a strong candidate.
-
-Base your analysis on all available information.`;
-    
-    const userPrompt = `User Request: "${userMessage}"
-
-Brand List:
-\`\`\`json
-${JSON.stringify(brandsForAI, null, 2)}
-\`\`\`
-
-Please return the ranked list of 15 brands in the specified JSON format.`;
-
-    // 3. Call the AI to perform the ranking and tagging.
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
       body: JSON.stringify({
         model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        response_format: { type: "json_object" }, // Ensures the output is valid JSON
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        response_format: { type: "json_object" },
         temperature: 0.2
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`AI ranking API error: ${response.status} - ${errorText}`);
-    }
-
+    if (!response.ok) throw new Error(`AI ranking API error: ${response.status}`);
     const data = await response.json();
     const rankedData = JSON.parse(data.choices[0].message.content);
-    const rankedResults = rankedData.results || []; // Access the nested "results" key
+    const rankedResults = rankedData.results || [];
 
-    // 4. Merge the AI's rankings back with the original full brand data.
     const taggedBrands = rankedResults.map(rankedBrand => {
       const originalBrand = hubspotBrands.find(b => b.id === rankedBrand.id);
       return {
-        // Start with a clean slate of desired properties
-        source: 'hubspot',
-        id: originalBrand.id,
-        name: originalBrand.properties.brand_name || originalBrand.properties.name || '',
+        source: 'hubspot', id: originalBrand.id, name: originalBrand.properties.brand_name || originalBrand.properties.name || '',
         category: originalBrand.properties.brand_category || originalBrand.properties.industry || 'General',
         budget: originalBrand.properties.media_spend_m_ ? `${originalBrand.properties.media_spend_m_}M` : 'TBD',
         summary: (originalBrand.properties.description || '').slice(0, 100),
         lastActivity: originalBrand.properties.notes_last_contacted || originalBrand.properties.hs_lastmodifieddate,
-        hasPartner: !!originalBrand.properties.partner_agency_name,
-        partnerAgency: originalBrand.properties.partner_agency_name,
-        website: originalBrand.properties.domain,
-        lifecyclestage: originalBrand.properties.lifecyclestage,
-        clientStatus: originalBrand.properties.client_status,
-        numContacts: originalBrand.properties.num_associated_contacts || '0',
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${originalBrand.id}`,
-        // Add the AI-generated fields
-        relevanceScore: rankedBrand.relevanceScore,
-        tags: rankedBrand.tags,
-        reason: rankedBrand.reason,
+        relevanceScore: rankedBrand.relevanceScore, tags: rankedBrand.tags, reason: rankedBrand.reason,
       };
     });
 
-    // Sort by the new AI-generated score.
     const topBrands = taggedBrands.sort((a, b) => b.relevanceScore - a.relevanceScore);
-
     return { topBrands, taggedBrands };
-
   } catch (error) {
     console.error("Error in AI-powered brand tagging:", error);
-    // Fallback to returning a simple slice if the AI call fails.
     return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
   }
 }
 
-function extractProductionContext(message) {
-  if (!message || typeof message !== 'string') {
-    return {
-      title: null,
-      genre: null,
-      budget: null,
-      distributor: null,
-      targetDemo: null
-    };
-  }
-  
-  const context = {
-    title: null,
-    genre: null,
-    budget: null,
-    distributor: null,
-    targetDemo: null
-  };
-  
-  const titlePatterns = [
-    /Title:\s*([^\n]+)/i,
-    /Production:\s*([^\n]+)/i,
-    /Film:\s*([^\n]+)/i,
-    /Show:\s*([^\n]+)/i,
-    /Project:\s*([^\n]+)/i,
-    /^([A-Z][^:\n]+)[\n\s]+Synopsis:/im,
-    /for\s+["']([^"']+)["']/i,
-    /(?:the\s+production\s+)?["']([^"']+)["']/i
-  ];
-  
-  for (const pattern of titlePatterns) {
-    const match = message.match(pattern);
-    if (match && match[1]) {
-      context.title = match[1].trim();
-      break;
-    }
-  }
-  
-  const synopsisMatch = message.match(/Synopsis:\s*([\s\S]+?)(?:\n\n|$)/i);
-  const synopsisText = synopsisMatch ? synopsisMatch[1] : message;
-  
-  const genrePatterns = {
-    action: /\b(action|fight|chase|explosion|battle|war|combat|hero|villain)\b/i,
-    comedy: /\b(comedy|funny|humor|hilarious|laugh|sitcom|comedic)\b/i,
-    drama: /\b(drama|emotional|family|relationship|struggle|journey)\b/i,
-    horror: /\b(horror|scary|terror|thriller|suspense|supernatural)\b/i,
-    documentary: /\b(documentary|docu|non-fiction|true story|real|factual)\b/i,
-    sports: /\b(sports|athletic|fitness|game|match|competition|championship)\b/i,
-    scifi: /\b(sci-fi|science fiction|future|space|alien|technology|dystopian)\b/i,
-    romance: /\b(romance|love|romantic|relationship|dating)\b/i,
-    crime: /\b(crime|detective|investigation|murder|police|criminal|con\s*artist|con\s*woman|heist)\b/i,
-    thriller: /\b(thriller|suspense|psychological|mystery|twist)\b/i
-  };
-  
-  for (const [genre, pattern] of Object.entries(genrePatterns)) {
-    if (pattern.test(synopsisText)) {
-      context.genre = genre;
-      break;
-    }
-  }
-  
-  const budgetMatch = message.match(/(?:budget|fee).*?\$(\d+)([MmKk])?/i);
-  if (budgetMatch) {
-    context.budget = budgetMatch[0];
-  }
-  
-  const distributorMatch = message.match(/Distributor:\s*([^\n]+)/i);
-  if (distributorMatch) {
-    context.distributor = distributorMatch[1].trim();
-  }
-  
-  return context;
-}
+
 
 function analyzeBrandInsights(brandDetails, meetings, emails) {
   const insights = {
@@ -1239,505 +1114,181 @@ function checkGenreMatch(productionGenre, brandCategory) {
   
   return false;
 }
+// ADD THIS NEW FUNCTION TO YOUR FILE
+async function routeUserIntent(userMessage, conversationContext) {
+  if (!openAIApiKey) return { tool: 'answer_general_question' };
 
-async function extractSearchKeyword(query) {
-  if (!openAIApiKey) return '';
-  
+  const tools = [
+    {
+      type: 'function',
+      function: {
+        name: 'get_brand_activity',
+        description: 'Gets all recent activity (meetings, emails, contacts) for a specific brand name. Use for questions like "What\'s new with Nike?" or "Find meetings with Coca-Cola".',
+        parameters: {
+          type: 'object',
+          properties: { brand_name: { type: 'string', description: 'The name of the brand to look up.' } },
+          required: ['brand_name']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'find_brand_recommendations_for_production',
+        description: 'Analyzes a production title and synopsis to find and rank the most suitable brand partners. Use when the user submits a new production brief.',
+        parameters: {
+          type: 'object',
+          properties: { production_synopsis: { type: 'string', description: 'The full synopsis, title, and any other details about the production.' } },
+          required: ['production_synopsis']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_deep_dive_on_brands',
+        description: 'Performs a deep, focused search on a specific list of brands to generate integration ideas. Use when the user has already selected specific brands to analyze.',
+        parameters: {
+          type: 'object',
+          properties: {
+            brand_ids: { type: 'array', items: { type: 'string' }, description: 'An array of HubSpot brand IDs to perform a deep dive on.' },
+            production_context: { type: 'string', description: 'The synopsis or theme of the production these brands are being considered for.'}
+          },
+          required: ['brand_ids', 'production_context']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'answer_general_question',
+        description: 'Use for any general conversation, questions, or requests that do not require searching internal databases.',
+        parameters: { type: 'object', properties: {} }
+      }
+    }
+  ];
+
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [{
-          role: 'system',
-          content: 'Extract the search keyword from this query about meetings. If asking about "latest meeting" with no specific topic, return empty string. If asking about a specific brand/person/topic, return just that term. Return ONLY the keyword or empty string, nothing else.'
-        }, {
-          role: 'user',
-          content: query
-        }],
-        temperature: 0,
-        max_tokens: 20
-      }),
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: 'You are an expert at routing a user request to the correct tool. You must choose one of the available tools.' },
+          { role: 'user', content: `Previous conversation: ${conversationContext.slice(-500)}\n\nUser request: "${userMessage}"` }
+        ],
+        tools: tools,
+        tool_choice: 'auto'
+      })
     });
-    
+
+    if (!response.ok) throw new Error('AI router failed');
     const data = await response.json();
-    if (data.choices && data.choices.length > 0 && data.choices[0].message) {
-      const keyword = data.choices[0].message.content.trim();
-      return keyword;
+    const toolCall = data.choices[0].message.tool_calls?.[0];
+
+    if (toolCall) {
+      return {
+        tool: toolCall.function.name,
+        args: JSON.parse(toolCall.function.arguments)
+      };
     }
-    
-    return '';
-    
+    return { tool: 'answer_general_question' };
   } catch (error) {
-    return '';
+    console.error('Error in AI router:', error);
+    return { tool: 'answer_general_question' };
   }
 }
 
-async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId, conversationContext) {
-  if (!anthropicApiKey) {
+// REPLACE your old handleClaudeSearch function with this
+async function handleClaudeSearch(userMessage, projectId, conversationContext) {
+  if (!anthropicApiKey) return null;
+
+  const intent = await routeUserIntent(userMessage, conversationContext);
+
+  if (intent.tool === 'answer_general_question') {
     return null;
   }
   
-  let currentProduction = null;
-  if (conversationContext) {
-    const productionPatterns = [
-      /(?:Title|Production|Film|Show):\s*([^\n]+)/i,
-      /(?:for|about|regarding)\s+["']?([A-Z][^"'\n]+?)["']?\s*(?:\n|Starting Fee:|Distributor:)/i
-    ];
-    
-    for (const pattern of productionPatterns) {
-      const match = conversationContext.match(pattern) || userMessage.match(pattern);
-      if (match && match[1]) {
-        currentProduction = match[1].trim();
-        break;
-      }
-    }
-  }
-  
+  const mcpThinking = [];
+
   try {
-    const mcpThinking = [];
-    
-    const slashCommand = userMessage.match(/^\/(\w+)\s+(.+)/);
-    if (slashCommand) {
-      const [_, command, brandName] = slashCommand;
-      mcpThinking.push(`🎯 Slash command: /${command} ${brandName}`);
+    switch (intent.tool) {
       
-      if (command === 'meetings' || command === 'meeting' || command === 'calls' || command === 'call') {
-        const firefliesData = await searchFireflies(brandName, { limit: 10 });
-        mcpThinking.push(`✅ Found ${firefliesData.transcripts?.length || 0} meetings`);
-        
-        return {
-          organizedData: {
-            slashCommand: true,
-            commandType: 'meetings',
-            brandName: brandName,
-            meetings: firefliesData.transcripts || [],
-            currentProduction: currentProduction
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-      
-      if (command === 'emails' || command === 'email') {
-        const o365Data = await o365API.searchEmails(brandName, { days: 30 });
-        mcpThinking.push(`✅ Found ${o365Data?.length || 0} emails`);
-        
-        return {
-          organizedData: {
-            slashCommand: true,
-            commandType: 'emails',
-            brandName: brandName,
-            emails: o365Data || [],
-            currentProduction: currentProduction
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-      
-      if (command === 'contact' || command === 'contacts') {
-        const brand = await hubspotAPI.searchSpecificBrand(brandName);
-        if (brand) {
-          const contacts = await hubspotAPI.getContactsForBrand(brand.id);
-          return {
-            organizedData: {
-              slashCommand: true,
-              commandType: 'contacts',
-              brand: brand,
-              contacts: contacts,
-              brandName: brandName
-            },
-            mcpThinking,
-            usedMCP: true
-          };
-        }
-      }
-    }
-    
-    const brandLookupMatch = userMessage.match(/(?:contact|who is|point of contact|poc|calls?|meetings?|emails?).*?(?:with|for|at|about)\s+([A-Z][^\?\.,]+)/i);
-    if (brandLookupMatch) {
-      const brandName = brandLookupMatch[1].trim();
-      mcpThinking.push(`🔍 Looking up ${brandName} with recent activity...`);
-      
-      const [brand, firefliesData, o365Data] = await Promise.all([
-        hubspotAPI.searchSpecificBrand(brandName),
-        firefliesApiKey ? searchFireflies(brandName, { limit: 5 }) : { transcripts: [] },
-        msftClientId ? o365API.searchEmails(brandName, { days: 30 }) : []
-      ]);
-      
-      if (brand) {
-        mcpThinking.push('✅ Found brand in HubSpot');
-        const contacts = await hubspotAPI.getContactsForBrand(brand.id);
-        
-        const brandMeetings = firefliesData.transcripts?.filter(t => {
-          const searchText = `${t.title} ${t.summary?.overview || ''} ${t.summary?.topics_discussed || ''}`.toLowerCase();
-          return searchText.includes(brandName.toLowerCase());
-        }) || [];
-        
-        const brandEmails = o365Data?.filter(e => {
-          const searchText = `${e.subject} ${e.preview || ''}`.toLowerCase();
-          return searchText.includes(brandName.toLowerCase());
-        }) || [];
-        
-        if (brandMeetings.length > 0) {
-          mcpThinking.push(`✅ Found ${brandMeetings.length} recent meetings`);
-        }
-        if (brandEmails.length > 0) {
-          mcpThinking.push(`✅ Found ${brandEmails.length} recent emails`);
+      case 'get_brand_activity': {
+        const { brand_name } = intent.args;
+        mcpThinking.push(`🔍 Looking up recent activity for "${brand_name}"...`);
+
+        const [brand, firefliesData] = await Promise.all([
+          hubspotAPI.searchSpecificBrand(brand_name),
+          firefliesApiKey ? searchFireflies(brand_name, { limit: 5 }) : { transcripts: [] }
+        ]);
+
+        if (!brand) {
+          mcpThinking.push(`⚠️ Could not find "${brand_name}" in HubSpot.`);
+          return { organizedData: { error: `Brand "${brand_name}" not found.` }, mcpThinking, usedMCP: true };
         }
         
+        mcpThinking.push('✅ Found brand. Retrieving contacts and emails...');
+        const [contacts, o365Data] = await Promise.all([
+            hubspotAPI.getContactsForBrand(brand.id),
+            msftClientId ? o365API.searchEmails(brand_name, { days: 90 }) : []
+        ]);
+
         return {
           organizedData: {
-            specificBrandWithContext: true,
-            brand: brand,
-            contacts: contacts,
-            recentMeetings: brandMeetings,
-            recentEmails: brandEmails,
-            brandName: brandName
-          },
-          mcpThinking,
-          usedMCP: true
+            dataType: 'BRAND_ACTIVITY', brand: brand.properties,
+            contacts: contacts.map(c => c.properties),
+            meetings: firefliesData.transcripts || [], emails: o365Data || []
+          }, mcpThinking, usedMCP: true
         };
       }
-    }
-    
-    const partnershipPatterns = [
-      /(?:partnerships?|productions?|shows?|films?|movies?).*?(?:suitable|good|match|for|new|recent|added|available)/i,
-      /(?:what|which|show|list).*?(?:partnerships?|productions?|shows?|films?|movies?)/i,
-      /new partnership opportunities/i,
-      /partnership.*?opportunities/i
-    ];
-    
-    const isPartnershipQuery = partnershipPatterns.some(pattern => pattern.test(userMessage));
-    
-    if (isPartnershipQuery) {
-      mcpThinking.push('🎬 Searching for partnership/production opportunities...');
-      
-      const partnershipsData = await hubspotAPI.searchProductions({ limit: 20 });
-      
-      if (partnershipsData.results?.length > 0) {
-        mcpThinking.push(`✅ Found ${partnershipsData.results.length} partnership opportunities`);
-        
-        const partnerships = partnershipsData.results.map(p => ({
-          id: p.id,
-          name: p.properties.partnership_name || p.properties.production_name || p.properties.name,
-          synopsis: p.properties.synopsis,
-          contentType: p.properties.content_type,
-          distributor: p.properties.distributor,
-          stage: p.properties.partnership_status || p.properties.hs_pipeline_stage,
-          fee: p.properties.hollywood_branded_fee,
-          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.PARTNERSHIPS}/${p.id}`,
-          projectUrl: `https://www.google.com/search?q=${encodeURIComponent(p.properties.partnership_name || p.properties.production_name || p.properties.name || '')}`, // Google search URL
-          lastModified: p.properties.hs_lastmodifieddate
-        }));
-        
-        return {
-          organizedData: {
-            partnershipSearch: true,
-            partnerships: partnerships,
-            queryType: 'partnership_opportunities'
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-    }
-    
-    const productionMatch = userMessage.match(/Title:\s*([^\n]+)[\s\S]*Synopsis:\s*([\s\S]+)/i);
-    if (productionMatch) {
-      const title = productionMatch[1].trim();
-      const synopsis = productionMatch[2].trim();
-      
-      mcpThinking.push(`🎬 Production shared: "${title}"`);
-      mcpThinking.push('🔍 Searching for this specific partnership in HubSpot...');
-      
-      const partnershipSearch = await hubspotAPI.searchProductions({
-        filterGroups: [{
-          filters: [{
-            propertyName: 'partnership_name',
-            operator: 'CONTAINS_TOKEN',
-            value: title
-          }]
-        }],
-        limit: 5
-      });
-      
-      let partnershipDetails = null;
-      if (partnershipSearch.results?.length > 0) {
-        partnershipDetails = partnershipSearch.results[0];
-        mcpThinking.push('✅ Found partnership in HubSpot');
-      } else {
-        mcpThinking.push('⚠️ Partnership not found in HubSpot - will use provided details');
-      }
-      
-      const [firefliesData, o365Data] = await Promise.all([
-        firefliesApiKey ? searchFireflies(title, { limit: 10 }) : { transcripts: [] },
-        msftClientId ? o365API.searchEmails(title, { days: 60 }) : []
-      ]);
-      
-      if (firefliesData.transcripts?.length > 0) {
-        mcpThinking.push(`✅ Found ${firefliesData.transcripts.length} meetings about this production`);
-      }
-      if (o365Data?.length > 0) {
-        mcpThinking.push(`✅ Found ${o365Data.length} emails about this production`);
-      }
-      
-      mcpThinking.push('🎯 Finding suitable brands for this production...');
-      
-      const hubspotBrands = await hubspotAPI.searchBrands({ limit: 50 });
-      
-      const productionContext = {
-        title: title,
-        synopsis: synopsis,
-        genre: extractGenreFromSynopsis(synopsis),
-        contentType: partnershipDetails?.properties.content_type,
-        distributor: partnershipDetails?.properties.distributor
-      };
-      
-      const { topBrands } = await narrowWithIntelligentTags(
-        hubspotBrands.results || [],
-        firefliesData.transcripts || [],
-        o365Data || [],
-        `${userMessage}\nProduction Context: ${JSON.stringify(productionContext)}`
-      );
-      
-      return {
-        organizedData: {
-          productionShared: true,
-          production: {
-            title: title,
-            synopsis: synopsis,
-            hubspotDetails: partnershipDetails,
-            context: productionContext,
-            hubspotUrl: partnershipDetails ? `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/record/${hubspotAPI.OBJECTS.PARTNERSHIPS}/${partnershipDetails.id}` : null,
-            projectUrl: `https://www.google.com/search?q=${encodeURIComponent(title)}` // Google search URL
-          },
-          topBrands: topBrands.slice(0, 15),
-          brandSuggestions: topBrands.slice(0, 15).map(brand => ({
-            id: brand.id,
-            name: brand.name,
-            score: brand.relevanceScore,
-            tag: brand.tags[0] || 'Potential Match',
-            tags: brand.tags,
-            reason: brand.reason,
-            budget: brand.budget,
-            hasAgency: brand.hasPartner,
-            agencyName: brand.partnerAgency,
-            hubspotUrl: brand.hubspotUrl,
-            meetingUrl: brand.meetingContext?.url || null,
-            meetingTitle: brand.meetingContext?.title || null,
-            emailSubject: brand.emailContext?.subject || null
-          })),
-          relatedMeetings: firefliesData.transcripts?.slice(0, 5) || [],
-          relatedEmails: o365Data?.slice(0, 5) || [],
-          currentProduction: title,
-          productionContext: productionContext
-        },
-        mcpThinking,
-        usedMCP: true
-      };
-    }
-    const contextPatterns = [
-      /(?:meetings?|calls?|discussions?).*?(?:with|about|regarding)?\s*(?:brands?|partners?|companies)/i,
-      /(?:valuable|important|key|recent|latest).*?(?:meetings?|calls?|emails?)/i,
-      /(?:what|which|show|list).*?(?:meetings?|calls?|emails?).*?(?:this month|last month|recent)/i,
-      /(?:meetings?|emails?|calls?).*?(?:this month|last month|this week|recently)/i,
-      /(?:any|all|show).*?(?:meetings?|emails?|activity).*?(?:with|from|about)/i
-    ];
-    
-    const isContextQuery = contextPatterns.some(pattern => pattern.test(userMessage));
-    
-    if (isContextQuery) {
-      mcpThinking.push('📊 Analyzing meeting and email activity...');
-      
-      let daysToSearch = 30;
-      if (userMessage.includes('this week')) daysToSearch = 7;
-      if (userMessage.includes('today')) daysToSearch = 1;
-      if (userMessage.includes('this month')) {
-        const now = new Date();
-        daysToSearch = now.getDate();
-      }
-      
-      const [firefliesData, o365Data] = await Promise.all([
-        firefliesApiKey ? searchFireflies('', { 
-          limit: 20, 
-          fromDate: new Date(Date.now() - daysToSearch * 24 * 60 * 60 * 1000).toISOString()
-        }) : { transcripts: [] },
-        msftClientId ? o365API.searchEmails('', { days: daysToSearch }) : []
-      ]);
-      
-      const valuableMeetings = firefliesData.transcripts?.map(meeting => {
-        const overview = (meeting.summary?.overview || '').toLowerCase();
-        const topics = (meeting.summary?.topics_discussed || '').toLowerCase();
-        
-        const hasActionItems = meeting.summary?.action_items?.length > 0;
-        const hasBudgetDiscussion = overview.includes('budget') || overview.includes('spend') || overview.includes('investment');
-        const hasDecisionMaker = meeting.participants?.some(p => 
-          p.toLowerCase().includes('ceo') || 
-          p.toLowerCase().includes('vp') || 
-          p.toLowerCase().includes('director')
+
+      case 'find_brand_recommendations_for_production': {
+        const { production_synopsis } = intent.args;
+        mcpThinking.push(`🎬 Analyzing production to find suitable brands...`);
+        const hubspotData = await hubspotAPI.searchBrands({ limit: 50 });
+        mcpThinking.push(`🧠 Analyzing ${hubspotData.results.length} brands for relevance...`);
+
+        const { topBrands } = await narrowWithIntelligentTags(
+          hubspotData.results || [], [], [], production_synopsis
         );
         
-        let valueScore = 0;
-        if (hasActionItems) valueScore += 30;
-        if (hasBudgetDiscussion) valueScore += 40;
-        if (hasDecisionMaker) valueScore += 30;
-        if (overview.includes('partnership') || overview.includes('integration')) valueScore += 20;
+        mcpThinking.push(`✨ Prepared ${topBrands.length} recommendations.`);
+        return {
+          organizedData: {
+            dataType: 'BRAND_RECOMMENDATIONS',
+            productionContext: production_synopsis,
+            brandSuggestions: topBrands.slice(0, 15)
+          }, mcpThinking, usedMCP: true
+        };
+      }
+        
+      case 'get_deep_dive_on_brands': {
+        const { brand_ids, production_context } = intent.args;
+        mcpThinking.push(`🔬 Performing deep dive on ${brand_ids.length} selected brand(s)...`);
+        
+        const firstBrand = await hubspotAPI.searchSpecificBrand(brand_ids[0]); 
+
+        mcpThinking.push('Gathering related meetings and emails...');
+        const [firefliesData, o365Data] = await Promise.all([
+            firefliesApiKey ? searchFireflies(firstBrand.properties.name, { limit: 10 }) : { transcripts: [] },
+            msftClientId ? o365API.searchEmails(firstBrand.properties.name, { days: 180 }) : []
+        ]);
         
         return {
-          ...meeting,
-          valueScore,
-          valueIndicators: {
-            hasActionItems,
-            hasBudgetDiscussion,
-            hasDecisionMaker
-          }
-        };
-      }).sort((a, b) => b.valueScore - a.valueScore) || [];
-      
-      if (valuableMeetings.length > 0) {
-        mcpThinking.push(`✅ Found ${valuableMeetings.length} meetings this month`);
-        mcpThinking.push(`🏆 Identified ${valuableMeetings.filter(m => m.valueScore > 50).length} high-value meetings`);
+          organizedData: {
+            dataType: 'DEEP_DIVE_ANALYSIS', productionContext: production_context,
+            brands: [{ details: firstBrand.properties, meetings: firefliesData.transcripts, emails: o365Data }]
+          }, mcpThinking, usedMCP: true
+        }
       }
-      
-      return {
-        organizedData: {
-          contextAnalysis: true,
-          queryType: userMessage.includes('valuable') ? 'valuable_meetings' : 'all_activity',
-          valuableMeetings: valuableMeetings.slice(0, 10),
-          emails: o365Data || [],
-          timeFrame: `Last ${daysToSearch} days`,
-          currentProduction: currentProduction
-        },
-        mcpThinking,
-        usedMCP: true
-      };
+
+      default:
+        return null;
     }
-    
-    mcpThinking.push('🔍 Starting brand partnership search...');
-    
-    const fullContext = (userMessage + ' ' + (conversationContext || ''));
-    const productionContext = extractProductionContext(fullContext);
-    
-    if (productionContext.genre) {
-      mcpThinking.push(`🎯 Focusing on ${productionContext.genre} genre`);
-    }
-    
-    const searchKeywords = [];
-    if (currentProduction) {
-      const titleWords = currentProduction.split(' ').filter(w => w.length > 3);
-      searchKeywords.push(...titleWords);
-    }
-    if (productionContext.genre) {
-      searchKeywords.push(productionContext.genre);
-    }
-    
-    if (searchKeywords.length === 0) {
-      searchKeywords.push('brand', 'partnership');
-    }
-    
-    // Smart search strategy based on query type
-    let firefliesSearchTerm = '';
-    let emailSearchTerm = '';
-    
-    // If we have a current production, search for it
-    if (currentProduction) {
-      firefliesSearchTerm = currentProduction;
-      emailSearchTerm = currentProduction;
-    } 
-    // If it's a genre-based query, search for genre keywords
-    else if (productionContext.genre) {
-      // Genre terms that actually appear in meetings/emails
-      const genreSearchTerms = {
-        action: 'action',
-        comedy: 'comedy',
-        drama: 'drama',
-        horror: 'thriller',
-        documentary: 'documentary',
-        sports: 'sports',
-        scifi: 'sci-fi',
-        romance: 'romantic',
-        crime: 'crime'
-      };
-      firefliesSearchTerm = genreSearchTerms[productionContext.genre] || '';
-      emailSearchTerm = firefliesSearchTerm;
-    }
-    // For general brand searches, look for common terms
-    else if (userMessage.toLowerCase().includes('brand')) {
-      firefliesSearchTerm = 'brand integration';
-      emailSearchTerm = 'partnership';
-    }
-    
-    const [hubspotData, firefliesData, o365Data] = await Promise.all([
-      hubspotApiKey ? searchHubSpot(userMessage, projectId, 50) : { brands: [], productions: [] },
-      firefliesApiKey ? searchFireflies(firefliesSearchTerm, { limit: 20 }) : { transcripts: [] },
-      msftClientId ? o365API.searchEmails(emailSearchTerm, { days: 30 }) : []
-    ]);
-    
-    if (hubspotData.brands?.length > 0) {
-      mcpThinking.push(`✅ Found ${hubspotData.brands.length} brands in HubSpot`);
-    }
-    if (firefliesData.transcripts?.length > 0) {
-      mcpThinking.push(`✅ Found ${firefliesData.transcripts.length} meeting transcripts`);
-    }
-    if (o365Data?.length > 0) {
-      mcpThinking.push(`✅ Found ${o365Data.length} email threads`);
-    }
-    
-    mcpThinking.push('🧠 Analyzing brand relevance...');
-    
-    const { topBrands } = await narrowWithIntelligentTags(
-      hubspotData.brands || [],
-      firefliesData.transcripts || [],
-      o365Data || [],
-      userMessage
-    );
-    
-    const brandSuggestions = topBrands.slice(0, 15).map(brand => {
-      // Debug logging
-      if (brand.tags.length > 1) {
-        console.log(`Brand ${brand.name} has ${brand.tags.length} tags:`, brand.tags);
-      }
-      
-      return {
-        id: brand.id,
-        name: brand.name,
-        score: brand.relevanceScore,
-        tag: brand.tags[0] || 'Potential Match',
-        tags: brand.tags,
-        reason: brand.reason,
-        budget: brand.budget,
-        hasAgency: brand.hasPartner,
-        agencyName: brand.partnerAgency,
-        hubspotUrl: brand.hubspotUrl,
-        brandUrl: `https://www.google.com/search?q=${encodeURIComponent(brand.name)}`,
-        meetingUrl: brand.meetingContext?.url || null,
-        meetingTitle: brand.meetingContext?.title || null,
-        emailSubject: brand.emailContext?.subject || null
-      };
-    });
-    
-    mcpThinking.push(`✨ Prepared ${brandSuggestions.length} recommendations`);
-    
-    return {
-      organizedData: {
-        topBrands: topBrands.slice(0, 10),
-        brandSuggestions: brandSuggestions,
-        firefliesTranscripts: firefliesData.transcripts?.slice(0, 3) || [],
-        o365Emails: o365Data?.slice(0, 3) || [],
-        currentProduction: currentProduction,
-        productionContext: productionContext
-      },
-      mcpThinking,
-      usedMCP: true
-    };
-    
   } catch (error) {
+    console.error(`Error executing tool "${intent.tool}":`, error);
     return null;
   }
 }
@@ -1922,87 +1473,6 @@ async function generateVeo3Video({
   }
 }
 
-async function shouldUseSearch(userMessage, conversationContext) {
-  if (!openAIApiKey) return false;
-  
-  try {
-    const contextClues = conversationContext ? conversationContext.toLowerCase() : '';
-    const messageClues = userMessage.toLowerCase();
-    
-    // IMMEDIATE DETECTION for production formats
-    if (userMessage.match(/Title:\s*[^\n]+[\s\S]*Synopsis:/i)) {
-      return true;
-    }
-    
-    // Check for production patterns
-    if (messageClues.includes('synopsis:') && (messageClues.includes('title:') || messageClues.includes('talent:') || messageClues.includes('distributor:'))) {
-      return true;
-    }
-    
-    // Check for brand/partnership queries
-    if (messageClues.match(/\b(brands?|partnerships?|integrations?|matches|suitable|opportunities)\b/i)) {
-      return true;
-    }
-    
-    // For everything else, let AI decide intelligently
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [{
-          role: 'system',
-          content: `You are a query classifier for a Hollywood production company's AI assistant. The assistant has access to:
-- HubSpot CRM (brands, companies, contacts)
-- Fireflies meeting transcripts
-- Email archives
-- Production/film/show databases
-
-Return "true" ONLY if the query is asking to:
-- Search for brands, companies, or partnerships
-- Look up meetings, calls, or transcripts
-- Find emails or messages
-- Match brands to a production/film/show
-- Access any business data from these systems
-
-Return "false" for:
-- General knowledge questions
-- Casual conversation
-- Questions about how things work
-- Advice or recommendations not requiring database searches
-- Any query that can be answered without searching internal systems
-
-Just return "true" or "false", nothing else.`
-        }, {
-          role: 'user',
-          content: `Query: "${userMessage}"
-Recent context: "${contextClues.slice(-300)}"
-
-Should I search the internal databases for this?`
-        }],
-        temperature: 0,
-        max_tokens: 10
-      }),
-    });
-    
-    const data = await response.json();
-    const result = data.choices[0].message.content.toLowerCase().trim();
-    return result === 'true';
-    
-  } catch (error) {
-    // Enhanced fallback patterns
-    const patterns = [
-      /Title:\s*[^\n]+/i,
-      /Synopsis:/i,
-      /\b(brand|partnership|integration|hubspot|fireflies|meeting|email)\b/i,
-      /\b(find|search|look for|match|suitable)\s+\w*\s*(brands?|partners?)/i
-    ];
-    return patterns.some(pattern => userMessage.match(pattern));
-  }
-}
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -2403,141 +1873,66 @@ export default async function handler(req, res) {
         } catch (error) {
           res.status(500).json({ error: 'Error processing audio data.', details: error.message });
         }
-      } else if (userMessage) {
-        try {
-          let aiReply = '';
-          let mcpThinking = [];
-          let usedMCP = false;
-
-          let claudeOrganizedData = null;
-          if (shouldSearchDatabases && anthropicApiKey) {
-            const claudeResult = await handleClaudeSearch(
-              userMessage, 
-              knowledgeBaseInstructions, 
-              projectId, 
-              sessionId,
-              conversationContext
-            );
-            
-            if (claudeResult) {
-              claudeOrganizedData = claudeResult.organizedData;
-              mcpThinking = claudeResult.mcpThinking || [];
-              
-              if (claudeResult.mcpThinking && Array.isArray(claudeResult.mcpThinking)) {
-                claudeResult.mcpThinking.forEach((step, index) => {
-                  mcpRawOutput.push({
-                    text: step,
-                    timestamp: Date.now() - mcpStartTime + (index * 200)
-                  });
-                });
-              }
-              
-              usedMCP = true;
-              mcpRawOutput.push({
-                text: '✅ Claude MCP successfully gathered and organized data',
-                timestamp: Date.now() - mcpStartTime
-              });
-            } else {
-              mcpRawOutput.push({
-                text: '⚠️ Claude MCP failed - using standard OpenAI',
-                timestamp: Date.now() - mcpStartTime
-              });
-            }
-          } else {
-            if (!shouldSearchDatabases) {
-            }
-            if (!anthropicApiKey) {
-            }
-          }
-          
-          if (!aiReply) {
-            mcpRawOutput.push({
-              text: '📝 Using OpenAI for response generation',
-              timestamp: Date.now() - mcpStartTime
-            });
-        
-            // 1. Define the AI's core role and high-level instructions.
-            let systemMessageContent = `You are an expert assistant specialized in brand integration for Hollywood entertainment. Your goal is to provide clear, actionable, and data-driven insights based on the context provided below. Always be conversational and ensure any links you provide are clickable.`;
-        
-            // 2. Provide the structured data from the search function (if any exists).
-            // This is far more effective than manually formatting a long string.
-            if (claudeOrganizedData) {
-              systemMessageContent += `\n\nHere is the relevant data I've gathered for the user's request, formatted as a JSON object. Use this data to formulate your response:\n\n`;
-              systemMessageContent += '```json\n';
-              systemMessageContent += JSON.stringify(claudeOrganizedData, null, 2);
-              systemMessageContent += '\n```';
-            } 
-            else if (shouldSearchDatabases) {
-              // Handle cases where a search was triggered but returned no data.
-              systemMessageContent += `\n\nI searched our internal systems but couldn't find specific data for that request. Please answer the user's question based on your general knowledge.`;
-            }
-        
-            // 3. Append the knowledge base and conversation history for context.
-            if (knowledgeBaseInstructions) {
-                systemMessageContent += `\n\nHere is some general information from our knowledge base:\n${knowledgeBaseInstructions}`;
-            }
-            if (conversationContext) {
-              systemMessageContent += `\n\nFor additional context, here is the recent conversation history:\n${conversationContext}`;
-            }
-        
-            // 4. Add final metadata.
-            systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
-            if (projectId && projectId !== 'default') {
-              systemMessageContent += ` You are assisting with the ${projectId} project.`;
-            }
-            
-            // 5. Call the AI with the clean, well-structured prompt.
-            const openAIResponse = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-            aiReply = openAIResponse;
-        }
-          
-          if (aiReply) {
-            // Post-process to ensure consistent brand card formatting
-            if (aiReply.includes('Brand integration suggestions for') && aiReply.includes('Brand:')) {
-              // Ensure proper line breaks after the title
-              aiReply = aiReply.replace(
-                /^(Brand integration suggestions for [^:]+:)\s*/,
-                '$1\n\n'
-              );
-              
-              // Ensure consistent field formatting (remove any asterisks)
-              aiReply = aiReply.replace(/\*\*(Brand|Integration|Why it works|HB Insights):\*\*/g, '$1:');
-              
-              // Ensure proper spacing between brand sections
-              aiReply = aiReply.replace(/\n(Brand:)/g, '\n\n$1');
-              
-              // Clean up any triple+ line breaks
-              aiReply = aiReply.replace(/\n{3,}/g, '\n\n');
-            }
-            
-            updateAirtableConversation(
-              sessionId, 
-              projectId, 
-              chatUrl, 
-              headersAirtable, 
-              `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`, 
-              existingRecordId
-            ).catch(err => {});
-            
-            const response = { 
-              reply: aiReply,
-              mcpThinking: mcpThinking || [],
-              mcpRawOutput: mcpRawOutput || [],
-              usedMCP: usedMCP
-            };
-            
-            if (claudeOrganizedData && claudeOrganizedData.brandSuggestions) {
-              response.brandSuggestions = claudeOrganizedData.brandSuggestions;
-            }
-            
-            return res.json(response);
-          } else {
-            return res.status(500).json({ error: 'No text reply received.' });
-          }
-        } catch (error) {
-          return res.status(500).json({ error: 'Error fetching response.', details: error.message });
-        }
+      // This is the complete and final code to paste inside the 'else if (userMessage) { ... }' block
       }
+try {
+  let aiReply = '';
+  let mcpThinking = [];
+  let usedMCP = false;
+  let structuredData = null; // This will hold our "MCP Report"
+
+  // Call the new, lean handleClaudeSearch which now acts as the Tool Executor
+  const claudeResult = await handleClaudeSearch(
+      userMessage,
+      projectId,
+      conversationContext
+  );
+
+  if (claudeResult) {
+      // A tool was successfully used!
+      usedMCP = true;
+      mcpThinking = claudeResult.mcpThinking || [];
+      structuredData = claudeResult.organizedData; // This is the structured data for the frontend!
+
+      // Now, generate the text summary for the user
+      let systemMessageContent = `You are an expert assistant specialized in brand integration for Hollywood entertainment. A search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.`;
+
+      systemMessageContent += '\n\n```json\n';
+      systemMessageContent += JSON.stringify(structuredData, null, 2);
+      systemMessageContent += '\n```';
+
+      aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+
+  } else {
+      // No tool was used, so it's a general conversation.
+      usedMCP = false;
+      let systemMessageContent = "You are a helpful assistant specialized in brand integration into Hollywood entertainment.";
+      if (conversationContext) {
+          systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+      }
+      aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+  }
+
+  if (aiReply) {
+      updateAirtableConversation(
+          sessionId, projectId, chatUrl, headersAirtable,
+          `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
+          existingRecordId
+      ).catch(err => {});
+
+      // The final response now contains BOTH the text reply AND the structured data
+      return res.json({
+          reply: aiReply,
+          structuredData: structuredData, // The "MCP Report" for your frontend!
+          mcpThinking: mcpThinking,
+          usedMCP: usedMCP
+      });
+  } else {
+      return res.status(500).json({ error: 'No text reply received.' });
+  }
+} catch (error) {
+  return res.status(500).json({ error: 'Error fetching response.', details: error.message });
+}
     } catch (error) {
       return res.status(500).json({ error: 'Internal server error', details: error.message });
     }
