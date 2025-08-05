@@ -1250,42 +1250,29 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext) {
 // In handleClaudeSearch, REPLACE the entire 'find_brand_recommendations_for_production' case with this
 case 'find_brand_recommendations_for_production': {
   const { production_synopsis } = intent.args;
-  mcpThinking.push(`🎬 Analyzing production to create a custom brand strategy...`);
+  mcpThinking.push(`🎬 Analyzing production to find suitable brands...`);
 
-  // --- Start of New Hybrid Search Logic ---
-  // Run all our data gathering in parallel for speed
-  const [
-    vibeMatchedBrandsData,
-    hotBrandsData,
-    firefliesContext,
-    emailContext
-  ] = await Promise.all([
-    // 1. Get brands that match the "vibe" of the production
-    hubspotAPI.searchBrands({ query: production_synopsis, limit: 20 }),
-    // 2. Get the general "hot" brands (active deals, recent activity)
-    hubspotAPI.searchBrands({ limit: 20 }),
-    // 3. Find any mentions of the production in past meetings
-    firefliesApiKey ? searchFireflies(production_synopsis, { limit: 5 }) : { transcripts: [] },
-    // 4. Find any mentions of the production in recent emails
-    msftClientId ? o365API.searchEmails(production_synopsis, { days: 180 }) : []
-  ]);
-  // --- End of New Hybrid Search Logic ---
+  // --- Start of New SIMPLIFIED Search Logic ---
+  // We are temporarily removing the parallel searches to ensure stability.
+  // This will get a targeted list of brands based on the synopsis.
+  const vibeMatchedBrandsData = await hubspotAPI.searchBrands({ 
+    query: production_synopsis, 
+    limit: 30 
+  });
+  // --- End of New SIMPLIFIED Search Logic ---
 
-  mcpThinking.push(`🤝 Combining vibe-matched brands with high-priority active deals...`);
+  if (!vibeMatchedBrandsData || !vibeMatchedBrandsData.results) {
+      mcpThinking.push(`⚠️ No brands found matching the production vibe.`);
+      return { organizedData: { error: 'No relevant brands found.' }, mcpThinking, usedMCP: true };
+  }
 
-  // Create the "nice mix" of brands, removing duplicates
-  const allBrands = new Map();
-  vibeMatchedBrandsData.results.forEach(brand => allBrands.set(brand.id, brand));
-  hotBrandsData.results.forEach(brand => allBrands.set(brand.id, brand));
-  const mixedBrandList = Array.from(allBrands.values());
-
-  mcpThinking.push(`🧠 Analyzing ${mixedBrandList.length} unique brands for relevance...`);
+  mcpThinking.push(`🧠 Analyzing ${vibeMatchedBrandsData.results.length} vibe-matched brands for relevance...`);
   
-  // Now, call the AI ranker with the mixed list AND the new context
+  // Call the AI ranker with just this clean, targeted list.
   const { topBrands } = await narrowWithIntelligentTags(
-    mixedBrandList,
-    firefliesContext.transcripts || [], // Pass in the new context
-    emailContext || [],                 // Pass in the new context
+    vibeMatchedBrandsData.results,
+    [], // No Fireflies context for now
+    [], // No email context for now
     production_synopsis
   );
   
@@ -1295,10 +1282,7 @@ case 'find_brand_recommendations_for_production': {
       dataType: 'BRAND_RECOMMENDATIONS',
       productionContext: production_synopsis,
       brandSuggestions: topBrands.slice(0, 15),
-      supportingContext: {
-        meetings: firefliesContext.transcripts || [],
-        emails: emailContext || []
-      }
+      supportingContext: { meetings: [], emails: [] }
     },
     mcpThinking,
     usedMCP: true
