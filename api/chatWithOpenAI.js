@@ -1208,6 +1208,38 @@ function extractGenreFromSynopsis(synopsis) {
   return 'general';
 }
 
+// Add this new helper function to extract last production context
+function extractLastProduction(conversation) {
+  if (!conversation) return null;
+  
+  // Look for patterns that indicate a production/synopsis
+  const patterns = [
+    /Synopsis:([\s\S]+?)(?=\nUser:|\nAI:|$)/gi,
+    /Production:([\s\S]+?)(?=\nUser:|\nAI:|$)/gi,
+    /(?:movie|film|show|series|production)[\s\S]{0,500}?(?:starring|featuring|about|follows)[\s\S]+?(?=\nUser:|\nAI:|$)/gi
+  ];
+  
+  let lastProduction = null;
+  
+  for (const pattern of patterns) {
+    const matches = conversation.match(pattern);
+    if (matches && matches.length > 0) {
+      // Get the last match
+      lastProduction = matches[matches.length - 1];
+      break;
+    }
+  }
+  
+  // Clean up the extracted text
+  if (lastProduction) {
+    lastProduction = lastProduction
+      .replace(/^(Synopsis:|Production:)\s*/i, '')
+      .trim();
+  }
+  
+  return lastProduction;
+}
+
 function checkGenreMatch(productionGenre, brandCategory) {
   const genreMap = {
     sports: ['athletic', 'fitness', 'sports', 'energy', 'nutrition', 'wellness', 'performance'],
@@ -1246,7 +1278,7 @@ function checkGenreMatch(productionGenre, brandCategory) {
   
   return false;
 }
-async function routeUserIntent(userMessage, conversationContext) {
+async function routeUserIntent(userMessage, conversationContext, lastProductionContext) {
   if (!openAIApiKey) return { tool: 'answer_general_question' };
 
   const tools = [
@@ -1295,8 +1327,14 @@ async function routeUserIntent(userMessage, conversationContext) {
       body: JSON.stringify({
         model: 'gpt-4o',
         messages: [
-          { role: 'system', content: 'You are an expert at routing a user request to the correct tool. If the user mentions ANY of these: synopsis, production, show, movie, series, script, story, plot, genre, mood, vibe, or asks to convert/analyze content for brand matching, use find_brands. Extract the FULL user message into search_term.' },
-          { role: 'user', content: userMessage }
+          { 
+            role: 'system', 
+            content: 'You are an expert at routing a user request to the correct tool. If the user mentions ANY of these: synopsis, production, show, movie, series, script, story, plot, genre, mood, vibe, or asks to convert/analyze content for brand matching, use find_brands. If the user\'s request seems to refer to a previous topic (e.g., "for this project", "this production", "it"), you MUST use the provided "Last Production Context" to inform the tool call.' 
+          },
+          { 
+            role: 'user', 
+            content: `Last Production Context:\n"""\n${lastProductionContext || 'None'}\n"""\n\nUser's New Request:\n"""\n${userMessage}\n"""`
+          }
         ],
         tools: tools,
         tool_choice: 'auto'
@@ -1309,8 +1347,9 @@ async function routeUserIntent(userMessage, conversationContext) {
 
     if (toolCall) {
       const args = JSON.parse(toolCall.function.arguments);
-      if (toolCall.function.name === 'find_brands' && !args.search_term) {
-          args.search_term = userMessage;
+      // If referencing previous context and no explicit search term, use the context
+      if (toolCall.function.name === 'find_brands' && !args.search_term && lastProductionContext) {
+          args.search_term = lastProductionContext;
       }
       return { tool: toolCall.function.name, args: args };
     }
@@ -1321,10 +1360,10 @@ async function routeUserIntent(userMessage, conversationContext) {
   }
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext) {
   if (!anthropicApiKey) return null;
 
-  const intent = await routeUserIntent(userMessage, conversationContext);
+  const intent = await routeUserIntent(userMessage, conversationContext, lastProductionContext);
 
   if (!intent || intent.tool === 'answer_general_question') {
     return null;
@@ -2061,10 +2100,15 @@ export default async function handler(req, res) {
           let structuredData = null;
 
           console.log('[DEBUG] Calling handleClaudeSearch...');
+          
+          // Extract the last production context for follow-up questions
+          const lastProductionContext = extractLastProduction(conversationContext);
+          
           const claudeResult = await handleClaudeSearch(
               userMessage,
               projectId,
-              conversationContext
+              conversationContext,
+              lastProductionContext
           );
           console.log('[DEBUG] handleClaudeSearch returned:', claudeResult ? 'data' : 'null');
 
