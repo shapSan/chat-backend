@@ -4,15 +4,7 @@ import WebSocket from 'ws';
 import RunwayML from '@runwayml/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// Load environment variables first
 dotenv.config();
-
-// Verify environment variables are loaded
-console.log('[ENV CHECK] Environment loaded:', {
-  NODE_ENV: process.env.NODE_ENV,
-  hasEnvFile: !!process.env.ANTHROPIC_API_KEY || !!process.env.OPENAI_API_KEY,
-  envKeys: Object.keys(process.env).filter(key => key.includes('API_KEY')).length
-});
 
 export const config = {
   api: {
@@ -26,15 +18,6 @@ const airtableApiKey = process.env.AIRTABLE_API_KEY;
 const openAIApiKey = process.env.OPENAI_API_KEY;
 const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-
-// Debug: Log API key status at startup
-console.log('[STARTUP] API Keys Status:', {
-  hasOpenAI: !!openAIApiKey,
-  hasAnthropic: !!anthropicApiKey,
-  hasHubspot: !!hubspotApiKey,
-  hasFireflies: !!firefliesApiKey,
-  hasMicrosoft: !!msftClientId
-});
 const runwayApiKey = process.env.RUNWAY_API_KEY;
 const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 const googleGeminiApiKey = process.env.GOOGLE_GEMINI_API_KEY;
@@ -315,9 +298,6 @@ const hubspotAPI = {
   
   async testConnection() {
     try {
-      console.log('[HubSpot] Testing connection...');
-      const startTime = Date.now();
-      
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}?limit=1`, {
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -325,22 +305,13 @@ const hubspotAPI = {
         }
       });
       
-      const success = response.ok;
-      console.log('[HubSpot] Connection test:', {
-        success,
-        status: response.status,
-        duration: Date.now() - startTime + 'ms'
-      });
-      
       if (!response.ok) {
         const errorBody = await response.text();
-        console.error('[HubSpot] Connection test failed:', errorBody);
         return false;
       }
       
       return true;
     } catch (error) {
-      console.error('[HubSpot] Connection test error:', error);
       return false;
     }
   }
@@ -723,37 +694,20 @@ async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefli
       scores: {}
     };
   } catch (error) {
-    console.error('[narrowWithOpenAI] Error:', error);
     return { topBrands: [], scores: {} };
   }
 }
 
 async function searchHubSpot(query, projectId, limit = 50) {
-  console.log('[searchHubSpot] Starting search:', { 
-    hasApiKey: !!hubspotApiKey, 
-    query: query?.substring(0, 50) + '...',
-    limit 
-  });
-  
   if (!hubspotApiKey) {
-    console.error('[searchHubSpot] No HubSpot API key configured');
     return { brands: [], productions: [] };
   }
   
   try {
     const isConnected = await hubspotAPI.testConnection();
     if (!isConnected) {
-      console.error('[searchHubSpot] HubSpot connection test failed');
       return { brands: [], productions: [] };
     }
-    
-    // Check HubSpot API health
-    const hubspotHealthStart = Date.now();
-    const isHubSpotConnected = await hubspotAPI.testConnection();
-    console.log('[handleClaudeSearch] HubSpot health check:', {
-      connected: isHubSpotConnected,
-      duration: Date.now() - hubspotHealthStart + 'ms'
-    });
     
     const searchTerm = await extractSearchKeyword(query);
     
@@ -794,18 +748,12 @@ async function searchHubSpot(query, projectId, limit = 50) {
 
     const productionsData = await hubspotAPI.searchProductions({ limit });
 
-    console.log('[searchHubSpot] Results:', {
-      brandsFound: brandsData.results?.length || 0,
-      productionsFound: productionsData.results?.length || 0
-    });
-
     return {
       brands: brandsData.results || [],
       productions: productionsData.results || []
     };
 
   } catch (error) {
-    console.error('[searchHubSpot] Error:', error);
     return { brands: [], productions: [] };
   }
 }
@@ -1461,7 +1409,7 @@ async function extractSearchKeyword(query) {
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-3.5-turbo',
         messages: [{
           role: 'system',
           content: 'Extract the search keyword from this query about meetings. If asking about "latest meeting" with no specific topic, return empty string. If asking about a specific brand/person/topic, return just that term. Return ONLY the keyword or empty string, nothing else.'
@@ -1483,24 +1431,12 @@ async function extractSearchKeyword(query) {
     return '';
     
   } catch (error) {
-    console.error('[extractSearchKeyword] Error:', error);
     return '';
   }
 }
 
 async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projectId, sessionId, conversationContext) {
-  console.log('[handleClaudeSearch] Starting with:', {
-    hasApiKey: !!anthropicApiKey,
-    apiKeyLength: anthropicApiKey?.length,
-    messageLength: userMessage?.length,
-    hasKnowledgeBase: !!knowledgeBaseInstructions,
-    projectId,
-    sessionId,
-    hasContext: !!conversationContext
-  });
-
   if (!anthropicApiKey) {
-    console.error('[handleClaudeSearch] No Anthropic API key available');
     return null;
   }
   
@@ -1522,7 +1458,6 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
   
   try {
     const mcpThinking = [];
-    console.log('[handleClaudeSearch] Starting MCP analysis...');
     
     const slashCommand = userMessage.match(/^\/(\w+)\s+(.+)/);
     if (slashCommand) {
@@ -1897,18 +1832,9 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     }
     
     const [hubspotData, firefliesData, o365Data] = await Promise.all([
-      hubspotApiKey ? searchHubSpot(userMessage, projectId, 50).catch(err => {
-        console.error('[handleClaudeSearch] HubSpot search error:', err);
-        return { brands: [], productions: [] };
-      }) : { brands: [], productions: [] },
-      firefliesApiKey ? searchFireflies(firefliesSearchTerm, { limit: 20 }).catch(err => {
-        console.error('[handleClaudeSearch] Fireflies search error:', err);
-        return { transcripts: [] };
-      }) : { transcripts: [] },
-      msftClientId ? o365API.searchEmails(emailSearchTerm, { days: 30 }).catch(err => {
-        console.error('[handleClaudeSearch] O365 search error:', err);
-        return [];
-      }) : []
+      hubspotApiKey ? searchHubSpot(userMessage, projectId, 50) : { brands: [], productions: [] },
+      firefliesApiKey ? searchFireflies(firefliesSearchTerm, { limit: 20 }) : { transcripts: [] },
+      msftClientId ? o365API.searchEmails(emailSearchTerm, { days: 30 }) : []
     ]);
     
     if (hubspotData.brands?.length > 0) {
@@ -1970,11 +1896,6 @@ async function handleClaudeSearch(userMessage, knowledgeBaseInstructions, projec
     };
     
   } catch (error) {
-    console.error('[handleClaudeSearch] Fatal error:', {
-      error: error.message,
-      stack: error.stack,
-      apiKeyStatus: !!anthropicApiKey
-    });
     return null;
   }
 }
@@ -2189,7 +2110,7 @@ async function shouldUseSearch(userMessage, conversationContext) {
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-3.5-turbo',
         messages: [{
           role: 'system',
           content: `You are a query classifier for a Hollywood production company's AI assistant. The assistant has access to:
@@ -2230,7 +2151,6 @@ Should I search the internal databases for this?`
     return result === 'true';
     
   } catch (error) {
-    console.error('[shouldUseSearch] Error:', error);
     // Enhanced fallback patterns
     const patterns = [
       /Title:\s*[^\n]+/i,
@@ -2243,14 +2163,6 @@ Should I search the internal databases for this?`
 }
 
 export default async function handler(req, res) {
-  // Add request logging
-  console.log('[API Handler] Request received:', {
-    method: req.method,
-    path: req.url,
-    bodyKeys: req.body ? Object.keys(req.body) : [],
-    hasSession: !!req.body?.sessionId
-  });
-
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
@@ -2566,14 +2478,6 @@ export default async function handler(req, res) {
 
       const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
       
-      // Debug: Check API key status at runtime
-      console.log('[Main] API Key Status Check:', {
-        anthropicKeyExists: !!anthropicApiKey,
-        anthropicKeyLength: anthropicApiKey?.length,
-        anthropicKeyPrefix: anthropicApiKey?.substring(0, 10) + '...',
-        shouldSearch: shouldSearchDatabases
-      });
-      
       let mcpRawOutput = [];
       let mcpStartTime = Date.now();
       
@@ -2665,49 +2569,13 @@ export default async function handler(req, res) {
 
           let claudeOrganizedData = null;
           if (shouldSearchDatabases && anthropicApiKey) {
-            console.log('[Main Handler] Attempting Claude search...', {
-              hasAnthropicKey: !!anthropicApiKey,
-              keyLength: anthropicApiKey?.length,
-              messagePreview: userMessage.substring(0, 50) + '...'
-            });
-            
-            // Retry mechanism for first-run failures
-            let claudeResult = null;
-            let retryCount = 0;
-            const maxRetries = 2;
-            
-            while (retryCount <= maxRetries && !claudeResult) {
-              try {
-                const claudeStartTime = Date.now();
-                
-                if (retryCount > 0) {
-                  console.log(`[Main Handler] Retry attempt ${retryCount} for Claude search`);
-                  // Add small delay before retry
-                  await new Promise(resolve => setTimeout(resolve, 500));
-                }
-                
-                claudeResult = await handleClaudeSearch(
-                  userMessage, 
-                  knowledgeBaseInstructions, 
-                  projectId, 
-                  sessionId,
-                  conversationContext
-                );
-                
-                console.log('[Main Handler] Claude search completed:', {
-                  attempt: retryCount + 1,
-                  success: !!claudeResult,
-                  duration: Date.now() - claudeStartTime + 'ms',
-                  hasOrganizedData: !!claudeResult?.organizedData
-                });
-                
-              } catch (error) {
-                console.error(`[Main Handler] Claude search attempt ${retryCount + 1} failed:`, error);
-                claudeResult = null;
-              }
-              
-              retryCount++;
-            }
+            const claudeResult = await handleClaudeSearch(
+              userMessage, 
+              knowledgeBaseInstructions, 
+              projectId, 
+              sessionId,
+              conversationContext
+            );
             
             if (claudeResult) {
               claudeOrganizedData = claudeResult.organizedData;
@@ -2728,7 +2596,6 @@ export default async function handler(req, res) {
                 timestamp: Date.now() - mcpStartTime
               });
             } else {
-              console.error('[Main Handler] Claude MCP failed after all retries - falling back to OpenAI');
               mcpRawOutput.push({
                 text: '⚠️ Claude MCP failed - using standard OpenAI',
                 timestamp: Date.now() - mcpStartTime
@@ -2736,10 +2603,8 @@ export default async function handler(req, res) {
             }
           } else {
             if (!shouldSearchDatabases) {
-              console.log('[Main Handler] Search not needed for this query');
             }
             if (!anthropicApiKey) {
-              console.error('[Main Handler] No Anthropic API key configured');
             }
           }
           
@@ -3372,24 +3237,6 @@ export default async function handler(req, res) {
           }
           
           if (aiReply) {
-            // Post-process to ensure consistent brand card formatting
-            if (aiReply.includes('Brand integration suggestions for') && aiReply.includes('Brand:')) {
-              // Ensure proper line breaks after the title
-              aiReply = aiReply.replace(
-                /^(Brand integration suggestions for [^:]+:)\s*/,
-                '$1\n\n'
-              );
-              
-              // Ensure consistent field formatting (remove any asterisks)
-              aiReply = aiReply.replace(/\*\*(Brand|Integration|Why it works|HB Insights):\*\*/g, '$1:');
-              
-              // Ensure proper spacing between brand sections
-              aiReply = aiReply.replace(/\n(Brand:)/g, '\n\n$1');
-              
-              // Clean up any triple+ line breaks
-              aiReply = aiReply.replace(/\n{3,}/g, '\n\n');
-            }
-            
             updateAirtableConversation(
               sessionId, 
               projectId, 
