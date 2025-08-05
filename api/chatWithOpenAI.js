@@ -759,288 +759,130 @@ async function searchHubSpot(query, projectId, limit = 50) {
 }
 
 async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, emails, userMessage) {
+  // If there are no brands to process, return immediately.
+  if (!hubspotBrands || hubspotBrands.length === 0) {
+    return { topBrands: [], taggedBrands: [] };
+  }
+
+  // If the API key isn't configured, fall back to a simple, untagged list.
+  if (!openAIApiKey) {
+    console.warn("OpenAI API key not found. Returning unranked brands.");
+    return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
+  }
+
   try {
-    const productionContext = extractProductionContext(userMessage);
-    
-    const taggedBrands = hubspotBrands.map(b => {
-      const brand = {
-        source: 'hubspot',
+    // 1. Pre-process the brands to add explicit "helper tags" for the AI.
+    const brandsForAI = hubspotBrands.map(b => {
+      const brandData = {
         id: b.id,
-        name: b.properties.brand_name || b.properties.name || '',
+        name: b.properties.brand_name || b.properties.name || 'Unknown',
         category: b.properties.brand_category || b.properties.industry || 'General',
+        description: (b.properties.description || '').slice(0, 150),
         budget: b.properties.media_spend_m_ ? `${b.properties.media_spend_m_}M` : 'TBD',
-        summary: (b.properties.description || '').slice(0, 100),
-        lastActivity: b.properties.notes_last_contacted || b.properties.notes_last_updated || b.properties.hs_lastmodifieddate,
-        hasPartner: !!b.properties.partner_agency_name,
-        partnerAgency: b.properties.partner_agency_name,
-        website: b.properties.domain,
-        lifecyclestage: b.properties.lifecyclestage,
-        clientStatus: b.properties.client_status, // Add this field
-        clientType: b.properties.client_type, // Add this field
-        numContacts: b.properties.num_associated_contacts || '0',
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`,
-        tags: [],
-        relevanceScore: 0,
-        reason: ''
+        helper_tags: [] // This new field will hold our explicit business rules.
       };
-      
-      const tags = [];
-      let score = 0;
-      let primaryReason = '';
-      
-      const brandNameLower = brand.name.toLowerCase();
-      let meetingMention = null;
-      let emailMention = null;
-      
-      const mentionedInFireflies = firefliesTranscripts && firefliesTranscripts.some(t => {
-        const overview = (t.summary?.overview || '').toLowerCase();
-        const title = (t.title || '').toLowerCase();
-        const topics = (t.summary?.topics_discussed || '').toLowerCase();
-        const actionItems = (t.summary?.action_items || []).join(' ').toLowerCase();
-        
-        // Build searchable text
-        const searchText = `${title} ${overview} ${topics} ${actionItems}`;
-        
-        // Smart brand matching
-        const brandNameClean = brand.name.toLowerCase()
-          .replace(/\s*(inc\.?|llc|ltd|corp|corporation|company|co\.?)\s*$/i, '') // Remove company suffixes
-          .replace(/[''\'s]/g, '') // Remove possessives
-          .trim();
-        
-        // For single-word brands, require exact match
-        if (!brandNameClean.includes(' ')) {
-          if (searchText.includes(` ${brandNameClean} `) || 
-              searchText.includes(` ${brandNameClean}.`) ||
-              searchText.includes(` ${brandNameClean},`)) {
-            meetingMention = {
-              title: t.title,
-              url: t.transcript_url,
-              context: overview.slice(0, 150) || actionItems[0] || `Discussed ${brand.name}`,
-              date: t.dateString || t.date,
-              actionItems: actionItems[0] || null
-            };
-            return true;
-          }
-        } else {
-          // For multi-word brands, check if the core name is mentioned
-          const coreBrandName = brandNameClean.split(' ')[0]; // First word is usually the key
-          if (coreBrandName.length > 3 && searchText.includes(coreBrandName)) {
-            // Verify it's in a brand context
-            const contextCheck = searchText.includes(`${coreBrandName} brand`) ||
-                                searchText.includes(`${coreBrandName} partnership`) ||
-                                searchText.includes(`${coreBrandName} integration`) ||
-                                searchText.includes(`${coreBrandName} deal`);
-            if (contextCheck || searchText.includes(brandNameClean)) {
-              meetingMention = {
-                title: t.title,
-                url: t.transcript_url,
-                context: overview.slice(0, 150) || actionItems[0] || `Mentioned ${brand.name}`,
-                date: t.dateString || t.date,
-                actionItems: actionItems[0] || null
-              };
-              return true;
-            }
-          }
-        }
-        
-        return false;
-      });
-      
-      const mentionedInEmails = emails && emails.some(e => {
-        const subject = (e.subject || '').toLowerCase();
-        const preview = (e.preview || '').toLowerCase();
-        
-        // Smart email matching - look for brand in subject or key parts of preview
-        const brandNameClean = brand.name.toLowerCase()
-          .replace(/\s*(inc\.?|llc|ltd|corp|corporation|company|co\.?)\s*$/i, '')
-          .trim();
-        
-        // Check subject first (most reliable)
-        if (subject.includes(brandNameClean) || 
-            (brandNameClean.includes(' ') && subject.includes(brandNameClean.split(' ')[0]))) {
-          emailMention = {
-            subject: e.subject,
-            preview: preview.slice(0, 150),
-            from: e.fromName || e.from,
-            date: e.receivedDate,
-            webLink: e.webLink || null
-          };
-          return true;
-        }
-        
-        // Check preview for brand + context words
-        const contextWords = ['partnership', 'integration', 'brand', 'deal', 'proposal', 'opportunity'];
-        if (preview.includes(brandNameClean) || 
-            (brandNameClean.length > 4 && contextWords.some(ctx => preview.includes(`${brandNameClean.split(' ')[0]} ${ctx}`)))) {
-          emailMention = {
-            subject: e.subject,
-            preview: preview.slice(0, 150),
-            from: e.fromName || e.from,
-            date: e.receivedDate,
-            webLink: e.webLink || null
-          };
-          return true;
-        }
-        
-        return false;
-      });
-      
-      // Priority 1: Creative/Genre Match (only if strong match)
-      if (productionContext.genre && brand.category) {
-        const genreMatch = checkGenreMatch(productionContext.genre, brand.category);
-        if (genreMatch) {
-          tags.push('Creative Match');
-          score += 40;
-          primaryReason = `Perfect creative fit: ${brand.category} aligns with ${productionContext.genre} genre`;
-        }
+
+      // Add explicit tags based on your most important business rules.
+      if (b.properties.client_status === 'Active' || b.properties.lifecyclestage === 'customer') {
+        brandData.helper_tags.push('Current Client');
       }
-      
-      // Check for creative alignment from meetings/emails (don't double-tag)
-      if (!tags.includes('Creative Match') && meetingMention && 
-          (meetingMention.context.includes('creative') || meetingMention.context.includes('integration'))) {
-        tags.push('Creative Match');
-        score += 35;
-        primaryReason = `Creative synergy discussed in "${meetingMention.title}" - ${meetingMention.context}`;
+      if (b.properties.lifecyclestage === 'opportunity') {
+        brandData.helper_tags.push('Active Deal');
       }
-      
-      // Priority 2: Big Budget
-      if (brand.budget && brand.budget !== 'TBD') {
-        const budgetValue = parseFloat(brand.budget.match(/\d+\.?\d*/)?.[0] || 0);
-        if (budgetValue > 5) {
-          tags.push('Big Budget');
-          score += 30;
-          if (!primaryReason) {
-            primaryReason = `${brand.budget} media spend available for integrations`;
-          }
-        }
-      }
-      
-      // Priority 3: Current Client
-      if (brand.clientStatus === 'Active' || brand.clientStatus === 'Customer') {
-        tags.push('Current Client');
-        score += 35;
-        if (!primaryReason) {
-          primaryReason = 'Active client ready for new integration';
-        }
-      }
-      
-      // Priority 4: This Week Activity (Email or Meeting)
-      if (brand.lastActivity) {
-        const lastActivityDate = new Date(brand.lastActivity);
+      if (b.properties.hs_lastmodifieddate) {
+        const lastActivityDate = new Date(b.properties.hs_lastmodifieddate);
         const daysSinceActivity = (new Date() - lastActivityDate) / (1000 * 60 * 60 * 24);
-        
         if (daysSinceActivity < 7) {
-          if (mentionedInEmails && emailMention) {
-            tags.push('This Week Email');
-            score += 25;
-            if (!primaryReason) {
-              primaryReason = `Fresh momentum: "${emailMention.subject}" from ${emailMention.from}`;
-            }
-          }
-          
-          if (mentionedInFireflies && meetingMention) {
-            const meetingDate = new Date(meetingMention.date);
-            const daysSinceMeeting = (new Date() - meetingDate) / (1000 * 60 * 60 * 24);
-            if (daysSinceMeeting < 7) {
-              tags.push('This Week Meeting');
-              score += 30;
-              primaryReason = `Just discussed in "${meetingMention.title}" - ${meetingMention.actionItems || 'ready to move forward'}`;
-            }
-          }
+          brandData.helper_tags.push('Hot Lead (Active This Week)');
         }
       }
       
-      // Priority 5: Strategic fits
-      const isStrategic = 
-        (brand.hasPartner && tags.length > 0) || // Has agency AND other positive signals
-        (brand.lifecyclestage === 'opportunity' && brand.budget !== 'TBD') ||
-        (meetingMention && meetingMention.actionItems) ||
-        (brand.category && isEmergingCategory(brand.category));
-      
-      if (isStrategic) {
-        tags.push('Strategic');
-        score += 20;
-        if (!primaryReason) {
-          if (brand.hasPartner) {
-            primaryReason = `Strategic opportunity: Agency partner ${brand.partnerAgency} can accelerate deal`;
-          } else if (meetingMention && meetingMention.actionItems) {
-            primaryReason = `Strategic next step: ${meetingMention.actionItems}`;
-          } else {
-            primaryReason = `Strategic ${brand.category} brand for portfolio expansion`;
-          }
-        }
-      }
-      
-      // Additional context tags (don't override primary reason)
-      if (!tags.includes('This Week Meeting') && mentionedInFireflies && meetingMention) {
-        tags.push('Recent Meeting');
-        score += 15;
-        if (!primaryReason) {
-          primaryReason = `Discussed in "${meetingMention.title}" on ${meetingMention.date}`;
-          if (meetingMention.actionItems) {
-            primaryReason += ` - Action: ${meetingMention.actionItems}`;
-          }
-        }
-        brand.meetingContext = meetingMention;
-      }
-      
-      if (!tags.includes('This Week Email') && mentionedInEmails && emailMention) {
-        tags.push('Recent Email');
-        score += 10;
-        if (!primaryReason) {
-          primaryReason = `Email thread: "${emailMention.subject}" from ${emailMention.from}`;
-        }
-        brand.emailContext = emailMention;
-      }
-      
-      // Deal stage tags
-      if (brand.lifecyclestage === 'opportunity' && !tags.includes('Current Client')) {
-        tags.push('Active Deal');
-        score += 15;
-        if (!primaryReason) {
-          primaryReason = 'Active opportunity in pipeline';
-        }
-      }
-      
-      // Agency backing (only if not already tagged Strategic)
-      if (brand.hasPartner && !tags.includes('Strategic')) {
-        tags.push('Agency Partner');
-        score += 10;
-        if (!primaryReason) {
-          primaryReason = `Backed by ${brand.partnerAgency}`;
-        }
-      }
-      
-      // If no significant tags, don't force Creative Match
-      if (tags.length === 0) {
-        // Only add Creative Match if there's actually a genre match
-        if (productionContext.genre && brand.category && 
-            checkGenreMatch(productionContext.genre, brand.category)) {
-          tags.push('Creative Match');
-          score += 20;
-          primaryReason = `Potential fit for ${productionContext.genre} production`;
-        } else {
-          tags.push('New Opportunity');
-          score += 5;
-          primaryReason = `Explore partnership potential`;
-        }
-      }
-      
-      brand.tags = tags;
-      brand.relevanceScore = score;
-      brand.reason = primaryReason;
-      
-      return brand;
+      return brandData;
     });
+
+    // 2. Define the AI's task, telling it to pay attention to our helper tags.
+    const systemPrompt = `You are an expert brand partnership strategist for a Hollywood agency. Your task is to analyze a list of brands and determine the best partners for a given request.
+
+I will provide you with a user's request and a list of brands in JSON format. Pay special attention to the \`helper_tags\` field, as these are important business indicators that you should prioritize in your analysis.
+
+Your job is to return a JSON object containing a single key "results" which is an array of the top 15 most relevant brands. Each object in the "results" array should have the following structure:
+- "id": The original brand ID.
+- "relevanceScore": An integer score from 0 to 100, representing the brand's overall fit.
+- "tags": An array of short, descriptive strings (e.g., "Creative Match", "Big Budget", "Recent Activity", "Active Deal").
+- "reason": A single, concise sentence explaining why this brand is a strong candidate.
+
+Base your analysis on all available information.`;
     
-    const topBrands = taggedBrands
-      .filter(b => b.relevanceScore > 0)
-      .sort((a, b) => b.relevanceScore - a.relevanceScore)
-      .slice(0, 15);
-    
+    const userPrompt = `User Request: "${userMessage}"
+
+Brand List:
+\`\`\`json
+${JSON.stringify(brandsForAI, null, 2)}
+\`\`\`
+
+Please return the ranked list of 15 brands in the specified JSON format.`;
+
+    // 3. Call the AI to perform the ranking and tagging.
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        response_format: { type: "json_object" }, // Ensures the output is valid JSON
+        temperature: 0.2
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`AI ranking API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    const rankedData = JSON.parse(data.choices[0].message.content);
+    const rankedResults = rankedData.results || []; // Access the nested "results" key
+
+    // 4. Merge the AI's rankings back with the original full brand data.
+    const taggedBrands = rankedResults.map(rankedBrand => {
+      const originalBrand = hubspotBrands.find(b => b.id === rankedBrand.id);
+      return {
+        // Start with a clean slate of desired properties
+        source: 'hubspot',
+        id: originalBrand.id,
+        name: originalBrand.properties.brand_name || originalBrand.properties.name || '',
+        category: originalBrand.properties.brand_category || originalBrand.properties.industry || 'General',
+        budget: originalBrand.properties.media_spend_m_ ? `${originalBrand.properties.media_spend_m_}M` : 'TBD',
+        summary: (originalBrand.properties.description || '').slice(0, 100),
+        lastActivity: originalBrand.properties.notes_last_contacted || originalBrand.properties.hs_lastmodifieddate,
+        hasPartner: !!originalBrand.properties.partner_agency_name,
+        partnerAgency: originalBrand.properties.partner_agency_name,
+        website: originalBrand.properties.domain,
+        lifecyclestage: originalBrand.properties.lifecyclestage,
+        clientStatus: originalBrand.properties.client_status,
+        numContacts: originalBrand.properties.num_associated_contacts || '0',
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${originalBrand.id}`,
+        // Add the AI-generated fields
+        relevanceScore: rankedBrand.relevanceScore,
+        tags: rankedBrand.tags,
+        reason: rankedBrand.reason,
+      };
+    });
+
+    // Sort by the new AI-generated score.
+    const topBrands = taggedBrands.sort((a, b) => b.relevanceScore - a.relevanceScore);
+
     return { topBrands, taggedBrands };
-    
+
   } catch (error) {
+    console.error("Error in AI-powered brand tagging:", error);
+    // Fallback to returning a simple slice if the AI call fails.
     return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
   }
 }
