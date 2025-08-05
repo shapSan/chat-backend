@@ -1956,7 +1956,8 @@ try {
       return res.status(500).json({ error: 'No text reply received.' });
   }
 } catch (error) {
-  return res.status(500).json({ error: 'Error fetching response.', details: error.message });
+  console.error("CRASH DETECTED IN HANDLER:", error); // ADD THIS LINE
+  return res.status(500).json({ error: 'Internal server error', details: error.message });
 }
     } catch (error) {
       return res.status(500).json({ error: 'Internal server error', details: error.message });
