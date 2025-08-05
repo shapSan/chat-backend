@@ -65,7 +65,6 @@ const hubspotAPI = {
     CONTACTS: 'contacts'
   },
   
-// This is the NEW code you will paste in its place
 async searchBrands(filters = {}) {
   console.log('[DEBUG searchBrands] Starting with filters:', filters);
   try {
@@ -80,8 +79,17 @@ async searchBrands(filters = {}) {
       console.log('[DEBUG searchBrands] Extracting keywords for query:', filters.query);
       const keywords = await extractKeywordsForHubSpot(filters.query);
       console.log('[DEBUG searchBrands] Keywords extracted:', keywords);
-      if (keywords) {
-        searchBody.query = keywords; // Use keywords for a "vibe-matched" search
+      
+      // Only use keywords if we got something meaningful
+      if (keywords && keywords.length > 5) {
+        searchBody.query = keywords;
+      } else {
+        // Fall back to getting recent/hot brands
+        searchBody.filterGroups = [{ 
+          filters: [
+            { propertyName: 'lifecyclestage', operator: 'IN', values: ['customer', 'opportunity', 'salesqualifiedlead'] }
+          ] 
+        }];
       }
     } else {
       // Otherwise, get the general "hot" list
@@ -690,7 +698,7 @@ async function extractKeywordsForHubSpot(synopsis) {
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [
-          { role: 'system', content: "You are an expert at extracting keywords. From the following synopsis, extract 3-5 relevant brand categories, themes, or demographic keywords suitable for a HubSpot CRM search. For example, for a sci-fi movie, you might return 'tech, automotive, gaming, futuristic'. Return ONLY a single, space-separated string of keywords." },
+          { role: 'system', content: "Extract 2-4 industry/category keywords that brands would use. Focus on: product categories (luxury, fashion, automotive, tech, beverage), target demographics (family, youth, professional), or brand attributes (premium, eco-friendly, innovative). Examples: 'luxury fashion jewelry', 'automotive tech', 'premium beverage', 'family entertainment'. Return ONLY keywords, no names or locations." },
           { role: 'user', content: synopsis }
         ],
         temperature: 0, max_tokens: 30
