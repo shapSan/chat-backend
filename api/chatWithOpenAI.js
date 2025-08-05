@@ -2479,7 +2479,7 @@ ${systemMessageContent}`;
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-opus-20240229',
+        model: 'claude-3-5-sonnet-20241022',
         max_tokens: 1000,
         temperature: 0.7,
         messages: [
@@ -2493,7 +2493,8 @@ ${systemMessageContent}`;
     
     if (!response.ok) {
       const errorData = await response.text();
-      throw new Error(`Claude API error: ${response.status}`);
+      console.error('Claude API response:', response.status, errorData);
+      throw new Error(`Claude API error: ${response.status} - ${errorData}`);
     }
     
     const data = await response.json();
