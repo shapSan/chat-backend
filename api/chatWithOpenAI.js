@@ -462,39 +462,63 @@ const o365API = {
       const accessToken = await this.getAccessToken();
       const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
       
+      // Extract intelligent search terms
+      const searchTerms = await extractKeywordsForContextSearch(query);
+      
+      // Add original query if it's short
+      if (!searchTerms.includes(query) && query.length < 50) {
+        searchTerms.push(query);
+      }
+      
+      // If no terms extracted, use original query
+      if (searchTerms.length === 0) {
+        searchTerms.push(query);
+      }
+      
+      let allEmails = new Map();
       const fromDate = new Date();
-      fromDate.setDate(fromDate.getDate() - 30);
+      fromDate.setDate(fromDate.getDate() - (options.days || 30));
       const dateFilter = fromDate.toISOString();
       
-      let filter = `receivedDateTime ge ${dateFilter}`;
-      if (query && query.length > 2) {
-        const searchTerm = query.replace(/'/g, "''").slice(0, 50);
-        filter += ` and contains(subject,'${searchTerm}')`;
-      }
-      
-      const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=5&$select=subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
-      
-      const response = await fetch(messagesUrl, {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
+      // Search for each term
+      for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
+        try {
+          const searchTerm = term.replace(/'/g, "''").slice(0, 50);
+          // Search in both subject and body
+          const filter = `receivedDateTime ge ${dateFilter} and (contains(subject,'${searchTerm}') or contains(body/content,'${searchTerm}'))`;
+          
+          const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=5&$select=id,subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
+          
+          const response = await fetch(messagesUrl, {
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            (data.value || []).forEach(email => allEmails.set(email.id, email));
+          }
+        } catch (error) {
+          // Continue with other terms if one fails
+          console.error(`Error searching O365 for term "${term}":`, error);
         }
-      });
-      
-      if (!response.ok) {
-        return [];
       }
       
-      const data = await response.json();
-      const emails = data.value || [];
-      
-      return emails.map(email => ({
+      // Format and return unique emails
+      const formattedEmails = Array.from(allEmails.values()).map(email => ({
         subject: email.subject,
         from: email.from?.emailAddress?.address,
         fromName: email.from?.emailAddress?.name,
         receivedDate: email.receivedDateTime,
         preview: email.bodyPreview?.slice(0, 200)
       }));
+      
+      // Sort by date and limit results
+      return formattedEmails
+        .sort((a, b) => new Date(b.receivedDate) - new Date(a.receivedDate))
+        .slice(0, options.limit || 10);
       
     } catch (error) {
       return [];
@@ -729,22 +753,47 @@ async function searchFireflies(query, options = {}) {
       return { transcripts: [] };
     }
     
-    const queryLower = query.toLowerCase();
-    const filters = {
-      keyword: query,
-      limit: options.limit || 10
-    };
+    // Extract intelligent search terms
+    const searchTerms = await extractKeywordsForContextSearch(query);
     
-    if (queryLower.includes('last 3 months') || queryLower.includes('past 3 months')) {
-      const threeMonthsAgo = new Date();
-      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-      filters.fromDate = threeMonthsAgo.toISOString().split('T')[0];
+    // Add the original query as fallback if it's short
+    if (!searchTerms.includes(query) && query.length < 50) {
+      searchTerms.push(query);
     }
     
-    const transcripts = await firefliesAPI.searchTranscripts(filters);
+    // If no terms extracted, use original query
+    if (searchTerms.length === 0) {
+      searchTerms.push(query);
+    }
+    
+    let allTranscripts = new Map();
+    
+    // Search for each term and combine results
+    for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms to avoid too many API calls
+      try {
+        const filters = {
+          keyword: term,
+          limit: options.limit || 3
+        };
+        
+        // Add date filter if needed
+        const queryLower = query.toLowerCase();
+        if (queryLower.includes('last 3 months') || queryLower.includes('past 3 months')) {
+          const threeMonthsAgo = new Date();
+          threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+          filters.fromDate = threeMonthsAgo.toISOString().split('T')[0];
+        }
+        
+        const results = await firefliesAPI.searchTranscripts(filters);
+        results.forEach(t => allTranscripts.set(t.id, t));
+      } catch (error) {
+        // Continue with other terms if one fails
+        console.error(`Error searching Fireflies for term "${term}":`, error);
+      }
+    }
     
     return {
-      transcripts: transcripts
+      transcripts: Array.from(allTranscripts.values())
     };
     
   } catch (error) {
@@ -795,6 +844,32 @@ async function extractKeywordsForHubSpot(synopsis) {
     return data.choices[0].message.content.trim();
   } catch (error) {
     return '';
+  }
+}
+
+// Add this new helper function for context search
+async function extractKeywordsForContextSearch(text) {
+  if (!openAIApiKey) return [];
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: 'Extract key entities from text for database search. From the text, extract: 1) Primary Project/Film Title, 2) Up to 3 key brand names mentioned, 3) Up to 3 relevant themes/genres. Return as JSON: {"keywords": ["term1", "term2", ...]}. Example: {"keywords": ["The Last Mrs. Parrish", "Netflix", "thriller", "luxury"]}' },
+          { role: 'user', content: text }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+      }),
+    });
+    const data = await response.json();
+    const result = JSON.parse(data.choices[0].message.content);
+    return Array.isArray(result.keywords) ? result.keywords : [];
+  } catch (error) {
+    console.error("Error extracting context keywords:", error);
+    return [];
   }
 }
 
