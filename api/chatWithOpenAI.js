@@ -1189,7 +1189,7 @@ async function routeUserIntent(userMessage, conversationContext) {
       body: JSON.stringify({
         model: 'gpt-4o',
         messages: [
-          { role: 'system', content: 'You are an expert at routing a user request to the correct tool. Your primary job is to extract the user\'s text into the search_term parameter if they are asking to find brands.' },
+          { role: 'system', content: 'You are an expert at routing a user request to the correct tool. If the user mentions ANY of these: synopsis, production, show, movie, series, script, story, plot, genre, mood, vibe, or asks to convert/analyze content for brand matching, use find_brands. Extract the FULL user message into search_term.' },
           { role: 'user', content: userMessage }
         ],
         tools: tools,
