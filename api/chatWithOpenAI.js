@@ -1153,33 +1153,40 @@ async function routeUserIntent(userMessage, conversationContext) {
     {
       type: 'function',
       function: {
-        name: 'get_brand_activity',
-        description: 'Gets all recent activity (meetings, emails, contacts) for a specific brand name. Use for questions like "What\'s new with Nike?" or "Find meetings with Coca-Cola".',
+        name: 'find_brand_recommendations_for_production',
+        description: 'Use this tool ONLY when the user provides a full, detailed movie or show synopsis and explicitly asks to find brand partners for it.',
         parameters: {
           type: 'object',
-          properties: { brand_name: { type: 'string', description: 'The name of the brand to look up.' } },
-          required: ['brand_name']
+          properties: {
+            production_synopsis: { type: 'string', description: 'The full synopsis or creative text provided by the user.' }
+          },
+          required: ['production_synopsis']
         }
       }
     },
     {
       type: 'function',
       function: {
-        name: 'process_production_request',
-        description: 'Handles any user request that involves a production synopsis or creative text. It determines if the user wants a full brand recommendation search OR just a simple analysis.',
+        name: 'search_for_brands',
+        description: 'Use for general or simple brand searches based on keywords, categories, or themes, like "find me beverage brands" or "easy money brands".',
         parameters: {
           type: 'object',
           properties: {
-            production_text: { 
-              type: 'string', 
-              description: 'The full synopsis or creative text provided by the user.' 
-            },
-            find_brands: { 
-              type: 'boolean', 
-              description: 'Set to TRUE only if the user explicitly asks to "find brands", "get recommendations", "match partners", or a similar phrase. Otherwise, set to FALSE.' 
-            }
+            search_query: { type: 'string', description: 'The keywords or category to search for.' }
           },
-          required: ['production_text', 'find_brands']
+          required: ['search_query']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_brand_activity',
+        description: 'Gets all recent activity (meetings, emails, contacts) for a specific brand name. Use for questions like "What\'s new with Nike?" or "Find meetings with Coca-Cola".',
+        parameters: {
+          type: 'object',
+          properties: { brand_name: { type: 'string', description: 'The name of the brand to look up.' } },
+          required: ['brand_name']
         }
       }
     },
@@ -2190,7 +2197,9 @@ export default async function handler(req, res) {
 
               console.log('[DEBUG] Generating text summary with OpenAI...');
               let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
-              systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.`;
+              systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
+
+**CRITICAL RULE: If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT, under any circumstances, invent or hallucinate information, brands, or meeting details.**`;
 
               systemMessageContent += '\n\n```json\n';
               systemMessageContent += JSON.stringify(structuredData, null, 2);
