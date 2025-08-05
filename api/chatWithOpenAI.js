@@ -2365,8 +2365,8 @@ export default async function handler(req, res) {
               systemMessageContent += JSON.stringify(structuredData, null, 2);
               systemMessageContent += '\n```';
 
-              aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-              console.log('[DEBUG] OpenAI response received');
+              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
+              console.log('[DEBUG] Claude response received');
 
           } else {
               // No tool was used, so it's a general conversation.
@@ -2376,7 +2376,7 @@ export default async function handler(req, res) {
               if (conversationContext) {
                   systemMessageContent += `\n\nConversation history: ${conversationContext}`;
               }
-              aiReply = await getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
           }
 
           if (aiReply) {
@@ -2460,6 +2460,54 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
       return null;
     }
   } catch (error) {
+    throw error;
+  }
+}
+
+async function getTextResponseFromClaude(userMessage, sessionId, systemMessageContent) {
+  try {
+    // Claude prefers system content in the first user message
+    const claudeSystemPrompt = `<role>You are an expert brand partnership analyst for Hollywood entertainment. You provide honest, nuanced analysis while being helpful and conversational.</role>
+
+${systemMessageContent}`;
+    
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-opus-20240229',
+        max_tokens: 1000,
+        temperature: 0.7,
+        messages: [
+          {
+            role: 'user',
+            content: `${claudeSystemPrompt}\n\nUser's request: ${userMessage}`
+          }
+        ]
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Claude API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    if (data.content && data.content.length > 0) {
+      return data.content[0].text;
+    } else {
+      return null;
+    }
+  } catch (error) {
+    // Fallback to OpenAI if Claude fails
+    console.error('Claude failed, falling back to OpenAI:', error);
+    if (openAIApiKey) {
+      return getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+    }
     throw error;
   }
 }
