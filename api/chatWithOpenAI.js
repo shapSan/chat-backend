@@ -1701,10 +1701,31 @@ async function generateWildcardBrands(synopsis) {
 }
 
 // Helper function to tag and combine brands from different sources
-function tagAndCombineBrands({ activeBrands, recentBrands, vibeBrands, wildcardCategories }) {
+function tagAndCombineBrands({ vibeBrands, activeBrands, recentBrands, wildcardCategories }) {
   const brandMap = new Map();
   
-  // Process active brands (high-value current clients)
+  // Process vibe-matched brands FIRST (highest priority for variety)
+  vibeBrands.results?.forEach(brand => {
+    const id = brand.id;
+    brandMap.set(id, {
+      source: 'hubspot',
+      id: brand.id,
+      name: brand.properties.brand_name || '',
+      category: brand.properties.main_category || 'General',
+      subcategories: brand.properties.product_sub_category__multi_ || '',
+      clientStatus: brand.properties.client_status || '',
+      clientType: brand.properties.client_type || '',
+      partnershipCount: brand.properties.partnership_count || '0',
+      dealsCount: brand.properties.deals_count || '0',
+      lastActivity: brand.properties.hs_lastmodifieddate,
+      hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+      tags: ['🎯 Creative Fit'],
+      relevanceScore: 85,  // High base score for creative matches
+      reason: 'Strong thematic alignment with production'
+    });
+  });
+  
+  // Process active brands (only top performers)
   activeBrands.results?.forEach(brand => {
     const id = brand.id;
     if (!brandMap.has(id)) {
@@ -1720,14 +1741,18 @@ function tagAndCombineBrands({ activeBrands, recentBrands, vibeBrands, wildcardC
         dealsCount: brand.properties.deals_count || '0',
         lastActivity: brand.properties.hs_lastmodifieddate,
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['🔥 Active Client'],
-        relevanceScore: 90,
-        reason: 'Currently active client with ongoing engagement'
+        tags: ['🔥 Top Partner'],
+        relevanceScore: 80,
+        reason: 'Proven high-value partner with track record'
       });
+    } else {
+      // If already exists, add tag and boost score slightly
+      brandMap.get(id).tags.push('🔥 Active');
+      brandMap.get(id).relevanceScore = Math.min(95, brandMap.get(id).relevanceScore + 5);
     }
   });
   
-  // Process recent brands (new opportunities)
+  // Process recent brands (fresh opportunities)
   recentBrands.results?.forEach(brand => {
     const id = brand.id;
     if (!brandMap.has(id)) {
@@ -1743,52 +1768,26 @@ function tagAndCombineBrands({ activeBrands, recentBrands, vibeBrands, wildcardC
         dealsCount: brand.properties.deals_count || '0',
         lastActivity: brand.properties.hs_lastmodifieddate,
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['✨ New Opportunity'],
-        relevanceScore: 80,
-        reason: 'Recently added to CRM - fresh opportunity'
+        tags: ['✨ Fresh Lead'],
+        relevanceScore: 70,
+        reason: 'Recently engaged - timing opportunity'
       });
     } else {
-      brandMap.get(id).tags.push('✨ Recent Activity');
+      brandMap.get(id).tags.push('✨ Recent');
     }
   });
   
-  // Process vibe-matched brands
-  vibeBrands.results?.forEach(brand => {
-    const id = brand.id;
-    if (!brandMap.has(id)) {
-      brandMap.set(id, {
-        source: 'hubspot',
-        id: brand.id,
-        name: brand.properties.brand_name || '',
-        category: brand.properties.main_category || 'General',
-        subcategories: brand.properties.product_sub_category__multi_ || '',
-        clientStatus: brand.properties.client_status || '',
-        clientType: brand.properties.client_type || '',
-        partnershipCount: brand.properties.partnership_count || '0',
-        dealsCount: brand.properties.deals_count || '0',
-        lastActivity: brand.properties.hs_lastmodifieddate,
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['🎯 Genre Match'],
-        relevanceScore: 75,
-        reason: 'Category aligns with production genre'
-      });
-    } else {
-      brandMap.get(id).tags.push('🎯 Genre Match');
-      brandMap.get(id).relevanceScore = Math.min(95, brandMap.get(id).relevanceScore + 10);
-    }
-  });
-  
-  // Add wildcard category suggestions (without specific brands)
+  // Add wildcard category suggestions
   if (wildcardCategories && wildcardCategories.length > 0) {
     wildcardCategories.forEach((category, index) => {
       brandMap.set(`wildcard_${index}`, {
         source: 'suggestion',
         id: `wildcard_${index}`,
-        name: `[Suggested: ${category}]`,
+        name: `[Explore: ${category}]`,
         category: category,
-        tags: ['💡 Creative Suggestion'],
-        relevanceScore: 60,
-        reason: 'AI-suggested category for creative integration',
+        tags: ['💡 Wildcard Idea'],
+        relevanceScore: 65,
+        reason: 'Creative category worth exploring',
         isWildcard: true
       });
     });
@@ -1797,7 +1796,7 @@ function tagAndCombineBrands({ activeBrands, recentBrands, vibeBrands, wildcardC
   // Convert to array and sort by relevance
   return Array.from(brandMap.values())
     .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, 20); // Limit to top 20
+    .slice(0, 25); // Increased to 25 for more variety
 }
 
 async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext) {
@@ -1846,20 +1845,30 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         mcpThinking.push({ type: 'process', text: `📊 Detected genre: ${genre || 'general'}` });
         
         // Launch parallel searches for the four lists
-        mcpThinking.push({ type: 'search', text: '🔥 List 1: Active clients & partners...' });
-        mcpThinking.push({ type: 'search', text: '✨ List 2: Recent opportunities...' });
-        mcpThinking.push({ type: 'search', text: '🎯 List 3: Genre-matched brands...' });
-        mcpThinking.push({ type: 'search', text: '💡 List 4: Creative wildcards...' });
+        mcpThinking.push({ type: 'search', text: '🎯 Priority: Genre-matched brands (creative fit)...' });
+        mcpThinking.push({ type: 'search', text: '🔥 Top active clients (proven partners)...' });
+        mcpThinking.push({ type: 'search', text: '✨ Recent opportunities (fresh leads)...' });
+        mcpThinking.push({ type: 'search', text: '💡 Creative wildcards (unexpected ideas)...' });
         
-        const [activeBrands, recentBrands, vibeBrands, wildcardCategories] = await Promise.all([
-          // List 1: Active high-value clients
+        const [vibeBrands, activeBrands, recentBrands, wildcardCategories] = await Promise.all([
+          // List 1 (PRIMARY): Genre/vibe matched brands - INCREASED to 15
           withTimeout(
             hubspotAPI.searchBrands({
-              limit: 8,
+              query: search_term,
+              limit: 15  // Increased from 10 to prioritize creative fit
+            }),
+            7000,
+            { results: [] }
+          ),
+          
+          // List 2: Only TOP active high-value clients - DECREASED to 4
+          withTimeout(
+            hubspotAPI.searchBrands({
+              limit: 4,  // Decreased from 8 to avoid repetition
               filterGroups: [{
                 filters: [
                   { propertyName: 'client_status', operator: 'IN', values: ['Active', 'Contract'] },
-                  { propertyName: 'partnership_count', operator: 'GTE', value: '3' }
+                  { propertyName: 'partnership_count', operator: 'GTE', value: '5' }  // Increased threshold
                 ]
               }],
               sorts: [{ propertyName: 'deals_count', direction: 'DESCENDING' }]
@@ -1868,10 +1877,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             { results: [] }
           ),
           
-          // List 2: Recent additions/opportunities
+          // List 3: Only NEWEST additions - DECREASED to 3
           withTimeout(
             hubspotAPI.searchBrands({
-              limit: 6,
+              limit: 3,  // Decreased from 6 to focus on truly new
               filterGroups: [{
                 filters: [
                   { propertyName: 'client_status', operator: 'IN', values: ['Active', 'In Negotiation', 'Pending'] }
@@ -1883,17 +1892,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             { results: [] }
           ),
           
-          // List 3: Genre/vibe matched brands
-          withTimeout(
-            hubspotAPI.searchBrands({
-              query: search_term,
-              limit: 10
-            }),
-            7000,
-            { results: [] }
-          ),
-          
-          // List 4: Creative wildcard suggestions
+          // List 4: Creative wildcard suggestions - Keep at 3-5
           withTimeout(
             generateWildcardBrands(search_term),
             8000,
@@ -1901,18 +1900,18 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           )
         ]);
 
-        // Report results
-        mcpThinking.push({ type: 'result', text: `✅ Active clients: ${activeBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Recent opportunities: ${recentBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Genre matches: ${vibeBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Creative wildcards: ${wildcardCategories?.length || 0} suggestions` });
+        // Report results with new priority
+        mcpThinking.push({ type: 'result', text: `✅ Creative matches: ${vibeBrands.results?.length || 0} brands (priority)` });
+        mcpThinking.push({ type: 'result', text: `✅ Top active: ${activeBrands.results?.length || 0} brands` });
+        mcpThinking.push({ type: 'result', text: `✅ New opportunities: ${recentBrands.results?.length || 0} brands` });
+        mcpThinking.push({ type: 'result', text: `✅ Wildcards: ${wildcardCategories?.length || 0} suggestions` });
         
-        // Combine and tag all results
-        mcpThinking.push({ type: 'process', text: '🤝 Combining and ranking recommendations...' });
+        // Combine and tag all results - order changed to prioritize vibe matches
+        mcpThinking.push({ type: 'process', text: '🤝 Combining recommendations with creative priority...' });
         const taggedBrands = tagAndCombineBrands({
+          vibeBrands,  // Now first priority
           activeBrands,
           recentBrands,
-          vibeBrands,
           wildcardCategories
         });
 
@@ -2719,6 +2718,39 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
                   `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
                   existingRecordId
               ).catch(err => console.error('[DEBUG] Airtable update error:', err));
+
+              // Filter out brands mentioned in the main response from the picker list
+              let filteredBrandSuggestions = structuredData?.brandSuggestions;
+              if (filteredBrandSuggestions && aiReply) {
+                  // Extract brand names from the AI reply (looking for patterns like brand names)
+                  const mentionedBrands = new Set();
+                  
+                  // Look for brands mentioned in the reply
+                  filteredBrandSuggestions.forEach(brand => {
+                      if (brand.name && !brand.isWildcard) {
+                          // Check if this brand name appears in the AI reply
+                          const brandName = brand.name.toLowerCase();
+                          const replyLower = aiReply.toLowerCase();
+                          if (replyLower.includes(brandName)) {
+                              mentionedBrands.add(brand.id);
+                              console.log(`[DEBUG] Brand "${brand.name}" found in main response, excluding from picker`);
+                          }
+                      }
+                  });
+                  
+                  // Filter out mentioned brands from the picker list
+                  if (mentionedBrands.size > 0) {
+                      const originalCount = filteredBrandSuggestions.length;
+                      filteredBrandSuggestions = filteredBrandSuggestions.filter(
+                          brand => !mentionedBrands.has(brand.id)
+                      );
+                      console.log(`[DEBUG] Filtered ${mentionedBrands.size} brands from picker (${originalCount} -> ${filteredBrandSuggestions.length})`);
+                      
+                      // Update the structured data with filtered list
+                      structuredData.brandSuggestionsForPicker = filteredBrandSuggestions;
+                      structuredData.brandSuggestionsInResponse = Array.from(mentionedBrands);
+                  }
+              }
 
               console.log('[DEBUG] Sending successful response');
               // The final response now includes mcpSteps for the frontend
