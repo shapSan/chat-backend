@@ -915,6 +915,36 @@ function withTimeout(promise, ms, defaultValue) {
   });
 }
 
+// Add vibe match helper for pre-filtering
+function isVibeMatch(productionSynopsis, brandCategory) {
+  if (!productionSynopsis || !brandCategory) return false;
+  
+  const synopsis = productionSynopsis.toLowerCase();
+  const category = brandCategory.toLowerCase();
+  
+  // Genre-to-category mapping
+  const genreMap = {
+    action: ['automotive', 'tech', 'gaming', 'energy drink', 'sports', 'electronics'],
+    comedy: ['snack food', 'beverage', 'casual apparel', 'gaming', 'entertainment', 'food'],
+    drama: ['luxury', 'fashion', 'automotive', 'beauty', 'home goods', 'apparel'],
+    thriller: ['tech', 'security', 'automotive', 'insurance', 'electronics'],
+    scifi: ['technology', 'automotive', 'gaming', 'aerospace', 'electronics', 'tech'],
+    romance: ['jewelry', 'fashion', 'travel', 'luxury', 'beauty', 'floral', 'apparel'],
+    family: ['food', 'beverage', 'entertainment', 'travel', 'home', 'baby'],
+    horror: ['entertainment', 'gaming', 'streaming'],
+    crime: ['automotive', 'security', 'tech', 'insurance']
+  };
+
+  for (const genre in genreMap) {
+    if (synopsis.includes(genre)) {
+      if (genreMap[genre].some(cat => category.includes(cat))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
   try {
     const allBrands = [...hubspotBrands];
@@ -1602,7 +1632,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
       case 'find_brands': {
         const { search_term } = intent.args;
         if (search_term.length > 50) {
-            mcpThinking.push({ type: 'start', text: '🎬 Brand Matching detected. Initiating MCP search...' });
+            mcpThinking.push({ type: 'start', text: '🎬 Synopsis detected. Finding "no-brainer" matches...' });
             
             // Extract keywords once at the start
             const contextKeywords = await extractKeywordsForContextSearch(search_term);
@@ -1610,54 +1640,113 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
               mcpThinking.push({ type: 'process', text: `🧠 Extracted keywords: ${contextKeywords.slice(0, 5).join(', ')}` });
             }
             
-            // Launch all searches in parallel with timeouts
-            mcpThinking.push({ type: 'search', text: '⭐ Searching HubSpot for genre-matched brands...' });
-            mcpThinking.push({ type: 'search', text: '🔥 Searching HubSpot for commercial opportunities...' });
+            // Launch searches in parallel with timeouts
+            mcpThinking.push({ type: 'search', text: '🔥 Searching HubSpot for active brands...' });
             mcpThinking.push({ type: 'search', text: '🎙️ Searching Fireflies for meeting context...' });
             mcpThinking.push({ type: 'search', text: '✉️ Searching Office 365 for relevant emails...' });
             
             const [
-              creativeMatches, commercialWinners, firefliesContext, emailContext
+              hotBrandsData, firefliesContext, emailContext
             ] = await Promise.all([
-              withTimeout(hubspotAPI.searchBrands({ query: search_term, limit: 30 }), 5000, { results: [] }),
-              withTimeout(hubspotAPI.searchBrands({ limit: 20 }), 5000, { results: [] }),
-              withTimeout(searchFireflies(contextKeywords, { limit: 5 }), 8000, { transcripts: [] }),
+              withTimeout(hubspotAPI.searchBrands({ limit: 100 }), 5000, { results: [] }), // Get larger pool
+              withTimeout(searchFireflies(contextKeywords, { limit: 10 }), 8000, { transcripts: [] }),
               withTimeout(o365API.searchEmails(contextKeywords, { days: 180 }), 8000, [])
             ]);
 
-            // Report results
-            if (creativeMatches.searchContext) {
-                mcpThinking.push({ type: 'result', text: `✅ Found ${creativeMatches.results.length} brands matching "${creativeMatches.searchContext}" genres.` });
-            } else {
-                mcpThinking.push({ type: 'result', text: `✅ Found ${creativeMatches.results.length} genre-matched brands.` });
-            }
-            mcpThinking.push({ type: 'result', text: `✅ Found ${commercialWinners.results.length} commercial opportunity brands.` });
-            mcpThinking.push({ type: 'result', text: `✅ Found ${firefliesContext.transcripts?.length || 0} relevant meeting(s) in Fireflies.` });
-            mcpThinking.push({ type: 'result', text: `✅ Found ${emailContext?.length || 0} relevant email(s) in O365.` });
+            // Report initial results
+            mcpThinking.push({ type: 'result', text: `✅ Found ${hotBrandsData.results.length} active brands.` });
+            mcpThinking.push({ type: 'result', text: `✅ Found ${firefliesContext.transcripts?.length || 0} relevant meeting(s).` });
+            mcpThinking.push({ type: 'result', text: `✅ Found ${emailContext?.length || 0} relevant email(s).` });
 
-            // Combine unique brands from both searches
-            const allBrands = new Map();
-            creativeMatches.results.forEach(brand => {
-              allBrands.set(brand.id, { ...brand, matchType: 'creative' });
+            // Pre-filter brands for "no-brainer" matches
+            const preFilteredBrands = hotBrandsData.results.filter(brand => {
+                const isRecentClient = brand.properties.client_status === 'Active' || 
+                                     brand.properties.client_status === 'Contract';
+                const isVibe = isVibeMatch(search_term, brand.properties.main_category || brand.properties.brand_category);
+                const hasHighActivity = parseInt(brand.properties.partnership_count || 0) >= 5;
+                
+                // Check if brand appears in recent meetings
+                const brandName = brand.properties.brand_name?.toLowerCase() || '';
+                const hasRecentMeeting = firefliesContext.transcripts?.some(t => 
+                    (t.summary?.overview || t.title || '').toLowerCase().includes(brandName)
+                ) || false;
+                
+                // A brand is a "no-brainer" if it matches any of these criteria
+                return isVibe || isRecentClient || hasRecentMeeting || hasHighActivity;
             });
-            commercialWinners.results.forEach(brand => {
-              if (allBrands.has(brand.id)) {
-                allBrands.get(brand.id).matchType = 'both';
-              } else {
-                allBrands.set(brand.id, { ...brand, matchType: 'commercial' });
-              }
-            });
+
+            if (preFilteredBrands.length === 0) {
+                mcpThinking.push({ type: 'error', text: '⚠️ No strong initial matches found. Expanding search...' });
+                // Fall back to top active brands
+                const fallbackBrands = hotBrandsData.results
+                    .filter(b => b.properties.client_status === 'Active')
+                    .slice(0, 20);
+                
+                if (fallbackBrands.length === 0) {
+                    return { 
+                        organizedData: { 
+                            dataType: 'BRAND_RECOMMENDATIONS',
+                            error: "Couldn't find any suitable brands for this project.",
+                            brandSuggestions: []
+                        }, 
+                        mcpThinking, 
+                        usedMCP: true 
+                    };
+                }
+                
+                // Use fallback brands for ranking
+                mcpThinking.push({ type: 'process', text: `🧠 Analyzing ${fallbackBrands.length} active brands...` });
+                
+                const rankingResult = await withTimeout(
+                  narrowWithIntelligentTags(fallbackBrands, firefliesContext.transcripts || [], emailContext || [], search_term),
+                  15000,
+                  { 
+                    topBrands: fallbackBrands.slice(0, 15).map(b => ({
+                      source: 'hubspot',
+                      id: b.id,
+                      name: b.properties.brand_name || '',
+                      category: b.properties.main_category || 'General',
+                      subcategories: b.properties.product_sub_category__multi_ || '',
+                      clientStatus: b.properties.client_status || '',
+                      clientType: b.properties.client_type || '',
+                      partnershipCount: b.properties.partnership_count || '0',
+                      dealsCount: b.properties.deals_count || '0',
+                      lastActivity: b.properties.hs_lastmodifieddate,
+                      hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`,
+                      relevanceScore: 50,
+                      tags: ['Active Brand'],
+                      reason: 'Selected from active brands'
+                    }))
+                  }
+                );
+                
+                const { topBrands } = rankingResult;
+                
+                mcpThinking.push({ type: 'complete', text: `✨ Prepared ${topBrands.length} recommendations from active brands.` });
+                return {
+                  organizedData: {
+                    dataType: 'BRAND_RECOMMENDATIONS', 
+                    productionContext: search_term,
+                    brandSuggestions: topBrands.slice(0, 15),
+                    supportingContext: { meetings: firefliesContext.transcripts || [], emails: emailContext || [] }
+                  },
+                  mcpThinking, usedMCP: true
+                };
+            }
+
+            mcpThinking.push({ type: 'process', text: `🧠 Found ${preFilteredBrands.length} strong candidates. Sending to AI for final ranking...` });
             
-            const mixedBrandList = Array.from(allBrands.values());
-            
-            mcpThinking.push({ type: 'process', text: `🧠 Analyzing ${mixedBrandList.length} unique brands with AI...` });
-            
-            // Use timeout for AI ranking too
+            // Use timeout for AI ranking
             const rankingResult = await withTimeout(
-              narrowWithIntelligentTags(mixedBrandList, firefliesContext.transcripts || [], emailContext || [], search_term),
-              15000,  // Increased timeout to 15 seconds
+              narrowWithIntelligentTags(
+                preFilteredBrands, // Send the pre-filtered list
+                firefliesContext.transcripts || [],
+                emailContext || [],
+                search_term
+              ),
+              15000,
               { 
-                topBrands: mixedBrandList.slice(0, 15).map(b => ({
+                topBrands: preFilteredBrands.slice(0, 15).map(b => ({
                   source: 'hubspot',
                   id: b.id,
                   name: b.properties.brand_name || '',
@@ -1669,11 +1758,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
                   dealsCount: b.properties.deals_count || '0',
                   lastActivity: b.properties.hs_lastmodifieddate,
                   hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`,
-                  relevanceScore: 50,
-                  tags: ['Quick Match'],
-                  reason: 'Selected based on activity'
-                })), 
-                taggedBrands: [] 
+                  relevanceScore: 75,
+                  tags: ['Strong Match'],
+                  reason: 'Pre-filtered as strong candidate'
+                }))
               }
             );
             
