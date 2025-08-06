@@ -945,6 +945,25 @@ function isVibeMatch(productionSynopsis, brandCategory) {
   return false;
 }
 
+// Extract JSON from AI response text
+function extractJson(text) {
+  // First try to parse the whole text
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // If that fails, look for JSON object pattern
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
   try {
     const allBrands = [...hubspotBrands];
@@ -1050,7 +1069,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       return brandData;
     });
 
-    const systemPrompt = `You are a precise data analysis engine. Your sole function is to receive a JSON list of brands and a user request, then return a ranked and tagged list of those SAME brands in a JSON object with a "results" key. You MUST NOT add, invent, or hallucinate any brands that were not in the original input list. Each result needs: "id" (MUST match input), "relevanceScore" (0-100), "tags" (descriptive strings), "reason" (concise explanation).`;
+    const systemPrompt = `You are a precise data analysis engine. Your sole function is to return a valid JSON object and nothing else. Do not include any conversational text, pleasantries, or markdown formatting before or after the JSON. The JSON object must have a single key "results", which is an array of the ranked brands. Each result needs: "id" (MUST match input), "relevanceScore" (0-100), "tags" (descriptive strings), "reason" (concise explanation).`;
     
     // Truncate and escape userMessage to avoid JSON parsing issues
     let truncatedUserMessage = userMessage.length > 500 ? userMessage.slice(0, 500) + '...' : userMessage;
