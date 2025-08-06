@@ -487,17 +487,21 @@ const o365API = {
       const accessToken = await this.getAccessToken();
       const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
       
-      // Extract intelligent search terms
-      const searchTerms = await extractKeywordsForContextSearch(query);
-      
-      // Add original query if it's short
-      if (!searchTerms.includes(query) && query.length < 50) {
-        searchTerms.push(query);
+      // If query is an array, it's pre-extracted keywords
+      let searchTerms;
+      if (Array.isArray(query)) {
+        searchTerms = query;
+      } else {
+        // Legacy support - extract keywords if string passed
+        searchTerms = await extractKeywordsForContextSearch(query);
+        if (!searchTerms.includes(query) && query.length < 50) {
+          searchTerms.push(query);
+        }
       }
       
-      // If no terms extracted, use original query
-      if (searchTerms.length === 0) {
-        searchTerms.push(query);
+      // If no terms, use original query
+      if (searchTerms.length === 0 && !Array.isArray(query)) {
+        searchTerms = [query];
       }
       
       let allEmails = new Map();
@@ -778,23 +782,27 @@ async function searchFireflies(query, options = {}) {
       return { transcripts: [] };
     }
     
-    // Extract intelligent search terms
-    const searchTerms = await extractKeywordsForContextSearch(query);
-    
-    // Add the original query as fallback if it's short
-    if (!searchTerms.includes(query) && query.length < 50) {
-      searchTerms.push(query);
+    // If query is an array, it's pre-extracted keywords
+    let searchTerms;
+    if (Array.isArray(query)) {
+      searchTerms = query;
+    } else {
+      // Legacy support - extract keywords if string passed
+      searchTerms = await extractKeywordsForContextSearch(query);
+      if (!searchTerms.includes(query) && query.length < 50) {
+        searchTerms.push(query);
+      }
     }
     
-    // If no terms extracted, use original query
-    if (searchTerms.length === 0) {
-      searchTerms.push(query);
+    // If no terms, use original query
+    if (searchTerms.length === 0 && !Array.isArray(query)) {
+      searchTerms = [query];
     }
     
     let allTranscripts = new Map();
     
     // Search for each term and combine results
-    for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms to avoid too many API calls
+    for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
       try {
         const filters = {
           keyword: term,
@@ -802,11 +810,8 @@ async function searchFireflies(query, options = {}) {
         };
         
         // Add date filter if needed
-        const queryLower = query.toLowerCase();
-        if (queryLower.includes('last 3 months') || queryLower.includes('past 3 months')) {
-          const threeMonthsAgo = new Date();
-          threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-          filters.fromDate = threeMonthsAgo.toISOString().split('T')[0];
+        if (options.fromDate) {
+          filters.fromDate = options.fromDate;
         }
         
         const results = await firefliesAPI.searchTranscripts(filters);
@@ -896,6 +901,18 @@ async function extractKeywordsForContextSearch(text) {
     console.error("Error extracting context keywords:", error);
     return [];
   }
+}
+
+// Add timeout wrapper for resilient searches
+function withTimeout(promise, ms, defaultValue) {
+  let timeoutId = null;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve(defaultValue), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).then(result => {
+    clearTimeout(timeoutId);
+    return result;
+  });
 }
 
 async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
@@ -1587,7 +1604,13 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         if (search_term.length > 50) {
             mcpThinking.push({ type: 'start', text: '🎬 Brand Matching detected. Initiating MCP search...' });
             
-            // Launch all searches in parallel
+            // Extract keywords once at the start
+            const contextKeywords = await extractKeywordsForContextSearch(search_term);
+            if (contextKeywords.length > 0) {
+              mcpThinking.push({ type: 'process', text: `🧠 Extracted keywords: ${contextKeywords.slice(0, 5).join(', ')}` });
+            }
+            
+            // Launch all searches in parallel with timeouts
             mcpThinking.push({ type: 'search', text: '⭐ Searching HubSpot for genre-matched brands...' });
             mcpThinking.push({ type: 'search', text: '🔥 Searching HubSpot for commercial opportunities...' });
             mcpThinking.push({ type: 'search', text: '🎙️ Searching Fireflies for meeting context...' });
@@ -1596,10 +1619,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             const [
               creativeMatches, commercialWinners, firefliesContext, emailContext
             ] = await Promise.all([
-              hubspotAPI.searchBrands({ query: search_term, limit: 30 }),
-              hubspotAPI.searchBrands({ limit: 20 }), // Gets low hanging fruit
-              firefliesApiKey ? searchFireflies(search_term, { limit: 5 }) : { transcripts: [] },
-              msftClientId ? o365API.searchEmails(search_term, { days: 180 }) : []
+              withTimeout(hubspotAPI.searchBrands({ query: search_term, limit: 30 }), 5000, { results: [] }),
+              withTimeout(hubspotAPI.searchBrands({ limit: 20 }), 5000, { results: [] }),
+              withTimeout(searchFireflies(contextKeywords, { limit: 5 }), 8000, { transcripts: [] }),
+              withTimeout(o365API.searchEmails(contextKeywords, { days: 180 }), 8000, [])
             ]);
 
             // Report results
@@ -1628,9 +1651,25 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             const mixedBrandList = Array.from(allBrands.values());
             
             mcpThinking.push({ type: 'process', text: `🧠 Analyzing ${mixedBrandList.length} unique brands with AI...` });
-            const { topBrands } = await narrowWithIntelligentTags(
-              mixedBrandList, firefliesContext.transcripts || [], emailContext || [], search_term
+            
+            // Use timeout for AI ranking too
+            const rankingResult = await withTimeout(
+              narrowWithIntelligentTags(mixedBrandList, firefliesContext.transcripts || [], emailContext || [], search_term),
+              10000,
+              { topBrands: mixedBrandList.slice(0, 15).map(b => ({
+                  source: 'hubspot',
+                  id: b.id,
+                  name: b.properties.brand_name || '',
+                  category: b.properties.main_category || 'General',
+                  relevanceScore: 50,
+                  tags: ['Timeout Fallback'],
+                  reason: 'Ranked by default'
+                })), 
+                taggedBrands: [] 
+              }
             );
+            
+            const { topBrands } = rankingResult;
             
             mcpThinking.push({ type: 'complete', text: `✨ Prepared ${topBrands.length} tailored recommendations.` });
             return {
