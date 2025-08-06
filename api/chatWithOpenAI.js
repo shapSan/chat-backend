@@ -1050,7 +1050,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       return brandData;
     });
 
-    const systemPrompt = `You are an expert brand partnership strategist. Analyze brands for production fit. Return JSON with "results" array of top 15 brands. Consider: category match to content genre, partnership/deal history, client status/type. Each result needs: "id", "relevanceScore" (0-100), "tags" (descriptive strings), "reason" (concise explanation).`;
+    const systemPrompt = `You are a precise data analysis engine. Your sole function is to receive a JSON list of brands and a user request, then return a ranked and tagged list of those SAME brands in a JSON object with a "results" key. You MUST NOT add, invent, or hallucinate any brands that were not in the original input list. Each result needs: "id" (MUST match input), "relevanceScore" (0-100), "tags" (descriptive strings), "reason" (concise explanation).`;
     
     // Truncate and escape userMessage to avoid JSON parsing issues
     let truncatedUserMessage = userMessage.length > 500 ? userMessage.slice(0, 500) + '...' : userMessage;
@@ -1077,7 +1077,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
     
     const userPrompt = `Production/Request: "${truncatedUserMessage}"\n\nBrand List:\n\`\`\`json\n${brandsForAISafe}\n\`\`\``;
 
-    console.log('[DEBUG narrowWithIntelligentTags] Calling OpenAI for ranking...');
+    console.log('[DEBUG narrowWithIntelligentTags] Calling Claude for ranking...');
     console.log('[DEBUG narrowWithIntelligentTags] Prompt length:', userPrompt.length, 'characters');
     console.log('[DEBUG narrowWithIntelligentTags] Number of brands:', brandsForAI.length);
     
@@ -1086,15 +1086,24 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
     const timeout = setTimeout(() => controller.abort(), 15000); // 15 second timeout
     
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      // Use Claude 3.5 Sonnet for better accuracy
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+        headers: { 
+          'Content-Type': 'application/json', 
+          'x-api-key': anthropicApiKey,
+          'anthropic-version': '2023-06-01'
+        },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-          response_format: { type: "json_object" },
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 1000,
           temperature: 0.2,
-          max_tokens: 1000 // Limit response size
+          messages: [
+            {
+              role: 'user',
+              content: `${systemPrompt}\n\n${userPrompt}\n\nIMPORTANT: Return ONLY brands from the input list. Do not invent new brands.`
+            }
+          ]
         }),
         signal: controller.signal
       });
@@ -1102,36 +1111,45 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       clearTimeout(timeout);
 
       if (!response.ok) {
-        console.error('[DEBUG narrowWithIntelligentTags] OpenAI API error:', response.status);
-        throw new Error(`AI ranking API error: ${response.status}`);
+        console.error('[DEBUG narrowWithIntelligentTags] Claude API error:', response.status);
+        const errorText = await response.text();
+        console.error('[DEBUG narrowWithIntelligentTags] Error details:', errorText);
+        
+        // Fall back to OpenAI if Claude fails
+        if (openAIApiKey) {
+          console.log('[DEBUG narrowWithIntelligentTags] Falling back to OpenAI...');
+          return narrowWithIntelligentTagsOpenAI(hubspotBrands, firefliesTranscripts, emails, userMessage);
+        }
+        
+        throw new Error(`Claude API error: ${response.status}`);
       }
       
       const data = await response.json();
-      console.log('[DEBUG narrowWithIntelligentTags] OpenAI response received');
+      console.log('[DEBUG narrowWithIntelligentTags] Claude response received');
       
       let rankedData;
       try {
-        rankedData = JSON.parse(data.choices[0].message.content);
+        // Claude returns content in a different format
+        const content = data.content[0].text;
+        rankedData = JSON.parse(content);
       } catch (parseError) {
         console.error('[DEBUG narrowWithIntelligentTags] JSON parse error:', parseError);
-        console.error('[DEBUG narrowWithIntelligentTags] Raw response:', data.choices[0].message.content);
-        // Try to extract results with regex as fallback
-        const resultsMatch = data.choices[0].message.content.match(/"results"\s*:\s*\[([\s\S]*?)\]/);
-        if (resultsMatch) {
-          try {
-            rankedData = { results: JSON.parse(`[${resultsMatch[1]}]`) };
-          } catch (e) {
-            throw parseError; // Re-throw original error if regex fallback fails
-          }
-        } else {
-          throw parseError;
-        }
+        console.error('[DEBUG narrowWithIntelligentTags] Raw response:', data.content[0].text);
+        throw parseError;
       }
       
       const rankedResults = rankedData.results || [];
-      console.log('[DEBUG narrowWithIntelligentTags] AI ranked', rankedResults.length, 'brands');
+      console.log('[DEBUG narrowWithIntelligentTags] Claude ranked', rankedResults.length, 'brands');
+      
+      // Validate that Claude didn't hallucinate brands
+      const inputBrandIds = new Set(brandsForAI.map(b => b.id));
+      const validResults = rankedResults.filter(r => inputBrandIds.has(r.id));
+      
+      if (validResults.length !== rankedResults.length) {
+        console.warn('[DEBUG narrowWithIntelligentTags] Claude hallucinated', rankedResults.length - validResults.length, 'brands');
+      }
 
-      const taggedBrands = rankedResults.map(rankedBrand => {
+      const taggedBrands = validResults.map(rankedBrand => {
         const originalBrand = hubspotBrands.find(b => b.id === rankedBrand.id);
 
         if (!originalBrand) {
@@ -1165,9 +1183,9 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
       clearTimeout(timeout);
       
       if (fetchError.name === 'AbortError') {
-        console.error('[DEBUG narrowWithIntelligentTags] OpenAI request timed out');
+        console.error('[DEBUG narrowWithIntelligentTags] Claude request timed out');
       } else {
-        console.error('[DEBUG narrowWithIntelligentTags] OpenAI request failed:', fetchError.message);
+        console.error('[DEBUG narrowWithIntelligentTags] Claude request failed:', fetchError.message);
       }
       
       // Fallback: return brands sorted by activity
