@@ -1655,7 +1655,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             // Use timeout for AI ranking too
             const rankingResult = await withTimeout(
               narrowWithIntelligentTags(mixedBrandList, firefliesContext.transcripts || [], emailContext || [], search_term),
-              10000,
+              15000,  // Increased timeout to 15 seconds
               { 
                 topBrands: mixedBrandList.slice(0, 15).map(b => ({
                   source: 'hubspot',
