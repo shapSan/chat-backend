@@ -1058,7 +1058,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
         body: JSON.stringify({
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
           response_format: { type: "json_object" },
           temperature: 0.2,
@@ -1656,14 +1656,22 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             const rankingResult = await withTimeout(
               narrowWithIntelligentTags(mixedBrandList, firefliesContext.transcripts || [], emailContext || [], search_term),
               10000,
-              { topBrands: mixedBrandList.slice(0, 15).map(b => ({
+              { 
+                topBrands: mixedBrandList.slice(0, 15).map(b => ({
                   source: 'hubspot',
                   id: b.id,
                   name: b.properties.brand_name || '',
                   category: b.properties.main_category || 'General',
+                  subcategories: b.properties.product_sub_category__multi_ || '',
+                  clientStatus: b.properties.client_status || '',
+                  clientType: b.properties.client_type || '',
+                  partnershipCount: b.properties.partnership_count || '0',
+                  dealsCount: b.properties.deals_count || '0',
+                  lastActivity: b.properties.hs_lastmodifieddate,
+                  hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`,
                   relevanceScore: 50,
-                  tags: ['Timeout Fallback'],
-                  reason: 'Ranked by default'
+                  tags: ['Quick Match'],
+                  reason: 'Selected based on activity'
                 })), 
                 taggedBrands: [] 
               }
