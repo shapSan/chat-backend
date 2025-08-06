@@ -1078,6 +1078,8 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
     const userPrompt = `Production/Request: "${truncatedUserMessage}"\n\nBrand List:\n\`\`\`json\n${brandsForAISafe}\n\`\`\``;
 
     console.log('[DEBUG narrowWithIntelligentTags] Calling OpenAI for ranking...');
+    console.log('[DEBUG narrowWithIntelligentTags] Prompt length:', userPrompt.length, 'characters');
+    console.log('[DEBUG narrowWithIntelligentTags] Number of brands:', brandsForAI.length);
     
     // Add timeout using AbortController
     const controller = new AbortController();
