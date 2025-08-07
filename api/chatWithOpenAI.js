@@ -1990,63 +1990,41 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         mcpThinking.push({ type: 'search', text: '✨ Recent opportunities (fresh leads)...' });
         mcpThinking.push({ type: 'search', text: '💡 Creative wildcards (unexpected ideas)...' });
         
-        const [vibeBrands, activeBrands, recentBrands, wildcardCategories] = await Promise.all([
-          // List 1 (PRIMARY): Genre/vibe matched brands - with RANDOMIZATION
+        const [vibeBrands, activeBrands, explorationBrands, wildcardBrands] = await Promise.all([
+          // List 1: Get 50 varied brands from the database
           withTimeout(
             (async () => {
-              // First, get a larger pool of brands
-              const allBrands = await hubspotAPI.searchBrands({
-                limit: 100,  // Get a big pool
-                filterGroups: [{
-                  filters: [
-                    { propertyName: 'client_status', operator: 'IN', values: ['Active', 'In Negotiation', 'Contract', 'Pending'] }
-                  ]
-                }]
+              // First search with the synopsis to get relevant brands
+              const relevantBrands = await hubspotAPI.searchBrands({
+                query: search_term,
+                limit: 30
               });
               
-              // Shuffle the results to get variety
-              const shuffled = (allBrands.results || []).sort(() => Math.random() - 0.5);
-              
-              // Filter for potential genre matches based on the synopsis
-              const genre = extractGenreFromSynopsis(search_term);
-              const filtered = shuffled.filter(brand => {
-                const category = (brand.properties.main_category || '').toLowerCase();
-                const subcats = (brand.properties.product_sub_category__multi_ || '').toLowerCase();
-                
-                // Skip the "usual suspects" that always show up
-                const brandName = (brand.properties.brand_name || '').toLowerCase();
-                const commonBrands = ['king\'s hawaiian', 'govee', 'pilot pen', 'st. dalfour', 'clicks'];
-                if (commonBrands.some(common => brandName.includes(common))) {
-                  return false;
-                }
-                
-                // Look for interesting category matches
-                if (genre === 'sports' || genre === 'action') {
-                  return category.includes('wellness') || category.includes('nutrition') || 
-                         category.includes('outdoor') || subcats.includes('adventure');
-                }
-                if (genre === 'romance' || genre === 'drama') {
-                  return category.includes('hospitality') || category.includes('travel') || 
-                         category.includes('experience') || subcats.includes('luxury');
-                }
-                // Add some randomness for unexpected matches
-                return Math.random() > 0.7; // 30% chance for any brand to be included
+              // Then get some random brands for variety
+              const randomBrands = await hubspotAPI.searchBrands({
+                limit: 30,
+                sorts: [{ propertyName: 'hs_object_id', direction: 'DESCENDING' }]  // Random-ish sort
               });
               
-              return { results: filtered.slice(0, 15) };
+              // Combine and deduplicate
+              const allBrands = [...(relevantBrands.results || []), ...(randomBrands.results || [])];
+              const uniqueBrands = Array.from(new Map(allBrands.map(b => [b.id, b])).values());
+              
+              // Shuffle for variety
+              return { results: uniqueBrands.sort(() => Math.random() - 0.5).slice(0, 50) };
             })(),
             7000,
             { results: [] }
           ),
           
-          // List 2: Only TOP active high-value clients - DECREASED to 2
+          // List 2: Just 2 top active brands
           withTimeout(
             hubspotAPI.searchBrands({
-              limit: 2,  // Further decreased
+              limit: 2,
               filterGroups: [{
                 filters: [
-                  { propertyName: 'client_status', operator: 'IN', values: ['Active', 'Contract'] },
-                  { propertyName: 'partnership_count', operator: 'GTE', value: '10' }  // Higher threshold
+                  { propertyName: 'client_status', operator: 'EQ', value: 'Contract' },
+                  { propertyName: 'partnership_count', operator: 'GTE', value: '10' }
                 ]
               }],
               sorts: [{ propertyName: 'deals_count', direction: 'DESCENDING' }]
@@ -2055,49 +2033,71 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             { results: [] }
           ),
           
-          // List 3: Random exploration brands - NEW APPROACH
+          // List 3: Brands from unexpected categories
           withTimeout(
-            (async () => {
-              // Get random brands from different categories
-              const categories = ['Entertainment', 'Technology', 'Health & Beauty', 'Food & Beverage', 
-                                 'Fashion & Apparel', 'Automotive', 'Home & Garden', 'Sports & Fitness'];
-              const randomCat = categories[Math.floor(Math.random() * categories.length)];
-              
-              return await hubspotAPI.searchBrands({
-                limit: 5,
-                filterGroups: [{
-                  filters: [
-                    { propertyName: 'main_category', operator: 'EQ', value: randomCat }
-                  ]
-                }],
-                sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
-              });
-            })(),
+            hubspotAPI.searchBrands({
+              limit: 5,
+              filterGroups: [{
+                filters: [
+                  { propertyName: 'client_status', operator: 'IN', values: ['Pending', 'In Negotiation'] }
+                ]
+              }],
+              sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }]
+            }),
             5000,
             { results: [] }
           ),
           
-          // List 4: Creative wildcard suggestions - Optional
+          // List 4: Generate actual brand suggestions (not categories)
           openAIApiKey ? withTimeout(
-            generateWildcardBrands(search_term),
-            4000,
+            (async () => {
+              try {
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+                  body: JSON.stringify({
+                    model: 'gpt-3.5-turbo',
+                    messages: [
+                      { 
+                        role: 'system', 
+                        content: 'Suggest 3-5 specific brand names (real companies) that would be unexpected but interesting for this production. Return JSON: {"brands": [{"name": "Brand Name", "category": "Category"}]}' 
+                      },
+                      { role: 'user', content: search_term.slice(0, 500) }
+                    ],
+                    response_format: { type: "json_object" },
+                    temperature: 0.9,
+                    max_tokens: 150
+                  })
+                });
+                
+                if (!response.ok) return [];
+                
+                const data = await response.json();
+                const result = JSON.parse(data.choices[0].message.content);
+                return result.brands || [];
+              } catch (error) {
+                console.error('Wildcard generation error:', error);
+                return [];
+              }
+            })(),
+            3000,
             []
           ) : Promise.resolve([])
         ]);
 
         // Report results with new priority
         console.log('[DEBUG handleClaudeSearch] Search results received');
-        mcpThinking.push({ type: 'result', text: `✅ Creative matches: ${vibeBrands.results?.length || 0} brands (priority)` });
-        mcpThinking.push({ type: 'result', text: `✅ Top active: ${activeBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ New opportunities: ${recentBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Wildcards: ${wildcardCategories?.length || 0} suggestions` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${vibeBrands.results?.length || 0} varied brands` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${activeBrands.results?.length || 0} premium partners` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${explorationBrands.results?.length || 0} unexpected options` });
+        mcpThinking.push({ type: 'result', text: `✅ Generated ${wildcardCategories?.length || 0} creative ideas` });
         
-        // Combine and tag all results - order changed to prioritize vibe matches
-        mcpThinking.push({ type: 'process', text: '🤝 Combining recommendations with creative priority...' });
+        // Combine and tag all results - order changed to prioritize variety
+        mcpThinking.push({ type: 'process', text: '🤝 Combining recommendations with variety focus...' });
         const taggedBrands = tagAndCombineBrands({
-          vibeBrands,  // Now first priority
-          activeBrands,
-          recentBrands,
+          vibeBrands,  // Varied pool
+          activeBrands, // Only exceptional ones
+          explorationBrands, // Unexpected categories
           wildcardCategories
         });
 
@@ -2109,11 +2109,23 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           mcpThinking.push({ type: 'search', text: '📧 Checking for related communications...' });
           
           try {
-            const contextKeywords = await extractKeywordsForContextSearch(search_term);
+            // Use simpler keyword extraction
+            const keywords = search_term.split(' ')
+              .filter(word => word.length > 4)
+              .slice(0, 3);
             
             const [firefliesData, emailData] = await Promise.all([
-              firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 5 }), 5000, { transcripts: [] }) : { transcripts: [] },
-              msftClientId ? withTimeout(o365API.searchEmails(contextKeywords, { days: 90, limit: 10 }), 5000, []) : []
+              firefliesApiKey ? withTimeout(
+                searchFireflies(keywords.join(' '), { limit: 5 }), 
+                3000, 
+                { transcripts: [] }
+              ) : { transcripts: [] },
+              
+              msftClientId ? withTimeout(
+                o365API.searchEmails(keywords.join(' '), { days: 90, limit: 10 }), 
+                3000, 
+                []
+              ) : []
             ]);
             
             supportingContext = {
@@ -2121,11 +2133,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
               emails: emailData || []
             };
             
-            // Extract golden nuggets from the context
-            if (taggedBrands.length > 0) {
+            // Only extract nuggets if we have data
+            if ((supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) && taggedBrands.length > 0) {
               goldenNuggets = findGoldenNuggets(taggedBrands, supportingContext.meetings, supportingContext.emails);
               
-              // Attach insights to each brand
+              // Attach insights to brands
               taggedBrands.forEach(brand => {
                 if (goldenNuggets[brand.id]) {
                   brand.insights = goldenNuggets[brand.id];
@@ -2134,20 +2146,20 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
                   brand.hasRealInsights = false;
                 }
               });
-            }
-            
-            const totalInsights = Object.values(goldenNuggets).flat().length;
-            if (totalInsights > 0) {
-              mcpThinking.push({ type: 'result', text: `💎 Found ${totalInsights} specific insights about brands` });
+              
+              const totalInsights = Object.values(goldenNuggets).flat().length;
+              if (totalInsights > 0) {
+                mcpThinking.push({ type: 'result', text: `💎 Found ${totalInsights} specific brand mentions` });
+              } else {
+                mcpThinking.push({ type: 'result', text: `📭 No specific brand mentions in communications` });
+              }
             } else {
-              mcpThinking.push({ type: 'result', text: `📭 No specific brand mentions found in recent communications` });
+              mcpThinking.push({ type: 'result', text: `📭 No recent communications found` });
             }
           } catch (error) {
-            console.error('[DEBUG] Error extracting insights:', error);
-            mcpThinking.push({ type: 'error', text: '⚠️ Could not extract communication insights (will proceed without)' });
+            console.error('[DEBUG] Communication search error:', error.message);
+            // Don't show error to user, just proceed without insights
           }
-        } else {
-          mcpThinking.push({ type: 'info', text: '📭 Communication search disabled (no API keys configured)' });
         }
 
         mcpThinking.push({ type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` });
@@ -2909,25 +2921,23 @@ export default async function handler(req, res) {
 
               console.log('[DEBUG] Generating text summary with OpenAI...');
               let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
-              systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
+              systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user.
 
-**CRITICAL RULES:**
-1. If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT invent or hallucinate information.
-2. **NEVER fabricate insights, meetings, or emails.** If a brand has no "insights" field or hasRealInsights is false, DO NOT make up quotes or claim there were meetings/emails about that brand.
-3. Only mention specific insights if they exist in the "insights" array for that brand.
-4. If no insights exist, you can say something like "This is a new outbound suggestion" or "No recent activity found for this brand."
+**ABSOLUTE RULES - NEVER BREAK THESE:**
+1. NEVER invent meetings, emails, or insights that don't exist in the data
+2. If a brand has isFromDatabase: true but no insights, say "No recent activity found" 
+3. If a brand has isFromDatabase: false, say "Creative suggestion - not currently in database"
+4. Only mention specific quotes if they exist in the "insights" array
+5. Look at the actual tags and status - don't make up your own categorization
 
-For brand recommendations, organize your response clearly:
-- Start with a brief overview of what was found
-- Group brands by their tags (Active Clients, Hidden Gems, Creative Fits, etc.)
-- For each brand, mention key details like status, category, and why it's relevant
-- **Only include specific quotes or mentions if the brand has real insights in the data**
-- If a brand has insights, use blockquotes (>) to highlight them
-- If a brand has no insights, be honest about it being a fresh suggestion
-- Reference meeting titles naturally when insights come from Fireflies (but don't create URLs)
-- If there are wildcard suggestions, explain these are creative ideas to explore
+For brand recommendations:
+- Group brands by their ACTUAL tags from the data
+- For database brands: mention their real status (Active, Pending, etc.)
+- For wildcard brands: clearly state they're AI suggestions not in the database
+- If hasRealInsights is true: include the actual quotes using blockquotes (>)
+- If hasRealInsights is false: be honest - "No recent communications found for this brand"
 
-Keep the tone helpful and strategic, focusing on actionable insights.`;
+Be helpful but HONEST. Users prefer truth over made-up information.`;
 
               systemMessageContent += '\n\n```json\n';
               systemMessageContent += JSON.stringify(structuredData, null, 2);
