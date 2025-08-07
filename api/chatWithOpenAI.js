@@ -1578,7 +1578,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'find_brands',
-        description: 'Use for requests to find, search for, or get brand recommendations for product placement. Use when user provides a synopsis or asks for brand suggestions.',
+        description: 'Use for requests to find, search for, or get brand recommendations. Use when user provides a synopsis, production details with cast/distributor info, or asks for brand suggestions.',
         parameters: {
           type: 'object',
           properties: { 
@@ -1592,7 +1592,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'get_brand_activity',
-        description: 'Use ONLY when user asks about a specific brand\'s activity, meetings, or emails. The user must be asking about an existing brand company, not a person name.',
+        description: 'Use ONLY when user asks about a specific brand company\'s activity, meetings, or emails.',
         parameters: {
           type: 'object',
           properties: { 
@@ -1624,7 +1624,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'answer_general_question',
-        description: 'Use for general conversation, production details, or when the message contains instructions or notes that are not requesting brand searches.',
+        description: 'Use for general conversation that is NOT about finding brands or productions.',
         parameters: { type: 'object', properties: {} }
       }
     }
@@ -1634,7 +1634,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
     const messages = [
       { 
         role: 'system', 
-        content: 'You are an expert at routing a user request to the correct tool. Be careful: if the message contains production details with notes like "Brand Opps" followed by @ mentions of people, this is just a note/instruction, NOT a request to search for those names as brands. Only route to brand tools if the user is actually asking for brand searches or recommendations.' 
+        content: 'You are an expert at routing a user request to the correct tool. If the message contains production details like Synopsis, Cast, Distributor, etc., this is a request for brand recommendations using find_brands. However, if it says "Brand Opps" followed by @ mentions of people, that part is just a note - but still use find_brands for the production synopsis.' 
       },
       { 
         role: 'user', 
