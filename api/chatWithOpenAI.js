@@ -2108,10 +2108,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Combine and tag all results
         mcpThinking.push({ type: 'process', text: '🤝 Combining recommendations with variety focus...' });
         const taggedBrands = tagAndCombineBrands({
-          vibeBrands,
-          activeBrands,
-          explorationBrands,
-          wildcardBrands
+          vibeBrands: vibeBrands || { results: [] },
+          activeBrands: activeBrands || { results: [] },
+          explorationBrands: explorationBrands || { results: [] },
+          wildcardBrands: wildcardBrands || []
         });
 
         // Optional: Get supporting context from meetings/emails
