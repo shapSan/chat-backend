@@ -1936,7 +1936,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     .slice(0, 45); // Limit to top 45 (15+15+10+5)
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName) {
   if (!anthropicApiKey) return null;
   
   const intent = await routeUserIntent(userMessage, conversationContext, lastProductionContext);
@@ -1976,6 +1976,17 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
 
         // Full "Four Lists" Synopsis Search
         mcpThinking.push({ type: 'start', text: '🎬 Synopsis detected. Building diverse recommendations...' });
+        
+        // Extract title if not provided by frontend
+        let extractedTitle;
+        if (knownProjectName) {
+            // If the frontend provided a title, trust it completely
+            extractedTitle = knownProjectName;
+            mcpThinking.push({ type: 'process', text: `📌 Using known project: "${extractedTitle}"` });
+        } else {
+            // Only run extraction logic if no title was sent from frontend
+            extractedTitle = null; // You can add extraction logic here if needed
+        }
         
         // Extract genre and keywords for better matching
         const genre = extractGenreFromSynopsis(search_term);
@@ -2083,6 +2094,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           organizedData: {
             dataType: 'BRAND_RECOMMENDATIONS',
             productionContext: search_term,
+            projectName: extractedTitle, // Use the definitive title
             brandSuggestions: taggedBrands,
             supportingContext: supportingContext
           },
@@ -2652,7 +2664,7 @@ export default async function handler(req, res) {
         }
       }
       
-      let { userMessage, sessionId, audioData, projectId } = req.body;
+      let { userMessage, sessionId, audioData, projectId, projectName } = req.body;
 
       if (userMessage && userMessage.length > 5000) {
         userMessage = userMessage.slice(0, 5000) + "…";
@@ -2794,43 +2806,44 @@ export default async function handler(req, res) {
         }
       // This is the complete and final code to paste inside the 'else if (userMessage) { ... }' block
 } else if (userMessage) {
-        console.log('[DEBUG] Starting message processing for:', userMessage);
-        try {
-          // --- FIX APPLIED HERE ---
-          // Timer and MCP steps are initialized at the very start of processing.
-          const mcpStartTime = Date.now();
-          let mcpSteps = []; 
-          // --- END FIX ---
+        console.log('[DEBUG] Starting message processing for:', userMessage);
+        try {
+          // --- FIX APPLIED HERE ---
+          // Timer and MCP steps are initialized at the very start of processing.
+          const mcpStartTime = Date.now();
+          let mcpSteps = []; 
+          // --- END FIX ---
 
-          let aiReply = '';
-          let usedMCP = false;
-          let structuredData = null;
+          let aiReply = '';
+          let usedMCP = false;
+          let structuredData = null;
 
-          console.log('[DEBUG] Calling handleClaudeSearch...');
-          
-          // Extract the last production context for follow-up questions
-          const lastProductionContext = extractLastProduction(conversationContext);
-          
-          const claudeResult = await handleClaudeSearch(
-              userMessage,
-              projectId,
-              conversationContext,
-              lastProductionContext
-          );
-          console.log('[DEBUG] handleClaudeSearch returned:', claudeResult ? 'data' : 'null');
+          console.log('[DEBUG] Calling handleClaudeSearch...');
+          
+          // Extract the last production context for follow-up questions
+          const lastProductionContext = extractLastProduction(conversationContext);
+          
+          const claudeResult = await handleClaudeSearch(
+              userMessage,
+              projectId,
+              conversationContext,
+              lastProductionContext,
+              projectName // Pass the known name from the request body
+          );
+          console.log('[DEBUG] handleClaudeSearch returned:', claudeResult ? 'data' : 'null');
 
-          if (claudeResult) {
-              // A tool was successfully used!
-              usedMCP = true;
-              mcpSteps = claudeResult.mcpThinking.map(step => ({
+          if (claudeResult) {
+              // A tool was successfully used!
+              usedMCP = true;
+              mcpSteps = claudeResult.mcpThinking.map(step => ({
                     ...step,
                     timestamp: Date.now() - mcpStartTime // Recalculate timestamp relative to the handler start
                 })) || [];
-              structuredData = claudeResult.organizedData;
+              structuredData = claudeResult.organizedData;
 
-              console.log('[DEBUG] Generating text summary with OpenAI...');
-              let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
-              systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
+              console.log('[DEBUG] Generating text summary with OpenAI...');
+              let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
+              systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
 
 **CRITICAL RULE: If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT, under any circumstances, invent or hallucinate information, brands, or meeting details.**
 
@@ -2842,54 +2855,54 @@ For brand recommendations, organize your response clearly:
 
 Keep the tone helpful and strategic, focusing on actionable insights.`;
 
-              systemMessageContent += '\n\n```json\n';
-              systemMessageContent += JSON.stringify(structuredData, null, 2);
-              systemMessageContent += '\n```';
+              systemMessageContent += '\n\n```json\n';
+              systemMessageContent += JSON.stringify(structuredData, null, 2);
+              systemMessageContent += '\n```';
 
-              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
-              console.log('[DEBUG] Claude response received');
+              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
+              console.log('[DEBUG] Claude response received');
 
-          } else {
-              // No tool was used, so it's a general conversation.
-              console.log('[DEBUG] No tool used, generating general response...');
-              usedMCP = false;
-              let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in brand integration into Hollywood entertainment.";
-              if (conversationContext) {
-                  systemMessageContent += `\n\nConversation history: ${conversationContext}`;
-              }
-              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
-          }
+          } else {
+              // No tool was used, so it's a general conversation.
+              console.log('[DEBUG] No tool used, generating general response...');
+              usedMCP = false;
+              let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in brand integration into Hollywood entertainment.";
+              if (conversationContext) {
+                  systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+              }
+              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
+          }
 
-          if (aiReply) {
-              console.log('[DEBUG] Updating Airtable conversation...');
-              updateAirtableConversation(
-                  sessionId, projectId, chatUrl, headersAirtable,
-                  `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
-                  existingRecordId
-              ).catch(err => console.error('[DEBUG] Airtable update error:', err));
+          if (aiReply) {
+              console.log('[DEBUG] Updating Airtable conversation...');
+              updateAirtableConversation(
+                  sessionId, projectId, chatUrl, headersAirtable,
+                  `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
+                  existingRecordId
+              ).catch(err => console.error('[DEBUG] Airtable update error:', err));
 
-              console.log('[DEBUG] Sending successful response');
-              // The final response now includes mcpSteps for the frontend
-              return res.json({
-                  reply: aiReply,
-                  structuredData: structuredData,
-                  mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
-                  usedMCP: usedMCP
-              });
-          } else {
-              console.error('[DEBUG] No AI reply received');
-              return res.status(500).json({ error: 'No text reply received.' });
-          }
-        } catch (error) {
-          console.error("[CRASH DETECTED IN HANDLER]:", error);
-          console.error("[STACK TRACE]:", error.stack);
-          return res.status(500).json({ 
-            error: 'Internal server error', 
-            details: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-          });
-        }
-      }
+              console.log('[DEBUG] Sending successful response');
+              // The final response now includes mcpSteps for the frontend
+              return res.json({
+                  reply: aiReply,
+                  structuredData: structuredData,
+                  mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
+                  usedMCP: usedMCP
+              });
+          } else {
+              console.error('[DEBUG] No AI reply received');
+              return res.status(500).json({ error: 'No text reply received.' });
+          }
+        } catch (error) {
+          console.error("[CRASH DETECTED IN HANDLER]:", error);
+          console.error("[STACK TRACE]:", error.stack);
+          return res.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+          });
+        }
+      }
     } catch (error) {
       return res.status(500).json({ error: 'Internal server error', details: error.message });
     }
