@@ -864,10 +864,11 @@ async function extractKeywordsForHubSpot(synopsis) {
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [
-          { role: 'system', content: "Extract 2-4 industry/category keywords that brands would use. Focus on: product categories (luxury, fashion, automotive, tech, beverage), target demographics (family, youth, professional), or brand attributes (premium, eco-friendly, innovative). Examples: 'luxury fashion jewelry', 'automotive tech', 'premium beverage', 'family entertainment'. Return ONLY keywords, no names or locations." },
+          { role: 'system', content: "Analyze this production synopsis and identify 3-5 brand categories that would resonate with its audience. Think about: What brands would viewers of this content naturally gravitate toward? What lifestyle/aspirations does this story represent? What demographic psychographics emerge? Return ONLY category keywords that brands use, separated by spaces. Be specific and insightful - go beyond obvious genre matches to find authentic brand-audience alignment." },
           { role: 'user', content: synopsis }
         ],
-        temperature: 0, max_tokens: 30
+        temperature: 0.3,
+        max_tokens: 40
       }),
     });
     const data = await response.json();
@@ -1681,12 +1682,12 @@ async function generateWildcardBrands(synopsis) {
         messages: [
           { 
             role: 'system', 
-            content: 'Suggest exactly 5 SPECIFIC real brand names (not categories) that would be PERFECT creative fits for this production. These should be real companies that exist and would be no-brainer partnerships worth cold outreach. Focus on brands that align perfectly with the theme/vibe. Return JSON: {"brands": ["Brand Name 1", "Brand Name 2", ...]}' 
+            content: 'Suggest exactly 5 UNEXPECTED consumer brand names (NOT studios/distributors/production companies) for product placement in this production. Think outside the box - find hidden gem brands that would create surprising but perfect synergy. Focus on real consumer brands that make products/services that could appear on screen and pay for placement. Be creative and unpredictable. Return JSON: {"brands": ["Brand Name 1", "Brand Name 2", ...]}' 
           },
-          { role: 'user', content: synopsis.slice(0, 500) }
+          { role: 'user', content: `Find unexpected product placement gems for: ${synopsis.slice(0, 500)}` }
         ],
         response_format: { type: "json_object" },
-        temperature: 0.7,
+        temperature: 0.9, // Increased for more variance
         max_tokens: 100
       })
     });
@@ -1701,54 +1702,130 @@ async function generateWildcardBrands(synopsis) {
 }
 
 // Helper function to tag and combine brands from different sources
-function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildcardCategories }) {
+function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
   const brandMap = new Map();
   
-  // Process synopsis-matched brands (15)
-  synopsisBrands.results?.forEach(brand => {
-    const id = brand.id;
-    if (!brandMap.has(id)) {
-      brandMap.set(id, {
-        source: 'hubspot',
-        id: brand.id,
-        name: brand.properties.brand_name || '',
-        category: brand.properties.main_category || 'General',
-        subcategories: brand.properties.product_sub_category__multi_ || '',
-        clientStatus: brand.properties.client_status || '',
-        clientType: brand.properties.client_type || '',
-        partnershipCount: brand.properties.partnership_count || '0',
-        dealsCount: brand.properties.deals_count || '0',
-        lastActivity: brand.properties.hs_lastmodifieddate,
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['🎯 Synopsis Match'],
-        relevanceScore: 95,
-        reason: 'Directly matches production synopsis/theme'
-      });
+  // Helper to find relevant meeting/email quote for a brand
+  const findBrandContext = (brandName) => {
+    if (!context) return null;
+    
+    // Check meetings for brand mentions
+    if (context.meetings && context.meetings.length > 0) {
+      for (const meeting of context.meetings) {
+        if (meeting.title?.toLowerCase().includes(brandName.toLowerCase()) || 
+            meeting.summary?.overview?.toLowerCase().includes(brandName.toLowerCase())) {
+          // Try to extract a relevant quote
+          if (meeting.summary?.action_items && meeting.summary.action_items.length > 0) {
+            const relevantAction = meeting.summary.action_items[0];
+            return `"${relevantAction}" - [Meeting ${meeting.dateString}](${meeting.transcript_url})`;
+          }
+          if (meeting.summary?.overview) {
+            const snippet = meeting.summary.overview.slice(0, 100);
+            return `Meeting discussed: "${snippet}..." - [${meeting.dateString}](${meeting.transcript_url})`;
+          }
+        }
+      }
     }
-    // Add additional tags based on status
-    const brandData = brandMap.get(id);
-    if (brand.properties.client_status === 'Active' || brand.properties.client_status === 'Contract') {
-      brandData.tags.push('🔥 Active Client');
+    
+    // Check emails for brand mentions
+    if (context.emails && context.emails.length > 0) {
+      for (const email of context.emails) {
+        if (email.subject?.toLowerCase().includes(brandName.toLowerCase()) || 
+            email.preview?.toLowerCase().includes(brandName.toLowerCase())) {
+          const date = new Date(email.receivedDate).toLocaleDateString();
+          return `Recent email from ${email.fromName || email.from}: "${email.subject}" (${date})`;
+        }
+      }
     }
-    if (brand.properties.client_type === 'Retainer') {
-      brandData.tags.push('Retainer Client (Premium)');
+    
+    return null;
+  };
+  
+  // Helper to generate specific pitch based on brand and synopsis
+  const generatePitch = (brand, synopsisText) => {
+    const category = (brand.category || '').toLowerCase();
+    const genre = extractGenreFromSynopsis(synopsisText);
+    
+    // Generate specific pitches based on category and genre
+    if (category.includes('automotive') && genre === 'action') {
+      return 'Hero car for chase sequences - proven track record with action films';
     }
-    if (parseInt(brand.properties.partnership_count || 0) >= 10) {
-      brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
+    if (category.includes('fashion') && (genre === 'drama' || genre === 'romance')) {
+      return 'Wardrobe partner for character development - luxury meets storytelling';
     }
-    if (parseInt(brand.properties.deals_count || 0) >= 5) {
-      brandData.tags.push(`High Activity (${brand.properties.deals_count} deals)`);
+    if (category.includes('tech') && genre === 'scifi') {
+      return 'Future-tech integration - product as narrative device';
     }
-  });
+    if (category.includes('beverage') && genre === 'comedy') {
+      return 'Social scenes product placement - natural comedy moments';
+    }
+    if (parseInt(brand.partnershipCount) > 10) {
+      return `${brand.partnershipCount} successful integrations - knows entertainment value`;
+    }
+    if (brand.clientType === 'Retainer') {
+      return 'Retainer client with flexible integration budget';
+    }
+    if (parseInt(brand.dealsCount) > 5) {
+      return `Active in ${brand.dealsCount} current productions - high engagement`;
+    }
+    
+    // Default specific pitches
+    return `${brand.category} leader - natural fit for ${genre || 'this'} production`;
+  };
+  
+  // Process brands with recent activity (8)
+  if (activityBrands && activityBrands.results) {
+    activityBrands.results.forEach(brand => {
+      const id = brand.id;
+      const brandName = brand.properties.brand_name || '';
+      const contextQuote = findBrandContext(brandName);
+      
+      if (!brandMap.has(id)) {
+        brandMap.set(id, {
+          source: 'hubspot',
+          id: brand.id,
+          name: brandName,
+          category: brand.properties.main_category || 'General',
+          subcategories: brand.properties.product_sub_category__multi_ || '',
+          clientStatus: brand.properties.client_status || '',
+          clientType: brand.properties.client_type || '',
+          partnershipCount: brand.properties.partnership_count || '0',
+          dealsCount: brand.properties.deals_count || '0',
+          lastActivity: brand.properties.hs_lastmodifieddate,
+          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+          tags: ['📧 Recent Activity'],
+          relevanceScore: 95,
+          reason: contextQuote || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`
+        });
+      }
+      // Add additional tags based on status
+      const brandData = brandMap.get(id);
+      if (brand.properties.client_status === 'Active' || brand.properties.client_status === 'Contract') {
+        brandData.tags.push('🔥 Active Client');
+      }
+      if (brand.properties.client_type === 'Retainer') {
+        brandData.tags.push('Retainer Client (Premium)');
+      }
+      if (parseInt(brand.properties.partnership_count || 0) >= 10) {
+        brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
+      }
+      if (parseInt(brand.properties.deals_count || 0) >= 5) {
+        brandData.tags.push(`High Activity (${brand.properties.deals_count} deals)`);
+      }
+    });
+  }
   
   // Process genre/demographic brands (15)
   genreBrands.results?.forEach(brand => {
     const id = brand.id;
+    const brandName = brand.properties.brand_name || '';
+    const contextQuote = findBrandContext(brandName);
+    
     if (!brandMap.has(id)) {
       brandMap.set(id, {
         source: 'hubspot',
         id: brand.id,
-        name: brand.properties.brand_name || '',
+        name: brandName,
         category: brand.properties.main_category || 'General',
         subcategories: brand.properties.product_sub_category__multi_ || '',
         clientStatus: brand.properties.client_status || '',
@@ -1759,7 +1836,7 @@ function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildca
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['🎭 Vibe Match'],
         relevanceScore: 85,
-        reason: 'Aligns with production vibe and target audience'
+        reason: contextQuote || generatePitch(brand.properties, synopsis)
       });
     } else {
       brandMap.get(id).tags.push('🎭 Vibe Match');
@@ -1784,11 +1861,14 @@ function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildca
   // Process active big-budget clients (10)
   activeBrands.results?.forEach(brand => {
     const id = brand.id;
+    const brandName = brand.properties.brand_name || '';
+    const contextQuote = findBrandContext(brandName);
+    
     if (!brandMap.has(id)) {
       brandMap.set(id, {
         source: 'hubspot',
         id: brand.id,
-        name: brand.properties.brand_name || '',
+        name: brandName,
         category: brand.properties.main_category || 'General',
         subcategories: brand.properties.product_sub_category__multi_ || '',
         clientStatus: brand.properties.client_status || '',
@@ -1799,7 +1879,7 @@ function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildca
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['💰 Active Big-Budget Client', '🔥 Active Client'],
         relevanceScore: 90,
-        reason: 'Active client with proven budget and partnership history'
+        reason: contextQuote || `Budget proven: ${brand.properties.deals_count} deals, ${brand.properties.partnership_count} partnerships`
       });
     } else {
       if (!brandMap.get(id).tags.includes('💰 Big Budget')) {
@@ -1825,7 +1905,18 @@ function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildca
   
   // Add wildcard category suggestions for cold outreach (5)
   if (wildcardCategories && wildcardCategories.length > 0) {
+    const genre = extractGenreFromSynopsis(synopsis);
     wildcardCategories.slice(0, 5).forEach((brandName, index) => {
+      // Generate specific cold outreach pitch
+      let pitch = `Perfect ${genre || 'creative'} synergy - worth cold outreach`;
+      if (brandName.toLowerCase().includes('luxury')) {
+        pitch = 'Elevates production value - luxury brand cachet';
+      } else if (brandName.toLowerCase().includes('tech')) {
+        pitch = 'Innovation angle - tech-forward narrative integration';
+      } else if (brandName.toLowerCase().includes('sustainable')) {
+        pitch = 'ESG story angle - sustainability messaging opportunity';
+      }
+      
       brandMap.set(`wildcard_${index}`, {
         source: 'suggestion',
         id: `wildcard_${index}`,
@@ -1833,7 +1924,7 @@ function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildca
         category: 'Suggested for Cold Outreach',
         tags: ['🚀 Cold Outreach Opportunity', '💡 Creative Suggestion', '🎭 Vibe Match'],
         relevanceScore: 70,
-        reason: 'Perfect creative fit - worth cold outreach',
+        reason: pitch,
         isWildcard: true
       });
     });
