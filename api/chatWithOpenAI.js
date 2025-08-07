@@ -627,6 +627,8 @@ const firefliesAPI = {
   
   async searchTranscripts(filters = {}) {
     try {
+      console.log('[DEBUG firefliesAPI.searchTranscripts] Searching with filters:', filters);
+      
       const graphqlQuery = `
         query SearchTranscripts($keyword: String, $limit: Int, $fromDate: DateTime) {
           transcripts(
@@ -669,12 +671,26 @@ const firefliesAPI = {
       });
       
       if (!response.ok) {
+        console.error('[DEBUG firefliesAPI.searchTranscripts] Response not OK:', response.status);
+        const errorBody = await response.text();
+        console.error('[DEBUG firefliesAPI.searchTranscripts] Error body:', errorBody);
         return [];
       }
       
       const data = await response.json();
-      return data.data?.transcripts || [];
+      console.log('[DEBUG firefliesAPI.searchTranscripts] Response data:', data);
+      
+      if (data.errors) {
+        console.error('[DEBUG firefliesAPI.searchTranscripts] GraphQL errors:', data.errors);
+        return [];
+      }
+      
+      const transcripts = data.data?.transcripts || [];
+      console.log(`[DEBUG firefliesAPI.searchTranscripts] Found ${transcripts.length} transcripts`);
+      
+      return transcripts;
     } catch (error) {
+      console.error('[DEBUG firefliesAPI.searchTranscripts] Exception:', error);
       return [];
     }
   },
@@ -748,6 +764,8 @@ const firefliesAPI = {
   
   async testConnection() {
     try {
+      console.log('[DEBUG firefliesAPI.testConnection] Testing with API key:', firefliesApiKey ? 'Present' : 'Missing');
+      
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
@@ -761,11 +779,16 @@ const firefliesAPI = {
       
       if (!response.ok) {
         const errorBody = await response.text();
+        console.error('[DEBUG firefliesAPI.testConnection] Failed with status:', response.status);
+        console.error('[DEBUG firefliesAPI.testConnection] Error body:', errorBody);
         return false;
       }
       
+      const data = await response.json();
+      console.log('[DEBUG firefliesAPI.testConnection] Success! User:', data.data?.user?.email);
       return true;
     } catch (error) {
+      console.error('[DEBUG firefliesAPI.testConnection] Exception:', error);
       return false;
     }
   }
@@ -773,40 +796,52 @@ const firefliesAPI = {
 
 async function searchFireflies(query, options = {}) {
   if (!firefliesApiKey) {
+    console.log('[DEBUG searchFireflies] No API key available');
     return { transcripts: [] };
   }
   
   try {
+    console.log('[DEBUG searchFireflies] Starting search with query:', query);
+    console.log('[DEBUG searchFireflies] Options:', options);
+    
     const isConnected = await firefliesAPI.testConnection();
     if (!isConnected) {
+      console.error('[DEBUG searchFireflies] Failed connection test');
       return { transcripts: [] };
     }
+    
+    console.log('[DEBUG searchFireflies] Connection successful');
     
     // If query is an array, it's pre-extracted keywords
     let searchTerms;
     if (Array.isArray(query)) {
       searchTerms = query;
+      console.log('[DEBUG searchFireflies] Using provided search terms:', searchTerms);
     } else {
-      // Legacy support - extract keywords if string passed
-      searchTerms = await extractKeywordsForContextSearch(query);
-      if (!searchTerms.includes(query) && query.length < 50) {
-        searchTerms.push(query);
+      // For simple searches (like brand names), also search the raw query
+      searchTerms = [query]; // Start with the raw query
+      
+      // Only extract keywords for complex queries
+      if (query.length > 50) {
+        const extractedTerms = await extractKeywordsForContextSearch(query);
+        console.log('[DEBUG searchFireflies] Extracted keywords:', extractedTerms);
+        // Add extracted terms but keep the original simpler terms too
+        searchTerms = [...new Set([...searchTerms, ...extractedTerms])];
       }
-    }
-    
-    // If no terms, use original query
-    if (searchTerms.length === 0 && !Array.isArray(query)) {
-      searchTerms = [query];
+      
+      console.log('[DEBUG searchFireflies] Final search terms:', searchTerms);
     }
     
     let allTranscripts = new Map();
     
     // Search for each term and combine results
-    for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
+    for (const term of searchTerms.slice(0, 10)) { // Increased limit
       try {
+        console.log(`[DEBUG searchFireflies] Searching for term: "${term}"`);
+        
         const filters = {
           keyword: term,
-          limit: options.limit || 3
+          limit: options.limit || 10 // Increased default limit
         };
         
         // Add date filter if needed
@@ -815,18 +850,27 @@ async function searchFireflies(query, options = {}) {
         }
         
         const results = await firefliesAPI.searchTranscripts(filters);
-        results.forEach(t => allTranscripts.set(t.id, t));
+        console.log(`[DEBUG searchFireflies] Found ${results.length} results for "${term}"`);
+        
+        results.forEach(t => {
+          allTranscripts.set(t.id, t);
+          console.log(`[DEBUG searchFireflies] Added transcript: ${t.title} (${t.dateString})`);
+        });
       } catch (error) {
         // Continue with other terms if one fails
-        console.error(`Error searching Fireflies for term "${term}":`, error);
+        console.error(`[DEBUG searchFireflies] Error searching for term "${term}":`, error);
       }
     }
     
+    const finalResults = Array.from(allTranscripts.values());
+    console.log(`[DEBUG searchFireflies] Total unique transcripts found: ${finalResults.length}`);
+    
     return {
-      transcripts: Array.from(allTranscripts.values())
+      transcripts: finalResults
     };
     
   } catch (error) {
+    console.error('[DEBUG searchFireflies] Fatal error:', error);
     return { transcripts: [] };
   }
 }
@@ -2151,7 +2195,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         const [brand, firefliesData] = await Promise.all([
           hubspotAPI.searchSpecificBrand(brand_name),
-          firefliesApiKey ? searchFireflies(brand_name, { limit: 5 }) : { transcripts: [] }
+          firefliesApiKey ? searchFireflies(brand_name, { limit: 10 }) : { transcripts: [] }
         ]);
         
         if (!brand) {
@@ -2168,11 +2212,45 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         const [contacts, o365Data] = await Promise.all([
             hubspotAPI.getContactsForBrand(brand.id),
-            msftClientId ? o365API.searchEmails(brand_name, { days: 90 }) : []
+            msftClientId ? o365API.searchEmails(brand_name, { days: 90, limit: 10 }) : []
         ]);
         
         mcpThinking.push({ type: 'result', text: `✅ Found ${contacts.length} contact(s).` });
         mcpThinking.push({ type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` });
+        
+        // Combine and sort all communications chronologically
+        const allCommunications = [];
+        
+        // Add meetings with type marker
+        firefliesData.transcripts?.forEach(meeting => {
+          allCommunications.push({
+            type: 'meeting',
+            title: meeting.title || 'Untitled Meeting',
+            date: new Date(meeting.date || meeting.dateString),
+            dateString: meeting.dateString,
+            duration: meeting.duration,
+            participants: meeting.participants,
+            summary: meeting.summary,
+            url: meeting.transcript_url
+          });
+        });
+        
+        // Add emails with type marker
+        o365Data?.forEach(email => {
+          allCommunications.push({
+            type: 'email',
+            title: email.subject || 'No Subject',
+            date: new Date(email.receivedDate),
+            dateString: new Date(email.receivedDate).toLocaleDateString(),
+            from: email.from,
+            fromName: email.fromName,
+            preview: email.preview
+          });
+        });
+        
+        // Sort by date (most recent first)
+        allCommunications.sort((a, b) => b.date - a.date);
+        
         mcpThinking.push({ type: 'complete', text: '✨ Activity report generated.' });
         
         return {
@@ -2180,8 +2258,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             dataType: 'BRAND_ACTIVITY', 
             brand: brand.properties,
             contacts: contacts.map(c => c.properties),
-            meetings: firefliesData.transcripts || [], 
-            emails: o365Data || []
+            communications: allCommunications, // Sorted chronologically
+            meetings: firefliesData.transcripts || [], // Keep original for backward compatibility
+            emails: o365Data || [] // Keep original for backward compatibility
           }, 
           mcpThinking, 
           usedMCP: true
@@ -2881,7 +2960,40 @@ export default async function handler(req, res) {
 
               console.log('[DEBUG] Generating text summary with OpenAI...');
               let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
-              systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
+              
+              // Special formatting for BRAND_ACTIVITY responses
+              if (structuredData.dataType === 'BRAND_ACTIVITY') {
+                systemMessageContent += `\n\nYou have retrieved activity data for a brand. Format your response EXACTLY as follows:
+
+**CRITICAL FORMATTING RULES:**
+1. Start with a brief summary line
+2. List ALL communications in chronological order (most recent first)
+3. Use this EXACT format for each item:
+   - For meetings: "1. [Meeting Title] - [Date]"
+     • Key points from meeting...
+   - For emails: "2. [Email Subject] - [Date]"  
+     • Email preview or key points...
+4. End with a "Key Contacts:" section listing all contacts
+
+**TEMPLATE:**
+Based on the search results, here's the activity summary for [Brand Name]:
+
+1. [Most Recent Meeting/Email Title] - [Date]
+   • Details about this communication...
+   • Another relevant point...
+
+2. [Next Meeting/Email Title] - [Date]
+   • Details about this communication...
+
+[Continue for all items...]
+
+Key Contacts:
+- [Contact Name 1] - [Title if available]
+- [Contact Name 2] - [Title if available]
+
+**DO NOT** reorganize by type (meetings vs emails). Keep everything in chronological order.`;
+              } else {
+                systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
 
 **CRITICAL RULE: If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT, under any circumstances, invent or hallucinate information, brands, or meeting details.**
 
@@ -2892,6 +3004,7 @@ For brand recommendations, organize your response clearly:
 - If there are wildcard suggestions, explain these are creative ideas to explore
 
 Keep the tone helpful and strategic, focusing on actionable insights.`;
+              }
 
               systemMessageContent += '\n\n```json\n';
               systemMessageContent += JSON.stringify(structuredData, null, 2);
