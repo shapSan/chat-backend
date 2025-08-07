@@ -1993,52 +1993,66 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Add delay function to respect rate limits
         const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         
+        // Extract keywords from synopsis for better searching
+        const keywords = await extractKeywordsForContextSearch(search_term);
+        const searchQuery = keywords.length > 0 ? keywords.slice(0, 3).join(' ') : search_term.slice(0, 100);
+        console.log('[DEBUG] Extracted keywords:', searchQuery);
+        
         // Execute searches sequentially with delays to avoid rate limits
-        let vibeBrands, activeBrands, explorationBrands, wildcardBrands;
+        let vibeBrands, demographicBrands, activeBrands, wildcardBrands;
         
         try {
-          // First: Get varied brands
+          // First: Search with extracted keywords (15 brands)
           vibeBrands = await withTimeout(
-            (async () => {
-              // First search with the synopsis to get relevant brands
-              const relevantBrands = await hubspotAPI.searchBrands({
-                query: search_term,
-                limit: 30
-              });
-              
-              // Wait 200ms before next call
-              await delay(200);
-              
-              // Then get some random brands for variety
-              const randomBrands = await hubspotAPI.searchBrands({
-                limit: 20,
-                sorts: [{ propertyName: 'hs_object_id', direction: 'DESCENDING' }]
-              });
-              
-              // Combine and deduplicate
-              const allBrands = [...(relevantBrands.results || []), ...(randomBrands.results || [])];
-              const uniqueBrands = Array.from(new Map(allBrands.map(b => [b.id, b])).values());
-              
-              // Shuffle for variety
-              return { results: uniqueBrands.sort(() => Math.random() - 0.5).slice(0, 40) };
-            })(),
-            7000,
+            hubspotAPI.searchBrands({
+              query: searchQuery,  // Use extracted keywords, not full synopsis
+              limit: 15
+            }),
+            5000,
             { results: [] }
           );
           
-          console.log('[DEBUG] vibeBrands fetched:', vibeBrands?.results?.length || 0);
-          
-          // Wait before next batch
+          console.log('[DEBUG] Keyword search fetched:', vibeBrands?.results?.length || 0);
           await delay(200);
           
-          // Second: Get active brands
-          activeBrands = await withTimeout(
+          // Second: Random search with genre/category focus (15 brands)
+          const genre = extractGenreFromSynopsis(search_term);
+          const categoryMap = {
+            'action': ['Automotive', 'Technology', 'Sports & Fitness'],
+            'comedy': ['Food & Beverage', 'Entertainment', 'Consumer Goods'],
+            'drama': ['Fashion & Apparel', 'Health & Beauty', 'Lifestyle'],
+            'romance': ['Travel', 'Hospitality', 'Luxury'],
+            'thriller': ['Security', 'Technology', 'Insurance'],
+            'sports': ['Athletic', 'Nutrition', 'Wellness'],
+            'scifi': ['Technology', 'Gaming', 'Innovation']
+          };
+          const relevantCategories = categoryMap[genre] || ['Entertainment', 'Consumer Goods', 'Lifestyle'];
+          
+          demographicBrands = await withTimeout(
             hubspotAPI.searchBrands({
-              limit: 2,
+              limit: 15,
               filterGroups: [{
                 filters: [
-                  { propertyName: 'client_status', operator: 'EQ', value: 'Contract' },
-                  { propertyName: 'partnership_count', operator: 'GTE', value: '10' }
+                  { propertyName: 'main_category', operator: 'IN', values: relevantCategories }
+                ]
+              }],
+              sorts: [{ propertyName: 'hs_object_id', direction: 'DESCENDING' }]  // Random-ish sort
+            }),
+            5000,
+            { results: [] }
+          );
+          
+          console.log('[DEBUG] Demographic/genre search fetched:', demographicBrands?.results?.length || 0);
+          await delay(200);
+          
+          // Third: Active clients with good budgets (10 brands)
+          activeBrands = await withTimeout(
+            hubspotAPI.searchBrands({
+              limit: 10,
+              filterGroups: [{
+                filters: [
+                  { propertyName: 'client_status', operator: 'IN', values: ['Active', 'Contract', 'In Negotiation'] },
+                  { propertyName: 'partnership_count', operator: 'GTE', value: '2' }  // More reasonable threshold
                 ]
               }],
               sorts: [{ propertyName: 'deals_count', direction: 'DESCENDING' }]
@@ -2047,29 +2061,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             { results: [] }
           );
           
-          console.log('[DEBUG] activeBrands fetched:', activeBrands?.results?.length || 0);
-          
-          // Wait before next call
+          console.log('[DEBUG] Active clients fetched:', activeBrands?.results?.length || 0);
           await delay(200);
           
-          // Third: Get exploration brands
-          explorationBrands = await withTimeout(
-            hubspotAPI.searchBrands({
-              limit: 5,
-              filterGroups: [{
-                filters: [
-                  { propertyName: 'client_status', operator: 'IN', values: ['Pending', 'In Negotiation'] }
-                ]
-              }],
-              sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }]
-            }),
-            5000,
-            { results: [] }
-          );
-          
-          console.log('[DEBUG] explorationBrands fetched:', explorationBrands?.results?.length || 0);
-          
-          // Fourth: Generate wildcard brands (no HubSpot call)
+          // Fourth: AI wildcard suggestions for cold outreach (5 brands)
           wildcardBrands = openAIApiKey ? await withTimeout(
             (async () => {
               try {
@@ -2081,13 +2076,13 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
                     messages: [
                       { 
                         role: 'system', 
-                        content: 'Suggest 3-5 specific brand names (real companies) that would be unexpected but interesting for this production. Return JSON: {"brands": [{"name": "Brand Name", "category": "Category"}]}' 
+                        content: 'Suggest exactly 5 real brand names that would be PERFECT no-brainer fits for this production. Think synergy - brands that would obviously benefit from this exact story/theme. These are for cold outreach so they must be incredibly relevant. Return JSON: {"brands": [{"name": "Brand Name", "category": "Category", "reason": "Why perfect fit"}]}' 
                       },
-                      { role: 'user', content: search_term.slice(0, 500) }
+                      { role: 'user', content: `Production: ${search_term.slice(0, 800)}` }
                     ],
                     response_format: { type: "json_object" },
-                    temperature: 0.9,
-                    max_tokens: 150
+                    temperature: 0.7,  // Less random, more focused
+                    max_tokens: 200
                   })
                 });
                 
@@ -2105,14 +2100,31 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             []
           ) : [];
           
-          console.log('[DEBUG] wildcardBrands fetched:', wildcardBrands?.length || 0);
+          console.log('[DEBUG] Wildcard brands generated:', wildcardBrands?.length || 0);
+          
+          // Combine all brands but remove duplicates
+          const allBrandResults = [
+            ...(vibeBrands?.results || []),
+            ...(demographicBrands?.results || []),
+            ...(activeBrands?.results || [])
+          ];
+          
+          // Deduplicate based on brand ID
+          const uniqueBrands = Array.from(
+            new Map(allBrandResults.map(b => [b.id, b])).values()
+          );
+          
+          // Create final structure matching what tagAndCombineBrands expects
+          vibeBrands = { results: uniqueBrands.slice(0, 20) };  // First 20 unique brands
+          activeBrands = { results: uniqueBrands.slice(20, 30) };  // Next 10
+          explorationBrands = { results: uniqueBrands.slice(30, 40) };  // Last 10
           
         } catch (error) {
           console.error('[DEBUG] Error in brand fetching:', error);
           // Set defaults if something went wrong
           vibeBrands = vibeBrands || { results: [] };
           activeBrands = activeBrands || { results: [] };
-          explorationBrands = explorationBrands || { results: [] };
+          explorationBrands = { results: [] };
           wildcardBrands = wildcardBrands || [];
         }
 
