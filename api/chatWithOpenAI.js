@@ -1576,7 +1576,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'find_brands',
-        description: 'Use for any request to find, search for, or get brand recommendations, including keyword searches and full production synopses.',
+        description: 'Use for requests to find, search for, or get brand recommendations for product placement. Use when user provides a synopsis or asks for brand suggestions.',
         parameters: {
           type: 'object',
           properties: { 
@@ -1590,11 +1590,11 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'get_brand_activity',
-        description: 'Use for any request about a specific brand\'s activity, like asking for meetings, emails, or "what\'s new with...".',
+        description: 'Use ONLY when user asks about a specific brand\'s activity, meetings, or emails. The user must be asking about an existing brand company, not a person name.',
         parameters: {
           type: 'object',
           properties: { 
-            brand_name: { type: 'string', description: 'The name of the brand to look up.' }
+            brand_name: { type: 'string', description: 'The name of the brand company to look up.' }
           },
           required: ['brand_name']
         }
@@ -1604,14 +1604,14 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'create_pitches_for_brands',
-        description: 'Use when user asks to "create pitches", "generate ideas", or "deep dive" for specific brand names.',
+        description: 'Use when user asks to "create pitches", "generate ideas", or "deep dive" for specific brand company names.',
         parameters: {
           type: 'object',
           properties: {
             brand_names: { 
               type: 'array', 
               items: { type: 'string' },
-              description: 'Array of specific brand names mentioned.' 
+              description: 'Array of specific brand company names mentioned.' 
             }
           },
           required: ['brand_names']
@@ -1622,7 +1622,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'answer_general_question',
-        description: 'Use for general conversation that does not require searching internal databases.',
+        description: 'Use for general conversation, production details, or when the message contains instructions or notes that are not requesting brand searches.',
         parameters: { type: 'object', properties: {} }
       }
     }
@@ -1632,7 +1632,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
     const messages = [
       { 
         role: 'system', 
-        content: 'You are an expert at routing a user request to the correct tool. If the user\'s request is vague (e.g., "for this project"), you MUST use the provided "Last Production Context" to inform the tool call.' 
+        content: 'You are an expert at routing a user request to the correct tool. Be careful: if the message contains production details with notes like "Brand Opps" followed by @ mentions of people, this is just a note/instruction, NOT a request to search for those names as brands. Only route to brand tools if the user is actually asking for brand searches or recommendations.' 
       },
       { 
         role: 'user', 
@@ -1687,7 +1687,7 @@ async function generateWildcardBrands(synopsis) {
           { role: 'user', content: `Find unexpected product placement gems for: ${synopsis.slice(0, 500)}` }
         ],
         response_format: { type: "json_object" },
-        temperature: 0.9, // Increased for more variance
+        temperature: 0.7, // Reduced from 0.9 for more reliable results
         max_tokens: 100
       })
     });
@@ -1773,7 +1773,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     return `${brand.category} leader - natural fit for ${genre || 'this'} production`;
   };
   
-  // Process brands with recent activity (8)
+  // Process brands with recent activity (8) - prioritize context quotes
   if (activityBrands && activityBrands.results) {
     activityBrands.results.forEach(brand => {
       const id = brand.id;
@@ -1794,23 +1794,27 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           lastActivity: brand.properties.hs_lastmodifieddate,
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
           tags: ['📧 Recent Activity'],
-          relevanceScore: 95,
+          relevanceScore: contextQuote ? 98 : 95, // Higher score if we have a quote
           reason: contextQuote || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`
         });
+      } else if (contextQuote && !brandMap.get(id).reason.includes('Meeting') && !brandMap.get(id).reason.includes('email')) {
+        // Update with better context if found
+        brandMap.get(id).reason = contextQuote;
+        brandMap.get(id).relevanceScore = Math.max(brandMap.get(id).relevanceScore, 98);
       }
       // Add additional tags based on status
       const brandData = brandMap.get(id);
       if (brand.properties.client_status === 'Active' || brand.properties.client_status === 'Contract') {
-        brandData.tags.push('🔥 Active Client');
+        if (!brandData.tags.includes('🔥 Active Client')) brandData.tags.push('🔥 Active Client');
       }
       if (brand.properties.client_type === 'Retainer') {
-        brandData.tags.push('Retainer Client (Premium)');
+        if (!brandData.tags.includes('Retainer Client (Premium)')) brandData.tags.push('Retainer Client (Premium)');
       }
       if (parseInt(brand.properties.partnership_count || 0) >= 10) {
-        brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
+        if (!brandData.tags.some(t => t.includes('Proven Partner'))) brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
       }
       if (parseInt(brand.properties.deals_count || 0) >= 5) {
-        brandData.tags.push(`High Activity (${brand.properties.deals_count} deals)`);
+        if (!brandData.tags.some(t => t.includes('High Activity'))) brandData.tags.push(`High Activity (${brand.properties.deals_count} deals)`);
       }
     });
   }
