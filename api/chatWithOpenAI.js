@@ -1994,41 +1994,45 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         
         // Execute searches sequentially with delays to avoid rate limits
-        const vibeBrands = await withTimeout(
-          (async () => {
-            // First search with the synopsis to get relevant brands
-            const relevantBrands = await hubspotAPI.searchBrands({
-              query: search_term,
-              limit: 30
-            });
-            
-            // Wait 200ms before next call
-            await delay(200);
-            
-            // Then get some random brands for variety
-            const randomBrands = await hubspotAPI.searchBrands({
-              limit: 20,
-              sorts: [{ propertyName: 'hs_object_id', direction: 'DESCENDING' }]
-            });
-            
-            // Combine and deduplicate
-            const allBrands = [...(relevantBrands.results || []), ...(randomBrands.results || [])];
-            const uniqueBrands = Array.from(new Map(allBrands.map(b => [b.id, b])).values());
-            
-            // Shuffle for variety
-            return { results: uniqueBrands.sort(() => Math.random() - 0.5).slice(0, 40) };
-          })(),
-          7000,
-          { results: [] }
-        );
+        let vibeBrands, activeBrands, explorationBrands, wildcardBrands;
         
-        // Wait before next batch
-        await delay(200);
-        
-        // Get other brand lists with delays
-        const [activeBrands, explorationBrands] = await Promise.all([
-          // Just 2 top active brands
-          withTimeout(
+        try {
+          // First: Get varied brands
+          vibeBrands = await withTimeout(
+            (async () => {
+              // First search with the synopsis to get relevant brands
+              const relevantBrands = await hubspotAPI.searchBrands({
+                query: search_term,
+                limit: 30
+              });
+              
+              // Wait 200ms before next call
+              await delay(200);
+              
+              // Then get some random brands for variety
+              const randomBrands = await hubspotAPI.searchBrands({
+                limit: 20,
+                sorts: [{ propertyName: 'hs_object_id', direction: 'DESCENDING' }]
+              });
+              
+              // Combine and deduplicate
+              const allBrands = [...(relevantBrands.results || []), ...(randomBrands.results || [])];
+              const uniqueBrands = Array.from(new Map(allBrands.map(b => [b.id, b])).values());
+              
+              // Shuffle for variety
+              return { results: uniqueBrands.sort(() => Math.random() - 0.5).slice(0, 40) };
+            })(),
+            7000,
+            { results: [] }
+          );
+          
+          console.log('[DEBUG] vibeBrands fetched:', vibeBrands?.results?.length || 0);
+          
+          // Wait before next batch
+          await delay(200);
+          
+          // Second: Get active brands
+          activeBrands = await withTimeout(
             hubspotAPI.searchBrands({
               limit: 2,
               filterGroups: [{
@@ -2041,62 +2045,76 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             }),
             5000,
             { results: [] }
-          ),
+          );
           
-          // Exploration brands (with built-in delay)
-          withTimeout(
-            (async () => {
-              await delay(400); // Additional delay for this call
-              return hubspotAPI.searchBrands({
-                limit: 5,
-                filterGroups: [{
-                  filters: [
-                    { propertyName: 'client_status', operator: 'IN', values: ['Pending', 'In Negotiation'] }
-                  ]
-                }],
-                sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }]
-              });
-            })(),
+          console.log('[DEBUG] activeBrands fetched:', activeBrands?.results?.length || 0);
+          
+          // Wait before next call
+          await delay(200);
+          
+          // Third: Get exploration brands
+          explorationBrands = await withTimeout(
+            hubspotAPI.searchBrands({
+              limit: 5,
+              filterGroups: [{
+                filters: [
+                  { propertyName: 'client_status', operator: 'IN', values: ['Pending', 'In Negotiation'] }
+                ]
+              }],
+              sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }]
+            }),
             5000,
             { results: [] }
-          )
-        ]);
-        
-        // Generate wildcard brands (no HubSpot call)
-        const wildcardBrands = openAIApiKey ? await withTimeout(
-          (async () => {
-            try {
-              const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
-                body: JSON.stringify({
-                  model: 'gpt-3.5-turbo',
-                  messages: [
-                    { 
-                      role: 'system', 
-                      content: 'Suggest 3-5 specific brand names (real companies) that would be unexpected but interesting for this production. Return JSON: {"brands": [{"name": "Brand Name", "category": "Category"}]}' 
-                    },
-                    { role: 'user', content: search_term.slice(0, 500) }
-                  ],
-                  response_format: { type: "json_object" },
-                  temperature: 0.9,
-                  max_tokens: 150
-                })
-              });
-              
-              if (!response.ok) return [];
-              
-              const data = await response.json();
-              const result = JSON.parse(data.choices[0].message.content);
-              return result.brands || [];
-            } catch (error) {
-              console.error('Wildcard generation error:', error);
-              return [];
-            }
-          })(),
-          3000,
-          []
-        ) : [];
+          );
+          
+          console.log('[DEBUG] explorationBrands fetched:', explorationBrands?.results?.length || 0);
+          
+          // Fourth: Generate wildcard brands (no HubSpot call)
+          wildcardBrands = openAIApiKey ? await withTimeout(
+            (async () => {
+              try {
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+                  body: JSON.stringify({
+                    model: 'gpt-3.5-turbo',
+                    messages: [
+                      { 
+                        role: 'system', 
+                        content: 'Suggest 3-5 specific brand names (real companies) that would be unexpected but interesting for this production. Return JSON: {"brands": [{"name": "Brand Name", "category": "Category"}]}' 
+                      },
+                      { role: 'user', content: search_term.slice(0, 500) }
+                    ],
+                    response_format: { type: "json_object" },
+                    temperature: 0.9,
+                    max_tokens: 150
+                  })
+                });
+                
+                if (!response.ok) return [];
+                
+                const data = await response.json();
+                const result = JSON.parse(data.choices[0].message.content);
+                return result.brands || [];
+              } catch (error) {
+                console.error('Wildcard generation error:', error);
+                return [];
+              }
+            })(),
+            3000,
+            []
+          ) : [];
+          
+          console.log('[DEBUG] wildcardBrands fetched:', wildcardBrands?.length || 0);
+          
+        } catch (error) {
+          console.error('[DEBUG] Error in brand fetching:', error);
+          // Set defaults if something went wrong
+          vibeBrands = vibeBrands || { results: [] };
+          activeBrands = activeBrands || { results: [] };
+          explorationBrands = explorationBrands || { results: [] };
+          wildcardBrands = wildcardBrands || [];
+        }
 
         // Report results with new priority
         console.log('[DEBUG handleClaudeSearch] Search results received');
