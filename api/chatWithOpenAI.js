@@ -2130,10 +2130,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
 
         // Report results with new priority
         console.log('[DEBUG handleClaudeSearch] Search results received');
-        mcpThinking.push({ type: 'result', text: `✅ Found ${vibeBrands.results?.length || 0} varied brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Found ${activeBrands.results?.length || 0} premium partners` });
-        mcpThinking.push({ type: 'result', text: `✅ Found ${explorationBrands.results?.length || 0} exploration brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Generated ${wildcardBrands?.length || 0} creative suggestions` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${vibeBrands?.results?.length || 0} keyword-matched brands` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${demographicBrands?.results?.length || 0} genre-matched brands` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${activeBrands?.results?.length || 0} active clients` });
+        mcpThinking.push({ type: 'result', text: `✅ Found ${explorationBrands?.results?.length || 0} exploration brands` });
+        mcpThinking.push({ type: 'result', text: `✅ Generated ${wildcardBrands?.length || 0} wildcard suggestions` });
         
         // Combine and tag all results
         mcpThinking.push({ type: 'process', text: '🤝 Combining recommendations with variety focus...' });
