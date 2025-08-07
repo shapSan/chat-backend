@@ -1673,7 +1673,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'get_brand_activity',
-        description: 'Use when user wants to see communications (emails/meetings) about a specific brand, person, or partnership. This includes: "show me emails for X", "what meetings do we have with Y", "what\'s the activity for Z brand", or any request for communication history.',
+        description: 'Use when user wants to see communications (emails/meetings) about a specific brand, person, or partnership. This includes: "show me emails for X", "find all meetings with Y", "what meetings and emails do we have with Z", "show all communications for X", "what\'s the activity for Z brand", or any request for communication history. ALWAYS use this for requests about emails OR meetings OR both.',
         parameters: {
           type: 'object',
           properties: { 
@@ -1721,9 +1721,12 @@ CRITICAL ROUTING RULES:
 
 ROUTING LOGIC:
 - "find brands" / "more brands" / "brands for this" → find_brands (use context if vague)
-- "show emails" / "meetings with" / "activity for" → get_brand_activity (for specific entities)
+- ANY request for emails, meetings, or both about a specific entity → get_brand_activity
+  Examples: "find all emails with X", "show meetings for Y", "find all meetings and emails with Z"
 - "create pitches for [brands]" / "ideas for [brands]" / "why [brand] works" → create_pitches_for_brands
 - General questions / chat → answer_general_question
+
+IMPORTANT: If user asks for emails, meetings, or communications about a specific brand/person/project, ALWAYS use get_brand_activity - it handles both emails AND meetings.
 
 When the user references "this project" or is vague, COMBINE their request with the Last Production Context to create a complete search term.`;
 
@@ -3026,61 +3029,72 @@ export default async function handler(req, res) {
               
               // Special formatting for BRAND_ACTIVITY responses
               if (structuredData.dataType === 'BRAND_ACTIVITY') {
+                // Count the actual items in the data
+                const totalCommunications = structuredData.communications?.length || 0;
+                const actualMeetings = structuredData.communications?.filter(c => c.type === 'meeting').length || 0;
+                const actualEmails = structuredData.communications?.filter(c => c.type === 'email').length || 0;
+                
+                console.log('[DEBUG Text Generation] Total communications to display:', totalCommunications);
+                console.log('[DEBUG Text Generation] Meetings to display:', actualMeetings);
+                console.log('[DEBUG Text Generation] Emails to display:', actualEmails);
+                
+                // Log first few items to verify data
+                if (structuredData.communications && structuredData.communications.length > 0) {
+                  console.log('[DEBUG Text Generation] First 3 items:');
+                  structuredData.communications.slice(0, 3).forEach((item, idx) => {
+                    console.log(`  ${idx + 1}. [${item.type}] ${item.title}`);
+                  });
+                }
+                
                 systemMessageContent += `\n\nYou have retrieved activity data for a brand. Format your response EXACTLY as follows:
 
-**CRITICAL FORMATTING RULES:**
+**ABSOLUTE REQUIREMENT: Display ALL ${totalCommunications} items from the communications array**
+
+The data contains:
+- ${actualMeetings} meetings
+- ${actualEmails} emails
+- Total: ${totalCommunications} items
+
+YOU MUST DISPLAY ALL ${totalCommunications} ITEMS. If you skip ANY items, the system will fail.
+
+**FORMATTING RULES:**
 1. Start with "Based on the search results, here's the activity summary for [Brand Name]:"
-2. You MUST include ALL items from the "communications" array - DO NOT skip any
-3. List them in the EXACT order they appear in the communications array (already sorted by date)
-4. Use this EXACT format for each item:
-   - Number each item sequentially (1., 2., 3., etc.)
-   - **FOR MEETINGS**: Use format: [MEETING url="URL_HERE"] if URL exists, otherwise just [MEETING]
-   - **FOR EMAILS**: Use format: [EMAIL]
-   - Follow with the title and date
-   - Add bullet points with relevant details
-5. End with a "Key Contacts:" section if contacts exist
+2. List ALL ${totalCommunications} items in the EXACT order from the communications array
+3. Number them 1 through ${totalCommunications}
+4. Format each item:
+   - Meetings: "[MEETING url='url_if_exists'] Title - Date" or "[MEETING] Title - Date"
+   - Emails: "[EMAIL] Subject - Date"
+5. Include bullet points with details for each item
 
-**CRITICAL**: The communications array contains ${structuredData.communications?.length || 0} items. 
-You MUST display ALL ${structuredData.communications?.length || 0} items. 
-DO NOT summarize, skip, or omit ANY items.
+**VERIFICATION CHECKLIST:**
+☐ Did you display item 1? ${structuredData.communications?.[0]?.title || 'N/A'}
+☐ Did you display item 2? ${structuredData.communications?.[1]?.title || 'N/A'}
+☐ Did you display item 3? ${structuredData.communications?.[2]?.title || 'N/A'}
+[Continue for all ${totalCommunications} items...]
 
-**EXAMPLE FORMAT:**
+**EXAMPLE (if there were 21 items):**
 Based on the search results, here's the activity summary for [Brand Name]:
 
-1. [MEETING url="https://fireflies.ai/meeting/abc123"] MTG: Kings Hawaiian - Happy Gilmore 2 Touch Base - 7/28/2025
-   • Discussion about unsatisfactory Netflix product placement
-   • $350,000 investment concerns due to poor brand visibility
-   • Duration: 35 minutes
+1. [EMAIL] Re: Additional Order - PEAK Daytona Helmet - 8/15/2024
+   • From: Sarah Kistler
+   • Follow-up on PEAK helmets timing
 
-2. [EMAIL] RE: Partnership Opportunity - 7/15/2025
-   • From: John Smith (john@company.com)
-   • Follow-up from marketing director
-   • Interested in Q3 campaign integration
+2. [MEETING url="https://fireflies.ai/xxx"] Peak Warner Meeting - 8/10/2024
+   • Discussion of marketing efforts
+   • Duration: 45 minutes
 
-3. [MEETING url="https://fireflies.ai/meeting/def456"] Kings Hawaiian x Happy Gilmore 2 Next Steps - 10/25/2024
-   • Project planning and process development meeting
-   • $500k deal amount update in HubSpot
-   • Participants: Troy Figgins, Rob Baird
+[... MUST CONTINUE THROUGH ALL 21 ITEMS ...]
 
-4. [MEETING] Internal Sync Meeting - 9/15/2024
-   • No recording URL available
-   • Brief discussion about project status
-
-[Continue for ALL ${structuredData.communications?.length || 0} items...]
+21. [EMAIL] Initial Contact - 1/5/2024
+   • First outreach email
+   • From: Marketing Team
 
 Key Contacts:
-- [Contact Name] - [Title if available]
+- [List any contacts]
 
-**IMPORTANT RULES FOR URLs**:
-- If a meeting has a URL in the data, include it as: [MEETING url="URL_HERE"]
-- If a meeting has no URL, use just: [MEETING]
-- Emails never have URLs in the marker, always just: [EMAIL]
-- The URL must be exactly as provided in the data, do not modify it
-
-**REMEMBER**: 
-- You found ${structuredData.meetings?.length || 0} meetings and ${structuredData.emails?.length || 0} emails
-- ALL of these MUST be displayed with their type markers
-- Include URLs for meetings when available in the data`;
+**CRITICAL**: The MCP system found ${actualMeetings} meetings and ${actualEmails} emails.
+You MUST display ALL of them or the numbers won't match and user trust will be lost.
+Count your items before submitting - there should be EXACTLY ${totalCommunications} numbered items.`;
               } else {
                 systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
 
@@ -3102,19 +3116,26 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               // Add verification instruction for BRAND_ACTIVITY
               if (structuredData.dataType === 'BRAND_ACTIVITY') {
                 const totalItems = structuredData.communications?.length || 0;
-                const meetingCount = structuredData.meetings?.length || 0;
-                const emailCount = structuredData.emails?.length || 0;
+                const meetingCount = structuredData.communications?.filter(c => c.type === 'meeting').length || 0;
+                const emailCount = structuredData.communications?.filter(c => c.type === 'email').length || 0;
                 
-                systemMessageContent += `\n\n**FINAL VERIFICATION**: 
-                - The data contains ${totalItems} total communications
-                - ${meetingCount} meetings and ${emailCount} emails
-                - You MUST display ALL ${totalItems} items
-                - Each item MUST be numbered sequentially (1 through ${totalItems})
-                - Meetings with URLs must use: [MEETING url="exact_url_from_data"]
-                - Meetings without URLs must use: [MEETING]
-                - Emails always use: [EMAIL]
-                - DO NOT skip any items or you will lose user trust
-                - DO NOT modify or shorten the URLs - use them exactly as provided`;
+                // Log what we're sending to AI
+                console.log('[DEBUG Final Verification] Sending to AI:');
+                console.log('- Total items in communications array:', totalItems);
+                console.log('- Meetings:', meetingCount);
+                console.log('- Emails:', emailCount);
+                console.log('- First email title:', structuredData.communications?.find(c => c.type === 'email')?.title);
+                console.log('- All email titles:', structuredData.communications?.filter(c => c.type === 'email').map(e => e.title));
+                
+                systemMessageContent += `\n\n**FINAL VERIFICATION BEFORE YOU RESPOND**: 
+                - The communications array has ${totalItems} items total
+                - Specifically: ${meetingCount} meetings and ${emailCount} emails
+                - You MUST display ALL ${totalItems} items numbered 1 through ${totalItems}
+                - Each email MUST start with [EMAIL]
+                - Each meeting MUST start with [MEETING] or [MEETING url="..."]
+                - Count your response: it should have EXACTLY ${totalItems} numbered items
+                - DO NOT skip items even if they seem similar
+                - The user sees "${meetingCount} meetings and ${emailCount} emails" in the status, so you MUST show all of them`;
               }
 
               aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
@@ -3225,10 +3246,20 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
 
 async function getTextResponseFromClaude(userMessage, sessionId, systemMessageContent) {
   try {
-    // Claude prefers system content in the first user message
-    const claudeSystemPrompt = `<role>You are an expert brand partnership analyst for Hollywood entertainment. You provide honest, nuanced analysis while being helpful and conversational.</role>
+    // Special handling for BRAND_ACTIVITY to ensure all items are displayed
+    let claudeSystemPrompt = `<role>You are an expert brand partnership analyst for Hollywood entertainment. You provide honest, nuanced analysis while being helpful and conversational.</role>
 
 ${systemMessageContent}`;
+    
+    // Check if this is a BRAND_ACTIVITY response
+    if (systemMessageContent.includes('BRAND_ACTIVITY') && systemMessageContent.includes('**ABSOLUTE REQUIREMENT')) {
+      claudeSystemPrompt += `\n\n<critical_instruction>
+YOU MUST DISPLAY EVERY SINGLE ITEM IN THE COMMUNICATIONS ARRAY. 
+Do not summarize, skip, or combine items.
+The user's trust depends on seeing ALL items that were found.
+Before responding, count your numbered items - it must match the total specified.
+</critical_instruction>`;
+    }
     
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -3239,8 +3270,8 @@ ${systemMessageContent}`;
       },
       body: JSON.stringify({
         model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1000,
-        temperature: 0.7,
+        max_tokens: 4000, // Increased to ensure we don't cut off long lists
+        temperature: 0.3, // Lower temperature for more consistent following of instructions
         messages: [
           {
             role: 'user',
