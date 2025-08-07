@@ -442,9 +442,17 @@ const o365API = {
   
   async getAccessToken() {
     try {
+      console.log('[DEBUG o365API.getAccessToken] Checking existing token...');
+      
       if (this.accessToken && this.tokenExpiry && new Date() < this.tokenExpiry) {
+        console.log('[DEBUG o365API.getAccessToken] Using cached token');
         return this.accessToken;
       }
+      
+      console.log('[DEBUG o365API.getAccessToken] Getting new token...');
+      console.log('[DEBUG o365API.getAccessToken] Tenant ID present:', !!msftTenantId);
+      console.log('[DEBUG o365API.getAccessToken] Client ID present:', !!msftClientId);
+      console.log('[DEBUG o365API.getAccessToken] Client Secret present:', !!msftClientSecret);
       
       const tokenUrl = `https://login.microsoftonline.com/${msftTenantId}/oauth2/v2.0/token`;
       
@@ -465,6 +473,7 @@ const o365API = {
       
       if (!response.ok) {
         const errorText = await response.text();
+        console.error('[DEBUG o365API.getAccessToken] Auth failed:', response.status, errorText);
         throw new Error(`Microsoft auth failed: ${response.status}`);
       }
       
@@ -472,51 +481,68 @@ const o365API = {
       this.accessToken = data.access_token;
       this.tokenExpiry = new Date(Date.now() + (data.expires_in - 300) * 1000);
       
+      console.log('[DEBUG o365API.getAccessToken] Got new token, expires:', this.tokenExpiry);
+      
       return this.accessToken;
     } catch (error) {
+      console.error('[DEBUG o365API.getAccessToken] Exception:', error);
       throw error;
     }
   },
   
   async searchEmails(query, options = {}) {
     try {
+      console.log('[DEBUG o365API.searchEmails] Starting search for:', query);
+      console.log('[DEBUG o365API.searchEmails] Options:', options);
+      
       if (!msftClientId || !msftClientSecret || !msftTenantId) {
+        console.error('[DEBUG o365API.searchEmails] Missing Microsoft credentials');
         return [];
       }
       
       const accessToken = await this.getAccessToken();
+      console.log('[DEBUG o365API.searchEmails] Got access token');
+      
       const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
+      console.log('[DEBUG o365API.searchEmails] Searching emails for user:', userEmail);
       
       // If query is an array, it's pre-extracted keywords
       let searchTerms;
       if (Array.isArray(query)) {
         searchTerms = query;
       } else {
-        // Legacy support - extract keywords if string passed
-        searchTerms = await extractKeywordsForContextSearch(query);
-        if (!searchTerms.includes(query) && query.length < 50) {
-          searchTerms.push(query);
+        // For simple searches (like brand names), use the raw query
+        searchTerms = [query];
+        
+        // Only extract keywords for complex queries
+        if (query.length > 50) {
+          const extractedTerms = await extractKeywordsForContextSearch(query);
+          if (extractedTerms.length > 0) {
+            // Combine raw query with extracted terms
+            searchTerms = [...new Set([query.slice(0, 50), ...extractedTerms])];
+          }
         }
       }
       
-      // If no terms, use original query
-      if (searchTerms.length === 0 && !Array.isArray(query)) {
-        searchTerms = [query];
-      }
+      console.log('[DEBUG o365API.searchEmails] Search terms:', searchTerms);
       
       let allEmails = new Map();
       const fromDate = new Date();
-      fromDate.setDate(fromDate.getDate() - (options.days || 30));
+      fromDate.setDate(fromDate.getDate() - (options.days || 90));
       const dateFilter = fromDate.toISOString();
       
       // Search for each term
       for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
         try {
           const searchTerm = term.replace(/'/g, "''").slice(0, 50);
+          console.log(`[DEBUG o365API.searchEmails] Searching for term: "${searchTerm}"`);
+          
           // Search in both subject and body
           const filter = `receivedDateTime ge ${dateFilter} and (contains(subject,'${searchTerm}') or contains(body/content,'${searchTerm}'))`;
           
-          const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=5&$select=id,subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
+          const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=10&$select=id,subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
+          
+          console.log('[DEBUG o365API.searchEmails] Request URL:', messagesUrl);
           
           const response = await fetch(messagesUrl, {
             headers: {
@@ -527,11 +553,19 @@ const o365API = {
           
           if (response.ok) {
             const data = await response.json();
-            (data.value || []).forEach(email => allEmails.set(email.id, email));
+            console.log(`[DEBUG o365API.searchEmails] Found ${data.value?.length || 0} emails for term "${searchTerm}"`);
+            
+            (data.value || []).forEach(email => {
+              allEmails.set(email.id, email);
+              console.log(`[DEBUG o365API.searchEmails] Added email: ${email.subject} from ${email.from?.emailAddress?.address}`);
+            });
+          } else {
+            const errorText = await response.text();
+            console.error(`[DEBUG o365API.searchEmails] Failed for term "${searchTerm}":`, response.status, errorText);
           }
         } catch (error) {
           // Continue with other terms if one fails
-          console.error(`Error searching O365 for term "${term}":`, error);
+          console.error(`[DEBUG o365API.searchEmails] Error searching for term "${term}":`, error);
         }
       }
       
@@ -545,11 +579,16 @@ const o365API = {
       }));
       
       // Sort by date and limit results
-      return formattedEmails
+      const sortedEmails = formattedEmails
         .sort((a, b) => new Date(b.receivedDate) - new Date(a.receivedDate))
-        .slice(0, options.limit || 10);
+        .slice(0, options.limit || 20);
+      
+      console.log(`[DEBUG o365API.searchEmails] Returning ${sortedEmails.length} total emails`);
+      
+      return sortedEmails;
       
     } catch (error) {
+      console.error('[DEBUG o365API.searchEmails] Fatal error:', error);
       return [];
     }
   },
@@ -2189,74 +2228,88 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const { brand_name } = intent.args;
         mcpThinking.push({ type: 'start', text: `🎬 Activity retrieval detected for "${brand_name}"...` });
         
+        console.log('[DEBUG get_brand_activity] Starting search for:', brand_name);
+        
         // Search for the brand and its activity
         mcpThinking.push({ type: 'search', text: '🔍 Searching HubSpot for brand details...' });
         mcpThinking.push({ type: 'search', text: '🎙️ Searching Fireflies for meetings...' });
+        mcpThinking.push({ type: 'search', text: '✉️ Searching O365 for emails...' });
         
-        const [brand, firefliesData] = await Promise.all([
+        // Run all searches in parallel for better performance
+        const [brand, firefliesData, o365Data] = await Promise.all([
           hubspotAPI.searchSpecificBrand(brand_name),
-          firefliesApiKey ? searchFireflies(brand_name, { limit: 10 }) : { transcripts: [] }
+          firefliesApiKey ? searchFireflies(brand_name, { limit: 20 }) : { transcripts: [] },
+          msftClientId ? o365API.searchEmails(brand_name, { days: 180, limit: 20 }) : []
         ]);
+        
+        console.log('[DEBUG get_brand_activity] Brand found:', !!brand);
+        console.log('[DEBUG get_brand_activity] Meetings found:', firefliesData.transcripts?.length || 0);
+        console.log('[DEBUG get_brand_activity] Emails found:', o365Data?.length || 0);
         
         if (!brand) {
           mcpThinking.push({ type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` });
-          return { organizedData: { error: `Brand "${brand_name}" not found.` }, mcpThinking, usedMCP: true };
+          // Still return meetings and emails even if brand not in HubSpot
+        } else {
+          mcpThinking.push({ type: 'result', text: `✅ Found brand in HubSpot.` });
         }
         
-        mcpThinking.push({ type: 'result', text: `✅ Found brand in HubSpot.` });
         mcpThinking.push({ type: 'result', text: `✅ Found ${firefliesData.transcripts?.length || 0} meeting(s).` });
-        
-        // Get contacts and emails
-        mcpThinking.push({ type: 'search', text: '👥 Retrieving brand contacts...' });
-        mcpThinking.push({ type: 'search', text: '✉️ Searching O365 for emails...' });
-        
-        const [contacts, o365Data] = await Promise.all([
-            hubspotAPI.getContactsForBrand(brand.id),
-            msftClientId ? o365API.searchEmails(brand_name, { days: 90, limit: 10 }) : []
-        ]);
-        
-        mcpThinking.push({ type: 'result', text: `✅ Found ${contacts.length} contact(s).` });
         mcpThinking.push({ type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` });
+        
+        // Get contacts if brand exists
+        let contacts = [];
+        if (brand) {
+          mcpThinking.push({ type: 'search', text: '👥 Retrieving brand contacts...' });
+          contacts = await hubspotAPI.getContactsForBrand(brand.id);
+          mcpThinking.push({ type: 'result', text: `✅ Found ${contacts.length} contact(s).` });
+        }
         
         // Combine and sort all communications chronologically
         const allCommunications = [];
         
         // Add meetings with type marker
-        firefliesData.transcripts?.forEach(meeting => {
-          allCommunications.push({
-            type: 'meeting',
-            title: meeting.title || 'Untitled Meeting',
-            date: new Date(meeting.date || meeting.dateString),
-            dateString: meeting.dateString,
-            duration: meeting.duration,
-            participants: meeting.participants,
-            summary: meeting.summary,
-            url: meeting.transcript_url
+        if (firefliesData.transcripts && firefliesData.transcripts.length > 0) {
+          firefliesData.transcripts.forEach(meeting => {
+            allCommunications.push({
+              type: 'meeting',
+              title: meeting.title || 'Untitled Meeting',
+              date: new Date(meeting.date || meeting.dateString),
+              dateString: meeting.dateString,
+              duration: meeting.duration,
+              participants: meeting.participants,
+              summary: meeting.summary,
+              url: meeting.transcript_url
+            });
           });
-        });
+        }
         
         // Add emails with type marker
-        o365Data?.forEach(email => {
-          allCommunications.push({
-            type: 'email',
-            title: email.subject || 'No Subject',
-            date: new Date(email.receivedDate),
-            dateString: new Date(email.receivedDate).toLocaleDateString(),
-            from: email.from,
-            fromName: email.fromName,
-            preview: email.preview
+        if (o365Data && o365Data.length > 0) {
+          o365Data.forEach(email => {
+            allCommunications.push({
+              type: 'email',
+              title: email.subject || 'No Subject',
+              date: new Date(email.receivedDate),
+              dateString: new Date(email.receivedDate).toLocaleDateString(),
+              from: email.from,
+              fromName: email.fromName,
+              preview: email.preview
+            });
           });
-        });
+        }
         
         // Sort by date (most recent first)
         allCommunications.sort((a, b) => b.date - a.date);
         
-        mcpThinking.push({ type: 'complete', text: '✨ Activity report generated.' });
+        console.log('[DEBUG get_brand_activity] Total communications:', allCommunications.length);
+        
+        mcpThinking.push({ type: 'complete', text: `✨ Activity report generated with ${allCommunications.length} items.` });
         
         return {
           organizedData: {
             dataType: 'BRAND_ACTIVITY', 
-            brand: brand.properties,
+            searchQuery: brand_name,
+            brand: brand ? brand.properties : null,
             contacts: contacts.map(c => c.properties),
             communications: allCommunications, // Sorted chronologically
             meetings: firefliesData.transcripts || [], // Keep original for backward compatibility
