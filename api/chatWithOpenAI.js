@@ -1736,35 +1736,12 @@ function tagAndCombineBrands({ vibeBrands, activeBrands, recentBrands, wildcardC
       lastActivity: brand.properties.hs_lastmodifieddate,
       hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
       tags: ['🎯 Creative Fit'],
-      relevanceScore: 80 + Math.random() * 15,  // Add randomness to scores (80-95)
-      reason: 'Unexpected but fitting brand for this production'
+      relevanceScore: 85,  // High base score for creative matches
+      reason: 'Strong thematic alignment with production'
     });
   });
   
-  // Process random exploration brands as "Hidden Gems"
-  recentBrands.results?.forEach(brand => {
-    const id = brand.id;
-    if (!brandMap.has(id)) {
-      brandMap.set(id, {
-        source: 'hubspot',
-        id: brand.id,
-        name: brand.properties.brand_name || '',
-        category: brand.properties.main_category || 'General',
-        subcategories: brand.properties.product_sub_category__multi_ || '',
-        clientStatus: brand.properties.client_status || '',
-        clientType: brand.properties.client_type || '',
-        partnershipCount: brand.properties.partnership_count || '0',
-        dealsCount: brand.properties.deals_count || '0',
-        lastActivity: brand.properties.hs_lastmodifieddate,
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['💎 Hidden Gem'],
-        relevanceScore: 70 + Math.random() * 20,  // 70-90 random score
-        reason: 'Interesting brand worth exploring'
-      });
-    }
-  });
-  
-  // Process active brands (only the absolute top ones)
+  // Process active brands (only top performers)
   activeBrands.results?.forEach(brand => {
     const id = brand.id;
     if (!brandMap.has(id)) {
@@ -1781,11 +1758,38 @@ function tagAndCombineBrands({ vibeBrands, activeBrands, recentBrands, wildcardC
         lastActivity: brand.properties.hs_lastmodifieddate,
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['🔥 Top Partner'],
-        relevanceScore: 75,  // Lower score so they don't always appear first
-        reason: 'Proven high-value partner'
+        relevanceScore: 80,
+        reason: 'Proven high-value partner with track record'
       });
     } else {
+      // If already exists, add tag and boost score slightly
       brandMap.get(id).tags.push('🔥 Active');
+      brandMap.get(id).relevanceScore = Math.min(95, brandMap.get(id).relevanceScore + 5);
+    }
+  });
+  
+  // Process recent brands (fresh opportunities)
+  recentBrands.results?.forEach(brand => {
+    const id = brand.id;
+    if (!brandMap.has(id)) {
+      brandMap.set(id, {
+        source: 'hubspot',
+        id: brand.id,
+        name: brand.properties.brand_name || '',
+        category: brand.properties.main_category || 'General',
+        subcategories: brand.properties.product_sub_category__multi_ || '',
+        clientStatus: brand.properties.client_status || '',
+        clientType: brand.properties.client_type || '',
+        partnershipCount: brand.properties.partnership_count || '0',
+        dealsCount: brand.properties.deals_count || '0',
+        lastActivity: brand.properties.hs_lastmodifieddate,
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+        tags: ['✨ Fresh Lead'],
+        relevanceScore: 70,
+        reason: 'Recently engaged - timing opportunity'
+      });
+    } else {
+      brandMap.get(id).tags.push('✨ Recent');
     }
   });
   
@@ -1798,28 +1802,17 @@ function tagAndCombineBrands({ vibeBrands, activeBrands, recentBrands, wildcardC
         name: `[Explore: ${category}]`,
         category: category,
         tags: ['💡 Wildcard Idea'],
-        relevanceScore: 60 + Math.random() * 10,  // 60-70
+        relevanceScore: 65,
         reason: 'Creative category worth exploring',
         isWildcard: true
       });
     });
   }
   
-  // Convert to array, shuffle a bit for variety, then sort by relevance
-  const brandsArray = Array.from(brandMap.values());
-  
-  // Partial shuffle - swap some positions randomly for variety
-  for (let i = 0; i < brandsArray.length; i++) {
-    if (Math.random() > 0.7) { // 30% chance to swap
-      const j = Math.floor(Math.random() * brandsArray.length);
-      [brandsArray[i], brandsArray[j]] = [brandsArray[j], brandsArray[i]];
-    }
-  }
-  
-  // Sort by relevance but with some randomness preserved
-  return brandsArray
+  // Convert to array and sort by relevance
+  return Array.from(brandMap.values())
     .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, 25);
+    .slice(0, 25); // Increased to 25 for more variety
 }
 
 async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext) {
@@ -1904,62 +1897,24 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         mcpThinking.push({ type: 'search', text: '💡 Creative wildcards (unexpected ideas)...' });
         
         const [vibeBrands, activeBrands, recentBrands, wildcardCategories] = await Promise.all([
-          // List 1 (PRIMARY): Genre/vibe matched brands - with RANDOMIZATION
+          // List 1 (PRIMARY): Genre/vibe matched brands - INCREASED to 15
           withTimeout(
-            (async () => {
-              // First, get a larger pool of brands
-              const allBrands = await hubspotAPI.searchBrands({
-                limit: 100,  // Get a big pool
-                filterGroups: [{
-                  filters: [
-                    { propertyName: 'client_status', operator: 'IN', values: ['Active', 'In Negotiation', 'Contract', 'Pending'] }
-                  ]
-                }]
-              });
-              
-              // Shuffle the results to get variety
-              const shuffled = (allBrands.results || []).sort(() => Math.random() - 0.5);
-              
-              // Filter for potential genre matches based on the synopsis
-              const genre = extractGenreFromSynopsis(search_term);
-              const filtered = shuffled.filter(brand => {
-                const category = (brand.properties.main_category || '').toLowerCase();
-                const subcats = (brand.properties.product_sub_category__multi_ || '').toLowerCase();
-                
-                // Skip the "usual suspects" that always show up
-                const brandName = (brand.properties.brand_name || '').toLowerCase();
-                const commonBrands = ['king\'s hawaiian', 'govee', 'pilot pen', 'st. dalfour', 'clicks'];
-                if (commonBrands.some(common => brandName.includes(common))) {
-                  return false;
-                }
-                
-                // Look for interesting category matches
-                if (genre === 'sports' || genre === 'action') {
-                  return category.includes('wellness') || category.includes('nutrition') || 
-                         category.includes('outdoor') || subcats.includes('adventure');
-                }
-                if (genre === 'romance' || genre === 'drama') {
-                  return category.includes('hospitality') || category.includes('travel') || 
-                         category.includes('experience') || subcats.includes('luxury');
-                }
-                // Add some randomness for unexpected matches
-                return Math.random() > 0.7; // 30% chance for any brand to be included
-              });
-              
-              return { results: filtered.slice(0, 15) };
-            })(),
+            hubspotAPI.searchBrands({
+              query: search_term,
+              limit: 15  // Increased from 10 to prioritize creative fit
+            }),
             7000,
             { results: [] }
           ),
           
-          // List 2: Only TOP active high-value clients - DECREASED to 2
+          // List 2: Only TOP active high-value clients - DECREASED to 4
           withTimeout(
             hubspotAPI.searchBrands({
-              limit: 2,  // Further decreased
+              limit: 4,  // Decreased from 8 to avoid repetition
               filterGroups: [{
                 filters: [
                   { propertyName: 'client_status', operator: 'IN', values: ['Active', 'Contract'] },
-                  { propertyName: 'partnership_count', operator: 'GTE', value: '10' }  // Higher threshold
+                  { propertyName: 'partnership_count', operator: 'GTE', value: '5' }  // Increased threshold
                 ]
               }],
               sorts: [{ propertyName: 'deals_count', direction: 'DESCENDING' }]
@@ -1968,24 +1923,17 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             { results: [] }
           ),
           
-          // List 3: Random exploration brands - NEW APPROACH
+          // List 3: Only NEWEST additions - DECREASED to 3
           withTimeout(
-            (async () => {
-              // Get random brands from different categories
-              const categories = ['Entertainment', 'Technology', 'Health & Beauty', 'Food & Beverage', 
-                                 'Fashion & Apparel', 'Automotive', 'Home & Garden', 'Sports & Fitness'];
-              const randomCat = categories[Math.floor(Math.random() * categories.length)];
-              
-              return await hubspotAPI.searchBrands({
-                limit: 5,
-                filterGroups: [{
-                  filters: [
-                    { propertyName: 'main_category', operator: 'EQ', value: randomCat }
-                  ]
-                }],
-                sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
-              });
-            })(),
+            hubspotAPI.searchBrands({
+              limit: 3,  // Decreased from 6 to focus on truly new
+              filterGroups: [{
+                filters: [
+                  { propertyName: 'client_status', operator: 'IN', values: ['Active', 'In Negotiation', 'Pending'] }
+                ]
+              }],
+              sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
+            }),
             5000,
             { results: [] }
           ),
@@ -1993,9 +1941,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           // List 4: Creative wildcard suggestions - Optional
           openAIApiKey ? withTimeout(
             generateWildcardBrands(search_term),
-            4000,
-            []
-          ) : Promise.resolve([])
+            4000,  // Reduced from 8000 to 4000ms
+            []  // Return empty array if it times out
+          ) : Promise.resolve([])  // Skip if no OpenAI key
         ]);
 
         // Report results with new priority
