@@ -1668,6 +1668,93 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
   }
 }
 
+// Helper function to find golden nuggets - specific quotes about brands
+function findGoldenNuggets(brands, meetings, emails) {
+  const nuggets = {};
+  const insightKeywords = ['budget', 'interested', 'challenge', 'timeline', 'deal', 'next steps', 'excited', 'concern', 'approved', 'contract', 'partnership', 'integration'];
+  
+  // Process each brand
+  brands.forEach(brand => {
+    if (!brand.name || brand.isWildcard) return;
+    
+    const brandName = brand.name.toLowerCase();
+    const brandNuggets = [];
+    
+    // Search in meetings
+    meetings?.forEach(meeting => {
+      if (meeting.summary?.overview) {
+        const overview = meeting.summary.overview.toLowerCase();
+        if (overview.includes(brandName)) {
+          // Look for insight keywords near the brand mention
+          insightKeywords.forEach(keyword => {
+            if (overview.includes(keyword)) {
+              // Extract a sentence containing both brand and keyword
+              const sentences = meeting.summary.overview.split(/[.!?]+/);
+              const relevantSentence = sentences.find(s => 
+                s.toLowerCase().includes(brandName) && s.toLowerCase().includes(keyword)
+              );
+              
+              if (relevantSentence && relevantSentence.trim().length > 20) {
+                brandNuggets.push({
+                  type: 'meeting',
+                  source: 'Fireflies',
+                  text: relevantSentence.trim(),
+                  url: meeting.transcript_url || '#',
+                  title: meeting.title || 'Recent Meeting',
+                  date: meeting.dateString
+                });
+                return; // One nugget per meeting is enough
+              }
+            }
+          });
+        }
+      }
+      
+      // Also check action items for the brand
+      if (meeting.summary?.action_items?.length > 0) {
+        meeting.summary.action_items.forEach(item => {
+          if (item.toLowerCase().includes(brandName)) {
+            brandNuggets.push({
+              type: 'action',
+              source: 'Fireflies',
+              text: `Action Item: ${item}`,
+              url: meeting.transcript_url || '#',
+              title: meeting.title || 'Recent Meeting',
+              date: meeting.dateString
+            });
+          }
+        });
+      }
+    });
+    
+    // Search in emails (limit to most relevant)
+    emails?.slice(0, 10).forEach(email => {
+      const preview = (email.preview || '').toLowerCase();
+      const subject = (email.subject || '').toLowerCase();
+      
+      if (preview.includes(brandName) || subject.includes(brandName)) {
+        // Extract relevant snippet
+        const snippet = email.preview?.slice(0, 150) || subject;
+        brandNuggets.push({
+          type: 'email',
+          source: 'O365',
+          text: snippet.trim() + '...',
+          from: email.fromName || email.from,
+          date: email.receivedDate,
+          subject: email.subject
+        });
+      }
+    });
+    
+    // Store nuggets for this brand (max 3 per brand)
+    if (brandNuggets.length > 0) {
+      nuggets[brand.id] = brandNuggets.slice(0, 3);
+    }
+  });
+  
+  return nuggets;
+}
+
 // Helper function to generate wildcard/creative brand suggestions
 async function generateWildcardBrands(synopsis) {
   if (!openAIApiKey) return [];
@@ -2020,34 +2107,47 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         if (firefliesApiKey || msftClientId) {
           mcpThinking.push({ type: 'search', text: '📧 Checking for related communications...' });
-          const contextKeywords = await extractKeywordsForContextSearch(search_term);
           
-          const [firefliesData, emailData] = await Promise.all([
-            firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 5 }), 5000, { transcripts: [] }) : { transcripts: [] },
-            msftClientId ? withTimeout(o365API.searchEmails(contextKeywords, { days: 90, limit: 10 }), 5000, []) : []
-          ]);
-          
-          supportingContext = {
-            meetings: firefliesData.transcripts || [],
-            emails: emailData || []
-          };
-          
-          // Extract golden nuggets from the context
-          if (taggedBrands.length > 0) {
-            goldenNuggets = findGoldenNuggets(taggedBrands, supportingContext.meetings, supportingContext.emails);
+          try {
+            const contextKeywords = await extractKeywordsForContextSearch(search_term);
             
-            // Attach insights to each brand
-            taggedBrands.forEach(brand => {
-              if (goldenNuggets[brand.id]) {
-                brand.insights = goldenNuggets[brand.id];
-              }
-            });
+            const [firefliesData, emailData] = await Promise.all([
+              firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 5 }), 5000, { transcripts: [] }) : { transcripts: [] },
+              msftClientId ? withTimeout(o365API.searchEmails(contextKeywords, { days: 90, limit: 10 }), 5000, []) : []
+            ]);
+            
+            supportingContext = {
+              meetings: firefliesData.transcripts || [],
+              emails: emailData || []
+            };
+            
+            // Extract golden nuggets from the context
+            if (taggedBrands.length > 0) {
+              goldenNuggets = findGoldenNuggets(taggedBrands, supportingContext.meetings, supportingContext.emails);
+              
+              // Attach insights to each brand
+              taggedBrands.forEach(brand => {
+                if (goldenNuggets[brand.id]) {
+                  brand.insights = goldenNuggets[brand.id];
+                  brand.hasRealInsights = true;
+                } else {
+                  brand.hasRealInsights = false;
+                }
+              });
+            }
+            
+            const totalInsights = Object.values(goldenNuggets).flat().length;
+            if (totalInsights > 0) {
+              mcpThinking.push({ type: 'result', text: `💎 Found ${totalInsights} specific insights about brands` });
+            } else {
+              mcpThinking.push({ type: 'result', text: `📭 No specific brand mentions found in recent communications` });
+            }
+          } catch (error) {
+            console.error('[DEBUG] Error extracting insights:', error);
+            mcpThinking.push({ type: 'error', text: '⚠️ Could not extract communication insights (will proceed without)' });
           }
-          
-          const totalInsights = Object.values(goldenNuggets).flat().length;
-          if (totalInsights > 0) {
-            mcpThinking.push({ type: 'result', text: `💎 Found ${totalInsights} specific insights about brands` });
-          }
+        } else {
+          mcpThinking.push({ type: 'info', text: '📭 Communication search disabled (no API keys configured)' });
         }
 
         mcpThinking.push({ type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` });
@@ -2811,13 +2911,19 @@ export default async function handler(req, res) {
               let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
               systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
 
-**CRITICAL RULE: If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT, under any circumstances, invent or hallucinate information, brands, or meeting details.**
+**CRITICAL RULES:**
+1. If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT invent or hallucinate information.
+2. **NEVER fabricate insights, meetings, or emails.** If a brand has no "insights" field or hasRealInsights is false, DO NOT make up quotes or claim there were meetings/emails about that brand.
+3. Only mention specific insights if they exist in the "insights" array for that brand.
+4. If no insights exist, you can say something like "This is a new outbound suggestion" or "No recent activity found for this brand."
 
 For brand recommendations, organize your response clearly:
 - Start with a brief overview of what was found
 - Group brands by their tags (Active Clients, Hidden Gems, Creative Fits, etc.)
 - For each brand, mention key details like status, category, and why it's relevant
-- **If a brand has "insights" in the data, include specific quotes or mentions using blockquotes (>) to highlight them**
+- **Only include specific quotes or mentions if the brand has real insights in the data**
+- If a brand has insights, use blockquotes (>) to highlight them
+- If a brand has no insights, be honest about it being a fresh suggestion
 - Reference meeting titles naturally when insights come from Fireflies (but don't create URLs)
 - If there are wildcard suggestions, explain these are creative ideas to explore
 
