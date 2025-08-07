@@ -2302,6 +2302,16 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         allCommunications.sort((a, b) => b.date - a.date);
         
         console.log('[DEBUG get_brand_activity] Total communications:', allCommunications.length);
+        console.log('[DEBUG get_brand_activity] Communications breakdown:');
+        allCommunications.forEach((comm, index) => {
+          console.log(`  ${index + 1}. [${comm.type}] ${comm.title} - ${comm.dateString}`);
+        });
+        
+        // Verify data integrity
+        const meetingCount = allCommunications.filter(c => c.type === 'meeting').length;
+        const emailCount = allCommunications.filter(c => c.type === 'email').length;
+        console.log('[DEBUG get_brand_activity] Verification - Meetings in communications:', meetingCount);
+        console.log('[DEBUG get_brand_activity] Verification - Emails in communications:', emailCount);
         
         mcpThinking.push({ type: 'complete', text: `✨ Activity report generated with ${allCommunications.length} items.` });
         
@@ -3019,32 +3029,45 @@ export default async function handler(req, res) {
                 systemMessageContent += `\n\nYou have retrieved activity data for a brand. Format your response EXACTLY as follows:
 
 **CRITICAL FORMATTING RULES:**
-1. Start with a brief summary line
-2. List ALL communications in chronological order (most recent first)
-3. Use this EXACT format for each item:
-   - For meetings: "1. [Meeting Title] - [Date]"
-     • Key points from meeting...
-   - For emails: "2. [Email Subject] - [Date]"  
-     • Email preview or key points...
-4. End with a "Key Contacts:" section listing all contacts
+1. Start with "Based on the search results, here's the activity summary for [Brand Name]:"
+2. You MUST include ALL items from the "communications" array - DO NOT skip any
+3. List them in the EXACT order they appear in the communications array (already sorted by date)
+4. Use this EXACT format for each item:
+   - Number each item sequentially (1., 2., 3., etc.)
+   - **IMPORTANT**: Start each item with [MEETING] or [EMAIL] marker
+   - Format: "1. [MEETING] Title - Date" or "1. [EMAIL] Subject - Date"
+   - Add bullet points with relevant details
+5. End with a "Key Contacts:" section if contacts exist
 
-**TEMPLATE:**
+**CRITICAL**: The communications array contains ${structuredData.communications?.length || 0} items. 
+You MUST display ALL ${structuredData.communications?.length || 0} items. 
+DO NOT summarize, skip, or omit ANY items.
+
+**EXAMPLE FORMAT:**
 Based on the search results, here's the activity summary for [Brand Name]:
 
-1. [Most Recent Meeting/Email Title] - [Date]
-   • Details about this communication...
-   • Another relevant point...
+1. [MEETING] MTG: Kings Hawaiian - Happy Gilmore 2 Touch Base - 7/28/2025
+   • Discussion about unsatisfactory Netflix product placement
+   • $350,000 investment concerns due to poor brand visibility
 
-2. [Next Meeting/Email Title] - [Date]
-   • Details about this communication...
+2. [EMAIL] RE: Partnership Opportunity - 7/15/2025
+   • Follow-up from marketing director
+   • Interested in Q3 campaign integration
 
-[Continue for all items...]
+3. [MEETING] Kings Hawaiian x Happy Gilmore 2 Next Steps - 10/25/2024
+   • Project planning and process development meeting
+   • $500k deal amount update in HubSpot
+
+[Continue for ALL ${structuredData.communications?.length || 0} items...]
 
 Key Contacts:
-- [Contact Name 1] - [Title if available]
-- [Contact Name 2] - [Title if available]
+- [Contact Name] - [Title if available]
 
-**DO NOT** reorganize by type (meetings vs emails). Keep everything in chronological order.`;
+**REMEMBER**: 
+- Each meeting MUST start with [MEETING]
+- Each email MUST start with [EMAIL]
+- You found ${structuredData.meetings?.length || 0} meetings and ${structuredData.emails?.length || 0} emails
+- ALL of these MUST be displayed with their type markers`;
               } else {
                 systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
 
@@ -3062,6 +3085,20 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               systemMessageContent += '\n\n```json\n';
               systemMessageContent += JSON.stringify(structuredData, null, 2);
               systemMessageContent += '\n```';
+              
+              // Add verification instruction for BRAND_ACTIVITY
+              if (structuredData.dataType === 'BRAND_ACTIVITY') {
+                const totalItems = structuredData.communications?.length || 0;
+                const meetingCount = structuredData.meetings?.length || 0;
+                const emailCount = structuredData.emails?.length || 0;
+                
+                systemMessageContent += `\n\n**FINAL VERIFICATION**: 
+                - The data contains ${totalItems} total communications
+                - ${meetingCount} meetings and ${emailCount} emails
+                - You MUST display ALL ${totalItems} items
+                - Each item MUST be numbered sequentially (1 through ${totalItems})
+                - DO NOT skip any items or you will lose user trust`;
+              }
 
               aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
               console.log('[DEBUG] Claude response received');
@@ -3091,7 +3128,14 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
                   reply: aiReply,
                   structuredData: structuredData,
                   mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
-                  usedMCP: usedMCP
+                  usedMCP: usedMCP,
+                  // Add metadata for frontend parsing (only for BRAND_ACTIVITY)
+                  activityMetadata: structuredData?.dataType === 'BRAND_ACTIVITY' ? {
+                    totalCommunications: structuredData.communications?.length || 0,
+                    meetingCount: structuredData.communications?.filter(c => c.type === 'meeting').length || 0,
+                    emailCount: structuredData.communications?.filter(c => c.type === 'email').length || 0,
+                    communications: structuredData.communications // Raw data with type field
+                  } : null
               });
           } else {
               console.error('[DEBUG] No AI reply received');
