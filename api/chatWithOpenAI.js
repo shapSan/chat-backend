@@ -864,17 +864,15 @@ async function extractKeywordsForHubSpot(synopsis) {
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [
-          { role: 'system', content: "Extract 2-3 single-word search terms that would find relevant brands in a database. For Winter Olympics/sports: try 'athletic' 'performance' 'winter'. For romance: try 'fashion' 'beauty' 'lifestyle'. For tech thriller: try 'technology' 'security' 'innovation'. Return ONLY single words separated by spaces, no phrases." },
-          { role: 'user', content: synopsis.slice(0, 300) }
+          { role: 'system', content: "Analyze this production synopsis and identify 3-5 brand categories that would resonate with its audience. Think about: What brands would viewers of this content naturally gravitate toward? What lifestyle/aspirations does this story represent? What demographic psychographics emerge? Return ONLY category keywords that brands use, separated by spaces. Be specific and insightful - go beyond obvious genre matches to find authentic brand-audience alignment." },
+          { role: 'user', content: synopsis }
         ],
         temperature: 0.3,
-        max_tokens: 20
+        max_tokens: 40
       }),
     });
     const data = await response.json();
-    const keywords = data.choices[0].message.content.trim();
-    // Ensure we're returning single words, not phrases
-    return keywords.split(' ').filter(word => !word.includes('_') && word.length > 2).slice(0, 3).join(' ');
+    return data.choices[0].message.content.trim();
   } catch (error) {
     return '';
   }
