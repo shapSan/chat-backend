@@ -3110,7 +3110,11 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
                 - ${meetingCount} meetings and ${emailCount} emails
                 - You MUST display ALL ${totalItems} items
                 - Each item MUST be numbered sequentially (1 through ${totalItems})
-                - DO NOT skip any items or you will lose user trust`;
+                - Meetings with URLs must use: [MEETING url="exact_url_from_data"]
+                - Meetings without URLs must use: [MEETING]
+                - Emails always use: [EMAIL]
+                - DO NOT skip any items or you will lose user trust
+                - DO NOT modify or shorten the URLs - use them exactly as provided`;
               }
 
               aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
