@@ -1804,636 +1804,217 @@ async function generateWildcardBrands(synopsis) {
 }
 
 // Helper function to tag and combine brands from different sources
-function tagAndCombineBrands({ vibeBrands, activeBrands, recentBrands, wildcardCategories }) {
-  const brandMap = new Map();
-  
-  // Process vibe-matched brands FIRST (highest priority for variety)
-  vibeBrands.results?.forEach(brand => {
-    const id = brand.id;
-    brandMap.set(id, {
-      source: 'hubspot',
-      id: brand.id,
-      name: brand.properties.brand_name || '',
-      category: brand.properties.main_category || 'General',
-      subcategories: brand.properties.product_sub_category__multi_ || '',
-      clientStatus: brand.properties.client_status || '',
-      clientType: brand.properties.client_type || '',
-      partnershipCount: brand.properties.partnership_count || '0',
-      dealsCount: brand.properties.deals_count || '0',
-      lastActivity: brand.properties.hs_lastmodifieddate,
-      hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-      tags: ['🎯 Creative Fit'],
-      relevanceScore: 80 + Math.random() * 15,  // Add randomness to scores (80-95)
-      reason: 'Unexpected but fitting brand for this production'
-    });
-  });
-  
-  // Process random exploration brands as "Hidden Gems"
-  recentBrands.results?.forEach(brand => {
-    const id = brand.id;
-    if (!brandMap.has(id)) {
-      brandMap.set(id, {
-        source: 'hubspot',
-        id: brand.id,
-        name: brand.properties.brand_name || '',
-        category: brand.properties.main_category || 'General',
-        subcategories: brand.properties.product_sub_category__multi_ || '',
-        clientStatus: brand.properties.client_status || '',
-        clientType: brand.properties.client_type || '',
-        partnershipCount: brand.properties.partnership_count || '0',
-        dealsCount: brand.properties.deals_count || '0',
-        lastActivity: brand.properties.hs_lastmodifieddate,
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['💎 Hidden Gem'],
-        relevanceScore: 70 + Math.random() * 20,  // 70-90 random score
-        reason: 'Interesting brand worth exploring'
-      });
-    }
-  });
-  
-  // Process active brands (only the absolute top ones)
-  activeBrands.results?.forEach(brand => {
-    const id = brand.id;
-    if (!brandMap.has(id)) {
-      brandMap.set(id, {
-        source: 'hubspot',
-        id: brand.id,
-        name: brand.properties.brand_name || '',
-        category: brand.properties.main_category || 'General',
-        subcategories: brand.properties.product_sub_category__multi_ || '',
-        clientStatus: brand.properties.client_status || '',
-        clientType: brand.properties.client_type || '',
-        partnershipCount: brand.properties.partnership_count || '0',
-        dealsCount: brand.properties.deals_count || '0',
-        lastActivity: brand.properties.hs_lastmodifieddate,
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['🔥 Top Partner'],
-        relevanceScore: 75,  // Lower score so they don't always appear first
-        reason: 'Proven high-value partner'
-      });
-    } else {
-      brandMap.get(id).tags.push('🔥 Active');
-    }
-  });
-  
-  // Add wildcard category suggestions
-  if (wildcardCategories && wildcardCategories.length > 0) {
-    wildcardCategories.forEach((category, index) => {
-      brandMap.set(`wildcard_${index}`, {
-        source: 'suggestion',
-        id: `wildcard_${index}`,
-        name: `[Explore: ${category}]`,
-        category: category,
-        tags: ['💡 Wildcard Idea'],
-        relevanceScore: 60 + Math.random() * 10,  // 60-70
-        reason: 'Creative category worth exploring',
-        isWildcard: true
-      });
-    });
-  }
-  
-  // Convert to array, shuffle a bit for variety, then sort by relevance
-  const brandsArray = Array.from(brandMap.values());
-  
-  // Partial shuffle - swap some positions randomly for variety
-  for (let i = 0; i < brandsArray.length; i++) {
-    if (Math.random() > 0.7) { // 30% chance to swap
-      const j = Math.floor(Math.random() * brandsArray.length);
-      [brandsArray[i], brandsArray[j]] = [brandsArray[j], brandsArray[i]];
-    }
-  }
-  
-  // Sort by relevance but with some randomness preserved
-  return brandsArray
-    .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, 25);
+// Helper function to tag and combine brands from different sources
+function tagAndCombineBrands({ vibeBrands, activeBrands, recentBrands, wildcardBrands }) {
+  const brandMap = new Map();
+  
+  // Process vibe-matched brands FIRST (highest priority for variety)
+  vibeBrands.results?.forEach(brand => {
+    const id = brand.id;
+    brandMap.set(id, {
+      source: 'hubspot',
+      id: brand.id,
+      name: brand.properties.brand_name || '',
+      category: brand.properties.main_category || 'General',
+      subcategories: brand.properties.product_sub_category__multi_ || '',
+      clientStatus: brand.properties.client_status || '',
+      clientType: brand.properties.client_type || '',
+      partnershipCount: brand.properties.partnership_count || '0',
+      dealsCount: brand.properties.deals_count || '0',
+      lastActivity: brand.properties.hs_lastmodifieddate,
+      hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+      tags: ['🎯 Creative Fit'],
+      relevanceScore: 80 + Math.random() * 15,  // Add randomness to scores (80-95)
+      reason: 'Unexpected but fitting brand for this production'
+    });
+  });
+  
+  // Process random exploration brands as "Hidden Gems"
+  recentBrands.results?.forEach(brand => {
+    const id = brand.id;
+    if (!brandMap.has(id)) {
+      brandMap.set(id, {
+        source: 'hubspot',
+        id: brand.id,
+        name: brand.properties.brand_name || '',
+        category: brand.properties.main_category || 'General',
+        subcategories: brand.properties.product_sub_category__multi_ || '',
+        clientStatus: brand.properties.client_status || '',
+        clientType: brand.properties.client_type || '',
+        partnershipCount: brand.properties.partnership_count || '0',
+        dealsCount: brand.properties.deals_count || '0',
+        lastActivity: brand.properties.hs_lastmodifieddate,
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+        tags: ['💎 Hidden Gem'],
+        relevanceScore: 70 + Math.random() * 20,  // 70-90 random score
+        reason: 'Interesting brand worth exploring'
+      });
+    }
+  });
+  
+  // Process active brands (only the absolute top ones)
+  activeBrands.results?.forEach(brand => {
+    const id = brand.id;
+    if (!brandMap.has(id)) {
+      brandMap.set(id, {
+        source: 'hubspot',
+        id: brand.id,
+        name: brand.properties.brand_name || '',
+        category: brand.properties.main_category || 'General',
+        subcategories: brand.properties.product_sub_category__multi_ || '',
+        clientStatus: brand.properties.client_status || '',
+        clientType: brand.properties.client_type || '',
+        partnershipCount: brand.properties.partnership_count || '0',
+        dealsCount: brand.properties.deals_count || '0',
+        lastActivity: brand.properties.hs_lastmodifieddate,
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+        tags: ['🔥 Top Partner'],
+        relevanceScore: 75,  // Lower score so they don't always appear first
+        reason: 'Proven high-value partner'
+      });
+    } else {
+      brandMap.get(id).tags.push('🔥 Active');
+    }
+  });
+  
+  // Add wildcard brand suggestions (now handles full objects)
+  if (wildcardBrands && wildcardBrands.length > 0) {
+    wildcardBrands.forEach((brand, index) => {
+      brandMap.set(`wildcard_${index}`, {
+        source: 'suggestion',
+        id: `wildcard_${index}`,
+        name: brand.name || `[Explore: ${brand.category}]`,
+        category: brand.category || 'Creative Suggestion',
+        tags: ['💡 Wildcard Idea'],
+        relevanceScore: 60 + Math.random() * 10, // 60-70
+        reason: brand.reason || 'Creative suggestion worth exploring',
+        isWildcard: true
+      });
+    });
+  }
+  
+  // Convert to array, shuffle a bit for variety, then sort by relevance
+  const brandsArray = Array.from(brandMap.values());
+  
+  // Partial shuffle - swap some positions randomly for variety
+  for (let i = 0; i < brandsArray.length; i++) {
+    if (Math.random() > 0.7) { // 30% chance to swap
+      const j = Math.floor(Math.random() * brandsArray.length);
+      [brandsArray[i], brandsArray[j]] = [brandsArray[j], brandsArray[i]];
+    }
+  }
+  
+  // Sort by relevance but with some randomness preserved
+  return brandsArray
+    .sort((a, b) => b.relevanceScore - a.relevanceScore)
+    .slice(0, 25);
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext) {
-  if (!anthropicApiKey) return null;
-  
-  let intent;
-  
-  // --- Synopsis Detector: Foolproof detection for new project submissions ---
-  const messageLower = userMessage.toLowerCase();
-  const synopsisIndicators = [
-    'synopsis:',
-    'starting fee:',
-    'distributor:',
-    'cast:',
-    'brand opps'
-  ];
-  
-  // Check if this is clearly a new project/synopsis submission
-  const isSynopsis = synopsisIndicators.some(indicator => messageLower.includes(indicator));
-  
-  if (isSynopsis) {
-    // FORCE the find_brands tool for synopsis submissions
-    console.log('[DEBUG handleClaudeSearch] Synopsis detected via keyword match - forcing find_brands tool');
-    intent = {
-      tool: 'find_brands',
-      args: { search_term: userMessage }
-    };
-  } else {
-    // For all other messages, let the AI Router decide
-    console.log('[DEBUG handleClaudeSearch] Not a synopsis - using AI router');
-    intent = await routeUserIntent(userMessage, conversationContext, lastProductionContext);
+// Helper function to tag and combine brands from different sources
+function tagAndCombineBrands({ vibeBrands, activeBrands, recentBrands, wildcardBrands }) {
+    const brandMap = new Map();
+    
+    // Process vibe-matched brands FIRST (highest priority for variety)
+    vibeBrands.results?.forEach(brand => {
+      const id = brand.id;
+      brandMap.set(id, {
+        source: 'hubspot',
+        id: brand.id,
+        name: brand.properties.brand_name || '',
+        category: brand.properties.main_category || 'General',
+        subcategories: brand.properties.product_sub_category__multi_ || '',
+        clientStatus: brand.properties.client_status || '',
+        clientType: brand.properties.client_type || '',
+        partnershipCount: brand.properties.partnership_count || '0',
+        dealsCount: brand.properties.deals_count || '0',
+        lastActivity: brand.properties.hs_lastmodifieddate,
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+        tags: ['🎯 Creative Fit'],
+        relevanceScore: 80 + Math.random() * 15,  // Add randomness to scores (80-95)
+        reason: 'Unexpected but fitting brand for this production'
+      });
+    });
+    
+    // Process random exploration brands as "Hidden Gems"
+    recentBrands.results?.forEach(brand => {
+      const id = brand.id;
+      if (!brandMap.has(id)) {
+        brandMap.set(id, {
+          source: 'hubspot',
+          id: brand.id,
+          name: brand.properties.brand_name || '',
+          category: brand.properties.main_category || 'General',
+          subcategories: brand.properties.product_sub_category__multi_ || '',
+          clientStatus: brand.properties.client_status || '',
+          clientType: brand.properties.client_type || '',
+          partnershipCount: brand.properties.partnership_count || '0',
+          dealsCount: brand.properties.deals_count || '0',
+          lastActivity: brand.properties.hs_lastmodifieddate,
+          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+          tags: ['💎 Hidden Gem'],
+          relevanceScore: 70 + Math.random() * 20,  // 70-90 random score
+          reason: 'Interesting brand worth exploring'
+        });
+      }
+    });
+    
+    // Process active brands (only the absolute top ones)
+    activeBrands.results?.forEach(brand => {
+      const id = brand.id;
+      if (!brandMap.has(id)) {
+        brandMap.set(id, {
+          source: 'hubspot',
+          id: brand.id,
+          name: brand.properties.brand_name || '',
+          category: brand.properties.main_category || 'General',
+          subcategories: brand.properties.product_sub_category__multi_ || '',
+          clientStatus: brand.properties.client_status || '',
+          clientType: brand.properties.client_type || '',
+          partnershipCount: brand.properties.partnership_count || '0',
+          dealsCount: brand.properties.deals_count || '0',
+          lastActivity: brand.properties.hs_lastmodifieddate,
+          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+          tags: ['🔥 Top Partner'],
+          relevanceScore: 75,  // Lower score so they don't always appear first
+          reason: 'Proven high-value partner'
+        });
+      } else {
+        brandMap.get(id).tags.push('🔥 Active');
+      }
+    });
+    
+    // Add wildcard brand suggestions (now handles full objects)
+    if (wildcardBrands && wildcardBrands.length > 0) {
+      wildcardBrands.forEach((brand, index) => {
+        brandMap.set(`wildcard_${index}`, {
+          source: 'suggestion',
+          id: `wildcard_${index}`,
+          name: brand.name || `[Explore: ${brand.category}]`,
+          category: brand.category || 'Creative Suggestion',
+          tags: ['💡 Wildcard Idea'],
+          relevanceScore: 60 + Math.random() * 10, // 60-70
+          reason: brand.reason || 'Creative suggestion worth exploring',
+          isWildcard: true
+        });
+      });
+    }
+    
+    // Convert to array, shuffle a bit for variety, then sort by relevance
+    const brandsArray = Array.from(brandMap.values());
+    
+    // Partial shuffle - swap some positions randomly for variety
+    for (let i = 0; i < brandsArray.length; i++) {
+      if (Math.random() > 0.7) { // 30% chance to swap
+        const j = Math.floor(Math.random() * brandsArray.length);
+        [brandsArray[i], brandsArray[j]] = [brandsArray[j], brandsArray[i]];
+      }
+    }
+    
+    // Sort by relevance but with some randomness preserved
+    return brandsArray
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, 25);
   }
-  // --- End of Synopsis Detector ---
-  
-  if (!intent || intent.tool === 'answer_general_question') return null;
-
-  const mcpThinking = [];
-  console.log('[DEBUG handleClaudeSearch] Tool selected:', intent.tool);
-
-  try {
-    switch (intent.tool) {
-      case 'find_brands': {
-        const { search_term } = intent.args;
-        
-        // Simple keyword search (under 50 chars)
-        if (search_term.length < 50) {
-          mcpThinking.push({ type: 'start', text: `🔍 Searching for brands matching "${search_term}"...` });
-          const brandsData = await hubspotAPI.searchBrands({ query: search_term, limit: 15 });
-          mcpThinking.push({ type: 'complete', text: `✅ Found ${brandsData.results.length} brands.` });
-          
-          return {
-            organizedData: {
-              dataType: 'BRAND_SEARCH_RESULTS',
-              searchQuery: search_term,
-              brandSuggestions: brandsData.results.map(b => ({
-                id: b.id,
-                name: b.properties.brand_name || '',
-                category: b.properties.main_category || 'General',
-                subcategories: b.properties.product_sub_category__multi_ || '',
-                clientStatus: b.properties.client_status || '',
-                partnershipCount: b.properties.partnership_count || '0',
-                hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`
-              }))
-            },
-            mcpThinking,
-            usedMCP: true
-          };
-        }
-
-        // Full "Four Lists" Synopsis Search
-        mcpThinking.push({ type: 'start', text: '🎬 Synopsis detected. Building diverse recommendations...' });
-        
-        // Extract genre for better matching
-        const genre = extractGenreFromSynopsis(search_term);
-        mcpThinking.push({ type: 'process', text: `📊 Detected genre: ${genre || 'general'}` });
-        
-        // Launch parallel searches for the four lists
-        console.log('[DEBUG handleClaudeSearch] Starting parallel searches...');
-        mcpThinking.push({ type: 'search', text: '🎯 Priority: Genre-matched brands (creative fit)...' });
-        mcpThinking.push({ type: 'search', text: '🔥 Top active clients (proven partners)...' });
-        mcpThinking.push({ type: 'search', text: '✨ Recent opportunities (fresh leads)...' });
-        mcpThinking.push({ type: 'search', text: '💡 Creative wildcards (unexpected ideas)...' });
-        
-        // Add delay function to respect rate limits
-        const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-        
-        // Extract keywords from synopsis for better searching
-        const keywords = await extractKeywordsForContextSearch(search_term);
-        const searchQuery = keywords.length > 0 ? keywords.slice(0, 3).join(' ') : search_term.slice(0, 100);
-        console.log('[DEBUG] Extracted keywords:', searchQuery);
-        
-        // Execute searches sequentially with delays to avoid rate limits
-        let vibeBrands, demographicBrands, activeBrands, wildcardBrands;
-        
-        try {
-          // First: Search with extracted keywords (15 brands)
-          vibeBrands = await withTimeout(
-            hubspotAPI.searchBrands({
-              query: searchQuery,  // Use extracted keywords, not full synopsis
-              limit: 15
-            }),
-            5000,
-            { results: [] }
-          );
-          
-          console.log('[DEBUG] Keyword search fetched:', vibeBrands?.results?.length || 0);
-          await delay(200);
-          
-          // Second: Random search with genre/category focus (15 brands)
-          const genre = extractGenreFromSynopsis(search_term);
-          const categoryMap = {
-            'action': ['Automotive', 'Technology', 'Sports & Fitness'],
-            'comedy': ['Food & Beverage', 'Entertainment', 'Consumer Goods'],
-            'drama': ['Fashion & Apparel', 'Health & Beauty', 'Lifestyle'],
-            'romance': ['Travel', 'Hospitality', 'Luxury'],
-            'thriller': ['Security', 'Technology', 'Insurance'],
-            'sports': ['Athletic', 'Nutrition', 'Wellness'],
-            'scifi': ['Technology', 'Gaming', 'Innovation']
-          };
-          const relevantCategories = categoryMap[genre] || ['Entertainment', 'Consumer Goods', 'Lifestyle'];
-          
-          demographicBrands = await withTimeout(
-            hubspotAPI.searchBrands({
-              limit: 15,
-              filterGroups: [{
-                filters: [
-                  { propertyName: 'main_category', operator: 'IN', values: relevantCategories }
-                ]
-              }],
-              sorts: [{ propertyName: 'hs_object_id', direction: 'DESCENDING' }]  // Random-ish sort
-            }),
-            5000,
-            { results: [] }
-          );
-          
-          console.log('[DEBUG] Demographic/genre search fetched:', demographicBrands?.results?.length || 0);
-          await delay(200);
-          
-          // Third: Active clients with good budgets (10 brands)
-          activeBrands = await withTimeout(
-            hubspotAPI.searchBrands({
-              limit: 10,
-              filterGroups: [{
-                filters: [
-                  { propertyName: 'client_status', operator: 'IN', values: ['Active', 'Contract', 'In Negotiation'] },
-                  { propertyName: 'partnership_count', operator: 'GTE', value: '2' }  // More reasonable threshold
-                ]
-              }],
-              sorts: [{ propertyName: 'deals_count', direction: 'DESCENDING' }]
-            }),
-            5000,
-            { results: [] }
-          );
-          
-          console.log('[DEBUG] Active clients fetched:', activeBrands?.results?.length || 0);
-          await delay(200);
-          
-          // Fourth: AI wildcard suggestions for cold outreach (5 brands)
-          wildcardBrands = openAIApiKey ? await withTimeout(
-            (async () => {
-              try {
-                const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
-                  body: JSON.stringify({
-                    model: 'gpt-3.5-turbo',
-                    messages: [
-                      { 
-                        role: 'system', 
-                        content: 'Suggest exactly 5 real brand names that would be PERFECT no-brainer fits for this production. Think synergy - brands that would obviously benefit from this exact story/theme. These are for cold outreach so they must be incredibly relevant. Return JSON: {"brands": [{"name": "Brand Name", "category": "Category", "reason": "Why perfect fit"}]}' 
-                      },
-                      { role: 'user', content: `Production: ${search_term.slice(0, 800)}` }
-                    ],
-                    response_format: { type: "json_object" },
-                    temperature: 0.7,  // Less random, more focused
-                    max_tokens: 200
-                  })
-                });
-                
-                if (!response.ok) return [];
-                
-                const data = await response.json();
-                const result = JSON.parse(data.choices[0].message.content);
-                return result.brands || [];
-              } catch (error) {
-                console.error('Wildcard generation error:', error);
-                return [];
-              }
-            })(),
-            3000,
-            []
-          ) : [];
-          
-          console.log('[DEBUG] Wildcard brands generated:', wildcardBrands?.length || 0);
-          
-          // Combine all brands but remove duplicates
-          const allBrandResults = [
-            ...(vibeBrands?.results || []),
-            ...(demographicBrands?.results || []),
-            ...(activeBrands?.results || [])
-          ];
-          
-          // Deduplicate based on brand ID
-          const uniqueBrands = Array.from(
-            new Map(allBrandResults.map(b => [b.id, b])).values()
-          );
-          
-          // Create final structure matching what tagAndCombineBrands expects
-          vibeBrands = { results: uniqueBrands.slice(0, 20) };  // First 20 unique brands
-          activeBrands = { results: uniqueBrands.slice(20, 30) };  // Next 10
-          const explorationBrands = { results: uniqueBrands.slice(30, 40) };  // Last 10
-          
-        } catch (error) {
-          console.error('[DEBUG] Error in brand fetching:', error);
-          // Set defaults if something went wrong
-          vibeBrands = vibeBrands || { results: [] };
-          activeBrands = activeBrands || { results: [] };
-          const explorationBrands = { results: [] };
-          wildcardBrands = wildcardBrands || [];
-        }
-
-        // Report results with new priority
-        console.log('[DEBUG handleClaudeSearch] Search results received');
-        mcpThinking.push({ type: 'result', text: `✅ Found ${vibeBrands?.results?.length || 0} keyword-matched brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Found ${demographicBrands?.results?.length || 0} genre-matched brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Found ${activeBrands?.results?.length || 0} active clients` });
-        mcpThinking.push({ type: 'result', text: `✅ Found ${explorationBrands?.results?.length || 0} exploration brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Generated ${wildcardBrands?.length || 0} wildcard suggestions` });
-        
-        // Combine and tag all results
-        mcpThinking.push({ type: 'process', text: '🤝 Combining recommendations with variety focus...' });
-        const taggedBrands = tagAndCombineBrands({
-          vibeBrands: vibeBrands || { results: [] },
-          activeBrands: activeBrands || { results: [] },
-          explorationBrands: explorationBrands || { results: [] },
-          wildcardBrands: wildcardBrands || []
-        });
-
-        // Optional: Get supporting context from meetings/emails
-        let supportingContext = { meetings: [], emails: [] };
-        let goldenNuggets = {};
-        
-        if (firefliesApiKey || msftClientId) {
-          mcpThinking.push({ type: 'search', text: '📧 Checking for related communications...' });
-          
-          try {
-            // Use simpler keyword extraction
-            const keywords = search_term.split(' ')
-              .filter(word => word.length > 4)
-              .slice(0, 3);
-            
-            const [firefliesData, emailData] = await Promise.all([
-              firefliesApiKey ? withTimeout(
-                searchFireflies(keywords.join(' '), { limit: 5 }), 
-                3000, 
-                { transcripts: [] }
-              ) : { transcripts: [] },
-              
-              msftClientId ? withTimeout(
-                o365API.searchEmails(keywords.join(' '), { days: 90, limit: 10 }), 
-                3000, 
-                []
-              ) : []
-            ]);
-            
-            supportingContext = {
-              meetings: firefliesData.transcripts || [],
-              emails: emailData || []
-            };
-            
-            // Only extract nuggets if we have data
-            if ((supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) && taggedBrands.length > 0) {
-              goldenNuggets = findGoldenNuggets(taggedBrands, supportingContext.meetings, supportingContext.emails);
-              
-              // Attach insights to brands
-              taggedBrands.forEach(brand => {
-                if (goldenNuggets[brand.id]) {
-                  brand.insights = goldenNuggets[brand.id];
-                  brand.hasRealInsights = true;
-                } else {
-                  brand.hasRealInsights = false;
-                }
-              });
-              
-              const totalInsights = Object.values(goldenNuggets).flat().length;
-              if (totalInsights > 0) {
-                mcpThinking.push({ type: 'result', text: `💎 Found ${totalInsights} specific brand mentions` });
-              } else {
-                mcpThinking.push({ type: 'result', text: `📭 No specific brand mentions in communications` });
-              }
-            } else {
-              mcpThinking.push({ type: 'result', text: `📭 No recent communications found` });
-            }
-          } catch (error) {
-            console.error('[DEBUG] Communication search error:', error.message);
-            // Don't show error to user, just proceed without insights
-          }
-        }
-
-        mcpThinking.push({ type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` });
-        
-        return {
-          organizedData: {
-            dataType: 'BRAND_RECOMMENDATIONS',
-            productionContext: search_term,
-            brandSuggestions: taggedBrands,
-            supportingContext: supportingContext
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-
-      case 'get_brand_activity': {
-        const { brand_name } = intent.args;
-        mcpThinking.push({ type: 'start', text: `🎬 Activity retrieval detected for "${brand_name}"...` });
-        
-        // Search for the brand and its activity
-        mcpThinking.push({ type: 'search', text: '🔍 Searching HubSpot for brand details...' });
-        mcpThinking.push({ type: 'search', text: '🎙️ Searching Fireflies for meetings...' });
-        
-        const [brand, firefliesData] = await Promise.all([
-          hubspotAPI.searchSpecificBrand(brand_name),
-          firefliesApiKey ? searchFireflies(brand_name, { limit: 10 }) : { transcripts: [] }
-        ]);
-        
-        if (!brand) {
-          mcpThinking.push({ type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` });
-          return { organizedData: { error: `Brand "${brand_name}" not found.` }, mcpThinking, usedMCP: true };
-        }
-        
-        mcpThinking.push({ type: 'result', text: `✅ Found brand in HubSpot.` });
-        mcpThinking.push({ type: 'result', text: `✅ Found ${firefliesData.transcripts?.length || 0} meeting(s).` });
-        
-        // Get contacts and emails
-        mcpThinking.push({ type: 'search', text: '👥 Retrieving brand contacts...' });
-        mcpThinking.push({ type: 'search', text: '✉️ Searching O365 for emails...' });
-        
-        const [contacts, o365Data] = await Promise.all([
-            hubspotAPI.getContactsForBrand(brand.id),
-            msftClientId ? o365API.searchEmails(brand_name, { days: 180, limit: 20 }) : []
-        ]);
-        
-        mcpThinking.push({ type: 'result', text: `✅ Found ${contacts.length} contact(s).` });
-        mcpThinking.push({ type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` });
-        
-        // Extract golden nuggets for this specific brand
-        const brandObj = {
-          id: brand.id,
-          name: brand.properties.brand_name || brand_name
-        };
-        const nuggets = findGoldenNuggets([brandObj], firefliesData.transcripts || [], o365Data || []);
-        const brandInsights = nuggets[brand.id] || [];
-        
-        if (brandInsights.length > 0) {
-          mcpThinking.push({ type: 'result', text: `💎 Found ${brandInsights.length} specific insights` });
-        }
-        
-        mcpThinking.push({ type: 'complete', text: '✨ Activity report generated.' });
-        
-        return {
-          organizedData: {
-            dataType: 'BRAND_ACTIVITY', 
-            brand: brand.properties,
-            contacts: contacts.map(c => c.properties),
-            meetings: firefliesData.transcripts || [], 
-            emails: o365Data || [],
-            insights: brandInsights  // Add the golden nuggets here
-          }, 
-          mcpThinking, 
-          usedMCP: true
-        };
-      }
-
-      case 'create_pitches_for_brands': {
-        const { brand_names } = intent.args;
-        
-        // Use the last known project context or create a generic one
-        const contextDescription = lastProductionContext ? 'the last discussed project' : 'general integration ideas';
-        
-        mcpThinking.push({ 
-          type: 'start', 
-          text: `🔬 Performing deep dive on ${brand_names.length} brand(s) for ${contextDescription}...` 
-        });
-        
-        // Search for each brand's detailed information
-        mcpThinking.push({ type: 'search', text: '🔍 Gathering brand details from HubSpot...' });
-        mcpThinking.push({ type: 'search', text: '🎙️ Searching for relevant meetings in Fireflies...' });
-        mcpThinking.push({ type: 'search', text: '✉️ Searching for relevant emails in O365...' });
-        
-        const brandDataPromises = brand_names.map(name => 
-          Promise.all([
-            hubspotAPI.searchSpecificBrand(name),
-            firefliesApiKey ? searchFireflies(`${name} ${lastProductionContext || ''}`, { limit: 5 }) : { transcripts: [] },
-            msftClientId ? o365API.searchEmails(`${name} ${lastProductionContext || ''}`, { days: 180 }) : []
-          ])
-        );
-
-        const allBrandData = await Promise.all(brandDataPromises);
-
-        const organizedBrands = allBrandData.map(([brand, firefliesData, o365Data], index) => {
-          if (!brand) {
-            mcpThinking.push({ 
-              type: 'error', 
-              text: `❌ Brand "${brand_names[index]}" not found in HubSpot.` 
-            });
-            return null;
-          }
-          
-          mcpThinking.push({ 
-            type: 'result', 
-            text: `✅ Found ${firefliesData.transcripts?.length || 0} meetings and ${o365Data?.length || 0} emails for ${brand_names[index]}.` 
-          });
-          
-          return {
-            details: brand.properties,
-            meetings: firefliesData.transcripts || [],
-            emails: o365Data || []
-          };
-        }).filter(Boolean);
-
-        mcpThinking.push({ 
-          type: 'complete', 
-          text: `✨ Deep dive completed for ${organizedBrands.length} brand(s).` 
-        });
-
-        return {
-          organizedData: {
-            dataType: 'DEEP_DIVE_ANALYSIS',
-            productionContext: lastProductionContext || 'General brand integration analysis',
-            brands: organizedBrands,
-            requestedBrands: brand_names
-          },
-          mcpThinking,
-          usedMCP: true
-        };
-      }
-
-      default:
-        return null;
-    }
-  } catch (error) {
-    console.error(`Error executing tool "${intent.tool}":`, error);
-    mcpThinking.push({ type: 'error', text: `❌ Error: ${error.message}` });
-    return null;
-  }
-}
-
-async function generateRunwayVideo({ 
-  promptText, 
-  promptImage, 
-  model = 'gen3_alpha_turbo',
-  ratio = '1104:832',
-  duration = 5
-}) {
-  if (!runwayApiKey) {
-    throw new Error('RUNWAY_API_KEY not configured');
-  }
-
-  try {
-    const client = new RunwayML({
-      apiKey: runwayApiKey
-    });
-
-    let imageToUse = promptImage;
-    
-    if (!imageToUse || imageToUse.includes('dummyimage.com')) {
-      imageToUse = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1280&h=720&fit=crop&q=80';
-    }
-
-    const videoTask = await client.imageToVideo.create({
-      model: model,
-      promptImage: imageToUse,
-      promptText: promptText,
-      ratio: ratio,
-      duration: duration
-    });
-
-    let task = videoTask;
-    let attempts = 0;
-    const maxAttempts = 60;
-
-    while (attempts < maxAttempts) {
-      task = await client.tasks.retrieve(task.id);
-
-      if (task.status === 'SUCCEEDED') {
-        const videoUrl = task.output?.[0];
-        if (!videoUrl) {
-          throw new Error('No video URL in output');
-        }
-
-        return {
-          url: videoUrl,
-          taskId: task.id
-        };
-      }
-
-      if (task.status === 'FAILED') {
-        throw new Error(`Generation failed: ${task.failure || task.error || 'Unknown error'}`);
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      attempts++;
-    }
-
-    throw new Error('Video generation timed out');
-
-  } catch (error) {
-    if (error.message?.includes('401')) {
-      throw new Error('Invalid API key. Check RUNWAY_API_KEY in Vercel settings.');
-    }
-    
-    if (error.message?.includes('429')) {
-      throw new Error('Rate limit exceeded. Try again later.');
-    }
-    
-    if (error.message?.includes('insufficient_credits') || error.status === 402) {
-      throw new Error('Runway credits exhausted. Please upgrade your plan or wait for credits to reset.');
-    }
-    
-    if (error.status === 504 || error.message?.includes('timeout')) {
-      throw new Error('Video generation timed out. This usually means the server is busy. Please try again.');
-    }
-    
-    throw error;
-  }
-}
 
 async function generateVeo3Video({
   promptText,
