@@ -1725,6 +1725,20 @@ function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildca
         reason: 'Directly matches production synopsis/theme'
       });
     }
+    // Add additional tags based on status
+    const brandData = brandMap.get(id);
+    if (brand.properties.client_status === 'Active' || brand.properties.client_status === 'Contract') {
+      brandData.tags.push('🔥 Active Client');
+    }
+    if (brand.properties.client_type === 'Retainer') {
+      brandData.tags.push('Retainer Client (Premium)');
+    }
+    if (parseInt(brand.properties.partnership_count || 0) >= 10) {
+      brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
+    }
+    if (parseInt(brand.properties.deals_count || 0) >= 5) {
+      brandData.tags.push(`High Activity (${brand.properties.deals_count} deals)`);
+    }
   });
   
   // Process genre/demographic brands (15)
@@ -1743,13 +1757,27 @@ function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildca
         dealsCount: brand.properties.deals_count || '0',
         lastActivity: brand.properties.hs_lastmodifieddate,
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['🎭 Genre/Demographic Match'],
+        tags: ['🎭 Vibe Match'],
         relevanceScore: 85,
-        reason: 'Aligns with production genre and target audience'
+        reason: 'Aligns with production vibe and target audience'
       });
     } else {
-      brandMap.get(id).tags.push('🎭 Genre Match');
+      brandMap.get(id).tags.push('🎭 Vibe Match');
       brandMap.get(id).relevanceScore = Math.min(98, brandMap.get(id).relevanceScore + 5);
+    }
+    // Add additional tags based on status
+    const brandData = brandMap.get(id);
+    if (brand.properties.client_status === 'Active' || brand.properties.client_status === 'Contract') {
+      if (!brandData.tags.includes('🔥 Active Client')) brandData.tags.push('🔥 Active Client');
+    }
+    if (brand.properties.client_status === 'In Negotiation' || brand.properties.client_status === 'Pending') {
+      brandData.tags.push('✨ New Opportunity');
+    }
+    if (brand.properties.client_type === 'Retainer' && !brandData.tags.includes('Retainer Client (Premium)')) {
+      brandData.tags.push('Retainer Client (Premium)');
+    }
+    if (parseInt(brand.properties.partnership_count || 0) >= 10 && !brandData.tags.some(t => t.includes('Proven Partner'))) {
+      brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
     }
   });
   
@@ -1769,25 +1797,41 @@ function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildca
         dealsCount: brand.properties.deals_count || '0',
         lastActivity: brand.properties.hs_lastmodifieddate,
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-        tags: ['💰 Active Big-Budget Client'],
+        tags: ['💰 Active Big-Budget Client', '🔥 Active Client'],
         relevanceScore: 90,
         reason: 'Active client with proven budget and partnership history'
       });
     } else {
-      brandMap.get(id).tags.push('💰 Big Budget');
+      if (!brandMap.get(id).tags.includes('💰 Big Budget')) {
+        brandMap.get(id).tags.push('💰 Big Budget');
+      }
+      if (!brandMap.get(id).tags.includes('🔥 Active Client')) {
+        brandMap.get(id).tags.push('🔥 Active Client');
+      }
       brandMap.get(id).relevanceScore = Math.min(98, brandMap.get(id).relevanceScore + 8);
+    }
+    // Add additional tags based on activity levels
+    const brandData = brandMap.get(id);
+    if (brand.properties.client_type === 'Retainer' && !brandData.tags.includes('Retainer Client (Premium)')) {
+      brandData.tags.push('Retainer Client (Premium)');
+    }
+    if (parseInt(brand.properties.partnership_count || 0) >= 10 && !brandData.tags.some(t => t.includes('Proven Partner'))) {
+      brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
+    }
+    if (parseInt(brand.properties.deals_count || 0) >= 5 && !brandData.tags.some(t => t.includes('High Activity'))) {
+      brandData.tags.push(`High Activity (${brand.properties.deals_count} deals)`);
     }
   });
   
   // Add wildcard category suggestions for cold outreach (5)
   if (wildcardCategories && wildcardCategories.length > 0) {
-    wildcardCategories.slice(0, 5).forEach((category, index) => {
+    wildcardCategories.slice(0, 5).forEach((brandName, index) => {
       brandMap.set(`wildcard_${index}`, {
         source: 'suggestion',
         id: `wildcard_${index}`,
-        name: `[Cold Outreach: ${category}]`,
-        category: category,
-        tags: ['🚀 Cold Outreach Opportunity'],
+        name: brandName, // Just the brand name, no brackets
+        category: 'Suggested for Cold Outreach',
+        tags: ['🚀 Cold Outreach Opportunity', '💡 Creative Suggestion', '🎭 Vibe Match'],
         relevanceScore: 70,
         reason: 'Perfect creative fit - worth cold outreach',
         isWildcard: true
@@ -1852,7 +1896,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         // Launch parallel searches for the four lists
         mcpThinking.push({ type: 'search', text: '🎯 List 1: Synopsis-matched brands (15)...' });
-        mcpThinking.push({ type: 'search', text: '🎭 List 2: Genre/demographic matches (15)...' });
+        mcpThinking.push({ type: 'search', text: '🎭 List 2: Vibe matches (15)...' });
         mcpThinking.push({ type: 'search', text: '💰 List 3: Active big-budget clients (10)...' });
         mcpThinking.push({ type: 'search', text: '🚀 List 4: Creative exploration (5 cold outreach)...' });
         
@@ -1908,7 +1952,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
 
         // Report results
         mcpThinking.push({ type: 'result', text: `✅ Synopsis matches: ${synopsisBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Genre/demographic: ${genreBrands.results?.length || 0} brands` });
+        mcpThinking.push({ type: 'result', text: `✅ Vibe matches: ${genreBrands.results?.length || 0} brands` });
         mcpThinking.push({ type: 'result', text: `✅ Active big-budget: ${activeBrands.results?.length || 0} brands` });
         mcpThinking.push({ type: 'result', text: `✅ Cold outreach ideas: ${wildcardBrands?.length || 0} suggestions` });
         
