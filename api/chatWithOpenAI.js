@@ -864,17 +864,15 @@ async function extractKeywordsForHubSpot(synopsis) {
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [
-          { role: 'system', content: "Extract 2-3 single-word search terms that would find relevant brands in a database. For Winter Olympics/sports: try 'athletic' 'performance' 'winter'. For romance: try 'fashion' 'beauty' 'lifestyle'. For tech thriller: try 'technology' 'security' 'innovation'. Return ONLY single words separated by spaces, no phrases." },
-          { role: 'user', content: synopsis.slice(0, 300) }
+          { role: 'system', content: "Analyze this production synopsis and identify 3-5 brand categories that would resonate with its audience. Think about: What brands would viewers of this content naturally gravitate toward? What lifestyle/aspirations does this story represent? What demographic psychographics emerge? Return ONLY category keywords that brands use, separated by spaces. Be specific and insightful - go beyond obvious genre matches to find authentic brand-audience alignment." },
+          { role: 'user', content: synopsis }
         ],
         temperature: 0.3,
-        max_tokens: 20
+        max_tokens: 40
       }),
     });
     const data = await response.json();
-    const keywords = data.choices[0].message.content.trim();
-    // Ensure we're returning single words, not phrases
-    return keywords.split(' ').filter(word => !word.includes('_') && word.length > 2).slice(0, 3).join(' ');
+    return data.choices[0].message.content.trim();
   } catch (error) {
     return '';
   }
@@ -1578,7 +1576,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'find_brands',
-        description: 'Use for requests to find, search for, or get brand recommendations for product placement. Use when user provides a synopsis or asks for brand suggestions.',
+        description: 'Use for any request to find, search for, or get brand recommendations, including keyword searches and full production synopses.',
         parameters: {
           type: 'object',
           properties: { 
@@ -1592,11 +1590,11 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'get_brand_activity',
-        description: 'Use ONLY when user asks about a specific brand\'s activity, meetings, or emails. The user must be asking about an existing brand company, not a person name.',
+        description: 'Use for any request about a specific brand\'s activity, like asking for meetings, emails, or "what\'s new with...".',
         parameters: {
           type: 'object',
           properties: { 
-            brand_name: { type: 'string', description: 'The name of the brand company to look up.' }
+            brand_name: { type: 'string', description: 'The name of the brand to look up.' }
           },
           required: ['brand_name']
         }
@@ -1606,14 +1604,14 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'create_pitches_for_brands',
-        description: 'Use when user asks to "create pitches", "generate ideas", or "deep dive" for specific brand company names.',
+        description: 'Use when user asks to "create pitches", "generate ideas", or "deep dive" for specific brand names.',
         parameters: {
           type: 'object',
           properties: {
             brand_names: { 
               type: 'array', 
               items: { type: 'string' },
-              description: 'Array of specific brand company names mentioned.' 
+              description: 'Array of specific brand names mentioned.' 
             }
           },
           required: ['brand_names']
@@ -1624,7 +1622,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'answer_general_question',
-        description: 'Use for general conversation, production details, or when the message contains instructions or notes that are not requesting brand searches.',
+        description: 'Use for general conversation that does not require searching internal databases.',
         parameters: { type: 'object', properties: {} }
       }
     }
@@ -1634,7 +1632,7 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
     const messages = [
       { 
         role: 'system', 
-        content: 'You are an expert at routing a user request to the correct tool. Be careful: if the message contains production details with notes like "Brand Opps" followed by @ mentions of people, this is just a note/instruction, NOT a request to search for those names as brands. Only route to brand tools if the user is actually asking for brand searches or recommendations.' 
+        content: 'You are an expert at routing a user request to the correct tool. If the user\'s request is vague (e.g., "for this project"), you MUST use the provided "Last Production Context" to inform the tool call.' 
       },
       { 
         role: 'user', 
@@ -1689,7 +1687,7 @@ async function generateWildcardBrands(synopsis) {
           { role: 'user', content: `Find unexpected product placement gems for: ${synopsis.slice(0, 500)}` }
         ],
         response_format: { type: "json_object" },
-        temperature: 0.7, // Reduced from 0.9 for more reliable results
+        temperature: 0.9, // Increased for more variance
         max_tokens: 100
       })
     });
@@ -1775,7 +1773,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     return `${brand.category} leader - natural fit for ${genre || 'this'} production`;
   };
   
-  // Process brands with recent activity (8) - prioritize context quotes
+  // Process brands with recent activity (8)
   if (activityBrands && activityBrands.results) {
     activityBrands.results.forEach(brand => {
       const id = brand.id;
@@ -1796,27 +1794,23 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           lastActivity: brand.properties.hs_lastmodifieddate,
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
           tags: ['📧 Recent Activity'],
-          relevanceScore: contextQuote ? 98 : 95, // Higher score if we have a quote
+          relevanceScore: 95,
           reason: contextQuote || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`
         });
-      } else if (contextQuote && !brandMap.get(id).reason.includes('Meeting') && !brandMap.get(id).reason.includes('email')) {
-        // Update with better context if found
-        brandMap.get(id).reason = contextQuote;
-        brandMap.get(id).relevanceScore = Math.max(brandMap.get(id).relevanceScore, 98);
       }
       // Add additional tags based on status
       const brandData = brandMap.get(id);
       if (brand.properties.client_status === 'Active' || brand.properties.client_status === 'Contract') {
-        if (!brandData.tags.includes('🔥 Active Client')) brandData.tags.push('🔥 Active Client');
+        brandData.tags.push('🔥 Active Client');
       }
       if (brand.properties.client_type === 'Retainer') {
-        if (!brandData.tags.includes('Retainer Client (Premium)')) brandData.tags.push('Retainer Client (Premium)');
+        brandData.tags.push('Retainer Client (Premium)');
       }
       if (parseInt(brand.properties.partnership_count || 0) >= 10) {
-        if (!brandData.tags.some(t => t.includes('Proven Partner'))) brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
+        brandData.tags.push(`Proven Partner (${brand.properties.partnership_count} partnerships)`);
       }
       if (parseInt(brand.properties.deals_count || 0) >= 5) {
-        if (!brandData.tags.some(t => t.includes('High Activity'))) brandData.tags.push(`High Activity (${brand.properties.deals_count} deals)`);
+        brandData.tags.push(`High Activity (${brand.properties.deals_count} deals)`);
       }
     });
   }
