@@ -2117,14 +2117,14 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           // Create final structure matching what tagAndCombineBrands expects
           vibeBrands = { results: uniqueBrands.slice(0, 20) };  // First 20 unique brands
           activeBrands = { results: uniqueBrands.slice(20, 30) };  // Next 10
-          explorationBrands = { results: uniqueBrands.slice(30, 40) };  // Last 10
+          const explorationBrands = { results: uniqueBrands.slice(30, 40) };  // Last 10
           
         } catch (error) {
           console.error('[DEBUG] Error in brand fetching:', error);
           // Set defaults if something went wrong
           vibeBrands = vibeBrands || { results: [] };
           activeBrands = activeBrands || { results: [] };
-          explorationBrands = { results: [] };
+          const explorationBrands = { results: [] };
           wildcardBrands = wildcardBrands || [];
         }
 
