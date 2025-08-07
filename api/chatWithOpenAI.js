@@ -3034,8 +3034,9 @@ export default async function handler(req, res) {
 3. List them in the EXACT order they appear in the communications array (already sorted by date)
 4. Use this EXACT format for each item:
    - Number each item sequentially (1., 2., 3., etc.)
-   - **IMPORTANT**: Start each item with [MEETING] or [EMAIL] marker
-   - Format: "1. [MEETING] Title - Date" or "1. [EMAIL] Subject - Date"
+   - **FOR MEETINGS**: Use format: [MEETING url="URL_HERE"] if URL exists, otherwise just [MEETING]
+   - **FOR EMAILS**: Use format: [EMAIL]
+   - Follow with the title and date
    - Add bullet points with relevant details
 5. End with a "Key Contacts:" section if contacts exist
 
@@ -3046,28 +3047,40 @@ DO NOT summarize, skip, or omit ANY items.
 **EXAMPLE FORMAT:**
 Based on the search results, here's the activity summary for [Brand Name]:
 
-1. [MEETING] MTG: Kings Hawaiian - Happy Gilmore 2 Touch Base - 7/28/2025
+1. [MEETING url="https://fireflies.ai/meeting/abc123"] MTG: Kings Hawaiian - Happy Gilmore 2 Touch Base - 7/28/2025
    • Discussion about unsatisfactory Netflix product placement
    • $350,000 investment concerns due to poor brand visibility
+   • Duration: 35 minutes
 
 2. [EMAIL] RE: Partnership Opportunity - 7/15/2025
+   • From: John Smith (john@company.com)
    • Follow-up from marketing director
    • Interested in Q3 campaign integration
 
-3. [MEETING] Kings Hawaiian x Happy Gilmore 2 Next Steps - 10/25/2024
+3. [MEETING url="https://fireflies.ai/meeting/def456"] Kings Hawaiian x Happy Gilmore 2 Next Steps - 10/25/2024
    • Project planning and process development meeting
    • $500k deal amount update in HubSpot
+   • Participants: Troy Figgins, Rob Baird
+
+4. [MEETING] Internal Sync Meeting - 9/15/2024
+   • No recording URL available
+   • Brief discussion about project status
 
 [Continue for ALL ${structuredData.communications?.length || 0} items...]
 
 Key Contacts:
 - [Contact Name] - [Title if available]
 
+**IMPORTANT RULES FOR URLs**:
+- If a meeting has a URL in the data, include it as: [MEETING url="URL_HERE"]
+- If a meeting has no URL, use just: [MEETING]
+- Emails never have URLs in the marker, always just: [EMAIL]
+- The URL must be exactly as provided in the data, do not modify it
+
 **REMEMBER**: 
-- Each meeting MUST start with [MEETING]
-- Each email MUST start with [EMAIL]
 - You found ${structuredData.meetings?.length || 0} meetings and ${structuredData.emails?.length || 0} emails
-- ALL of these MUST be displayed with their type markers`;
+- ALL of these MUST be displayed with their type markers
+- Include URLs for meetings when available in the data`;
               } else {
                 systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
 
