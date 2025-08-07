@@ -1576,11 +1576,11 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'find_brands',
-        description: 'Use for any request to find, search for, or get brand recommendations, including keyword searches and full production synopses.',
+        description: 'Use when user wants brand recommendations or suggestions. This includes: asking for brands for a project/production, requesting "more brands", finding brands that match criteria, or any variation of brand discovery/search. If they reference "this project" or "this production", combine with the last production context.',
         parameters: {
           type: 'object',
           properties: { 
-            search_term: { type: 'string', description: 'The user\'s full request, including keywords or synopsis text.' }
+            search_term: { type: 'string', description: 'Either the user\'s specific search criteria OR the last production context if they reference "this project/production".' }
           },
           required: ['search_term']
         }
@@ -1590,13 +1590,13 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'get_brand_activity',
-        description: 'Use for any request about a specific brand\'s activity, like asking for meetings, emails, or "what\'s new with...".',
+        description: 'Use when user wants to see communications (emails/meetings) about a specific brand, person, or partnership. This includes: "show me emails for X", "what meetings do we have with Y", "what\'s the activity for Z brand", or any request for communication history.',
         parameters: {
           type: 'object',
           properties: { 
-            brand_name: { type: 'string', description: 'The name of the brand to look up.' }
+            search_query: { type: 'string', description: 'The brand name, person name, or partnership/project name to search for in communications.' }
           },
-          required: ['brand_name']
+          required: ['search_query']
         }
       }
     },
@@ -1604,14 +1604,14 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'create_pitches_for_brands',
-        description: 'Use when user asks to "create pitches", "generate ideas", or "deep dive" for specific brand names.',
+        description: 'Use when user wants detailed integration ideas or pitches for SPECIFIC named brands. Key indicators: "create pitches for [brand names]", "why would [brand] work", "give me ideas for [brand]", "deep dive on [brands]". This is for generating creative integration strategies.',
         parameters: {
           type: 'object',
           properties: {
             brand_names: { 
               type: 'array', 
               items: { type: 'string' },
-              description: 'Array of specific brand names mentioned.' 
+              description: 'List of specific brand names mentioned by the user.' 
             }
           },
           required: ['brand_names']
@@ -1622,21 +1622,36 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       type: 'function',
       function: {
         name: 'answer_general_question',
-        description: 'Use for general conversation that does not require searching internal databases.',
+        description: 'Use for general questions, greetings, clarifications, or anything that doesn\'t require searching databases. Examples: "how are you?", "what can you do?", "explain product placement", general knowledge questions.',
         parameters: { type: 'object', properties: {} }
       }
     }
   ];
 
   try {
+    const systemPrompt = `You are an intelligent routing system that UNDERSTANDS context and user intent, not just keywords.
+
+CRITICAL ROUTING RULES:
+1. READ and UNDERSTAND what the user is actually asking for, don't just match keywords
+2. If user says "for this project" or "this production" without providing details, use the Last Production Context
+3. Focus on the ACTION they want: finding brands, seeing communications, generating ideas, or general chat
+
+ROUTING LOGIC:
+- "find brands" / "more brands" / "brands for this" → find_brands (use context if vague)
+- "show emails" / "meetings with" / "activity for" → get_brand_activity (for specific entities)
+- "create pitches for [brands]" / "ideas for [brands]" / "why [brand] works" → create_pitches_for_brands
+- General questions / chat → answer_general_question
+
+When the user references "this project" or is vague, COMBINE their request with the Last Production Context to create a complete search term.`;
+
     const messages = [
       { 
         role: 'system', 
-        content: 'You are an expert at routing a user request to the correct tool. If the user\'s request is vague (e.g., "for this project"), you MUST use the provided "Last Production Context" to inform the tool call.' 
+        content: systemPrompt
       },
       { 
         role: 'user', 
-        content: `Last Production Context:\n"""\n${lastProductionContext || 'None'}\n"""\n\nUser's New Request:\n"""\n${userMessage}\n"""`
+        content: `Last Production Context:\n"""\n${lastProductionContext || 'None available'}\n"""\n\nUser's Request:\n"""\n${userMessage}\n"""\n\nBased on your UNDERSTANDING of what the user wants, route to the appropriate tool. If they reference "this project" and there's a Last Production Context, use it to complete their request.`
       }
     ];
 
@@ -1644,10 +1659,11 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
       body: JSON.stringify({ 
-        model: 'gpt-4o-mini', // Use mini for faster routing
+        model: 'gpt-4o-mini',
         messages, 
         tools, 
-        tool_choice: 'auto' 
+        tool_choice: 'auto',
+        temperature: 0.3 // Lower temperature for more consistent routing
       })
     });
 
@@ -1657,9 +1673,31 @@ async function routeUserIntent(userMessage, conversationContext, lastProductionC
 
     if (toolCall) {
       const args = JSON.parse(toolCall.function.arguments);
-      if (toolCall.function.name === 'find_brands' && !args.search_term) {
-        args.search_term = userMessage;
+      
+      // Special handling for vague brand searches
+      if (toolCall.function.name === 'find_brands') {
+        // If the search term is too vague but we have context, use the context
+        if (args.search_term && args.search_term.length < 50 && lastProductionContext) {
+          // Check if it's a vague reference like "this project" or "more brands"
+          const vagueTerms = ['this project', 'this production', 'more brands', 'additional brands', 'other brands'];
+          const isVague = vagueTerms.some(term => args.search_term.toLowerCase().includes(term));
+          
+          if (isVague) {
+            args.search_term = lastProductionContext; // Use the full context
+          }
+        } else if (!args.search_term && lastProductionContext) {
+          args.search_term = lastProductionContext;
+        } else if (!args.search_term) {
+          args.search_term = userMessage; // Fallback to original message
+        }
       }
+      
+      // Rename search_query back to brand_name for backward compatibility
+      if (toolCall.function.name === 'get_brand_activity' && args.search_query) {
+        args.brand_name = args.search_query;
+        delete args.search_query;
+      }
+      
       return { tool: toolCall.function.name, args };
     }
     return { tool: 'answer_general_question' };
