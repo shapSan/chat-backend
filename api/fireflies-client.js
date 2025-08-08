@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 
-const firefliesApiKey = process.env.FIREFLIES_API_KEY || 'e88b1a60-3390-4dca-9605-20e533727717';
+export const firefliesApiKey = process.env.FIREFLIES_API_KEY || 'e88b1a60-3390-4dca-9605-20e533727717';
 
 const firefliesAPI = {
   baseUrl: 'https://api.fireflies.ai/graphql',
