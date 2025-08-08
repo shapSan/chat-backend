@@ -1923,8 +1923,14 @@ async function generateWildcardBrands(synopsis) {
 }
 
 // Helper function to tag and combine brands from different sources
-function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
+function tagAndCombineBrands({ synopsisBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
   const brandMap = new Map();
+  
+  console.log('[DEBUG tagAndCombineBrands] Input counts:');
+  console.log('  Synopsis brands:', synopsisBrands?.results?.length || 0);
+  console.log('  Genre brands:', genreBrands?.results?.length || 0);
+  console.log('  Active brands:', activeBrands?.results?.length || 0);
+  console.log('  Wildcard brands:', wildcardCategories?.length || 0);
   
   // Helper to find relevant meeting/email quote for a brand
   const findBrandContext = (brandName) => {
@@ -2038,9 +2044,9 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     return `${brand.category} leader - natural fit for ${genre || 'this'} production`;
   };
   
-  // Process brands with recent activity (8)
-  if (activityBrands && activityBrands.results) {
-    activityBrands.results.forEach(brand => {
+  // Process synopsis-matched brands (List 1)
+  if (synopsisBrands && synopsisBrands.results) {
+    synopsisBrands.results.forEach(brand => {
       const id = brand.id;
       const brandName = brand.properties.brand_name || '';
       const contextData = findBrandContext(brandName);
@@ -2058,9 +2064,9 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           dealsCount: brand.properties.deals_count || '0',
           lastActivity: brand.properties.hs_lastmodifieddate,
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-          tags: ['📧 Recent Activity'],
+          tags: ['📝 Synopsis Match'],
           relevanceScore: 95,
-          reason: contextData?.rawText || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`,
+          reason: contextData?.rawText || generatePitch(brand.properties, synopsis),
           insight: contextData // Include structured insight data
         });
       }
@@ -2207,9 +2213,13 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   }
   
   // Convert to array and sort by relevance
-  return Array.from(brandMap.values())
-    .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, 45); // Limit to top 45 (15+15+10+5)
+  const allBrands = Array.from(brandMap.values())
+    .sort((a, b) => b.relevanceScore - a.relevanceScore);
+  
+  console.log('[DEBUG tagAndCombineBrands] Final brand count:', allBrands.length);
+  console.log('[DEBUG tagAndCombineBrands] Brand names:', allBrands.map(b => b.name).slice(0, 10), '...');
+  
+  return allBrands; // Return ALL brands, don't limit
 }
 
 async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName) {
@@ -2340,7 +2350,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           synopsisBrands,
           genreBrands,
           activeBrands,
-          wildcardCategories: wildcardBrands
+          wildcardCategories: wildcardBrands,
+          synopsis: search_term,
+          context: supportingContext
         });
 
         // Optional: Get supporting context from meetings/emails
@@ -2366,12 +2378,14 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
 
         mcpThinking.push({ type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` });
         
+        console.log('[DEBUG find_brands] Final brand count being returned:', taggedBrands.length);
+        
         return {
           organizedData: {
             dataType: 'BRAND_RECOMMENDATIONS',
             productionContext: search_term,
             projectName: extractedTitle, // Use the definitive title
-            brandSuggestions: taggedBrands,
+            brandSuggestions: taggedBrands, // ALL brands, not limited
             supportingContext: supportingContext
           },
           mcpThinking,
