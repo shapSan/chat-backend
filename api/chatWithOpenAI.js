@@ -534,34 +534,68 @@ const o365API = {
       // Search for each term
       for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
         try {
-          const searchTerm = term.replace(/'/g, "''").slice(0, 50);
-          console.log(`[DEBUG o365API.searchEmails] Searching for term: "${searchTerm}"`);
+          // Limit search term to 20 characters to avoid timeouts
+          let searchTerm = term.replace(/'/g, "''");
+          
+          // If term is too long, truncate it intelligently
+          if (searchTerm.length > 20) {
+            // Try to cut at word boundary
+            searchTerm = searchTerm.substring(0, 20).split(' ').slice(0, -1).join(' ') || searchTerm.substring(0, 20);
+          }
+          
+          // Skip if search term is too short after processing
+          if (searchTerm.length < 2) continue;
+          
+          console.log(`[DEBUG o365API.searchEmails] Searching for term: "${searchTerm}" (original: "${term}")`);
           
           // Search in both subject and body
           const filter = `receivedDateTime ge ${dateFilter} and (contains(subject,'${searchTerm}') or contains(body/content,'${searchTerm}'))`;
           
           const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=10&$select=id,subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
           
-          console.log('[DEBUG o365API.searchEmails] Request URL:', messagesUrl);
+          console.log('[DEBUG o365API.searchEmails] Request URL length:', messagesUrl.length);
           
-          const response = await fetch(messagesUrl, {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            }
-          });
+          // Add timeout to prevent hanging on 504 errors
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
           
-          if (response.ok) {
-            const data = await response.json();
-            console.log(`[DEBUG o365API.searchEmails] Found ${data.value?.length || 0} emails for term "${searchTerm}"`);
-            
-            (data.value || []).forEach(email => {
-              allEmails.set(email.id, email);
-              console.log(`[DEBUG o365API.searchEmails] Added email: ${email.subject} from ${email.from?.emailAddress?.address}`);
+          try {
+            const response = await fetch(messagesUrl, {
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              signal: controller.signal
             });
-          } else {
-            const errorText = await response.text();
-            console.error(`[DEBUG o365API.searchEmails] Failed for term "${searchTerm}":`, response.status, errorText);
+            
+            clearTimeout(timeoutId);
+            
+            if (response.ok) {
+              const data = await response.json();
+              console.log(`[DEBUG o365API.searchEmails] Found ${data.value?.length || 0} emails for term "${searchTerm}"`);
+              
+              (data.value || []).forEach(email => {
+                allEmails.set(email.id, email);
+                console.log(`[DEBUG o365API.searchEmails] Added email: ${email.subject} from ${email.from?.emailAddress?.address}`);
+              });
+            } else {
+              const errorText = await response.text();
+              console.error(`[DEBUG o365API.searchEmails] Failed for term "${searchTerm}":`, response.status, errorText);
+              
+              // If we get a 504 timeout, skip remaining terms to avoid more timeouts
+              if (response.status === 504) {
+                console.warn('[DEBUG o365API.searchEmails] Got 504 timeout, skipping remaining search terms');
+                break;
+              }
+            }
+          } catch (fetchError) {
+            clearTimeout(timeoutId);
+            if (fetchError.name === 'AbortError') {
+              console.error(`[DEBUG o365API.searchEmails] Request timeout for term "${searchTerm}"`);
+              // Continue with next term instead of breaking
+            } else {
+              throw fetchError;
+            }
           }
         } catch (error) {
           // Continue with other terms if one fails
@@ -668,13 +702,32 @@ const firefliesAPI = {
     try {
       console.log('[DEBUG firefliesAPI.searchTranscripts] Searching with filters:', filters);
       
+      // Build the GraphQL query dynamically based on filters
+      let queryParams = [];
+      let variables = {};
+      
+      // Only add keyword if it's not empty
+      if (filters.keyword && filters.keyword.trim() !== '') {
+        queryParams.push('keyword: $keyword');
+        variables.keyword = filters.keyword.trim();
+      }
+      
+      // Add limit
+      queryParams.push('limit: $limit');
+      variables.limit = filters.limit || 10;
+      
+      // Add fromDate if provided
+      if (filters.fromDate) {
+        queryParams.push('fromDate: $fromDate');
+        variables.fromDate = filters.fromDate;
+      }
+      
+      // Build the query string
+      const paramString = queryParams.length > 0 ? `(${queryParams.join(', ')})` : '';
+      
       const graphqlQuery = `
-        query SearchTranscripts($keyword: String, $limit: Int, $fromDate: DateTime) {
-          transcripts(
-            keyword: $keyword, 
-            limit: $limit,
-            fromDate: $fromDate
-          ) {
+        query SearchTranscripts${variables.keyword !== undefined ? '($keyword: String, $limit: Int, $fromDate: DateTime)' : '($limit: Int, $fromDate: DateTime)'} {
+          transcripts${paramString} {
             id
             title
             date
@@ -693,6 +746,9 @@ const firefliesAPI = {
         }
       `;
       
+      console.log('[DEBUG firefliesAPI.searchTranscripts] GraphQL Query:', graphqlQuery);
+      console.log('[DEBUG firefliesAPI.searchTranscripts] Variables:', variables);
+      
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
@@ -701,11 +757,7 @@ const firefliesAPI = {
         },
         body: JSON.stringify({
           query: graphqlQuery,
-          variables: {
-            keyword: filters.keyword || '',
-            limit: filters.limit || 10,
-            fromDate: filters.fromDate
-          }
+          variables: variables
         })
       });
       
@@ -721,6 +773,13 @@ const firefliesAPI = {
       
       if (data.errors) {
         console.error('[DEBUG firefliesAPI.searchTranscripts] GraphQL errors:', data.errors);
+        
+        // If keyword search failed, try without keyword
+        if (data.errors.some(e => e.code === 'invalid_arguments') && filters.keyword) {
+          console.log('[DEBUG firefliesAPI.searchTranscripts] Retrying without keyword...');
+          return this.searchTranscripts({ ...filters, keyword: undefined });
+        }
+        
         return [];
       }
       
@@ -851,35 +910,73 @@ async function searchFireflies(query, options = {}) {
     
     console.log('[DEBUG searchFireflies] Connection successful');
     
+    // If no query or empty query, get recent transcripts without keyword filter
+    if (!query || query.trim() === '') {
+      console.log('[DEBUG searchFireflies] No query provided, fetching recent transcripts');
+      const filters = {
+        limit: options.limit || 10
+      };
+      
+      if (options.fromDate) {
+        filters.fromDate = options.fromDate;
+      }
+      
+      const results = await firefliesAPI.searchTranscripts(filters);
+      console.log(`[DEBUG searchFireflies] Found ${results.length} recent transcripts`);
+      
+      return {
+        transcripts: results
+      };
+    }
+    
     // If query is an array, it's pre-extracted keywords
     let searchTerms;
     if (Array.isArray(query)) {
-      searchTerms = query;
+      searchTerms = query.filter(term => term && term.trim() !== ''); // Filter out empty terms
       console.log('[DEBUG searchFireflies] Using provided search terms:', searchTerms);
     } else {
       // For simple searches (like brand names), also search the raw query
-      searchTerms = [query]; // Start with the raw query
+      searchTerms = [query.trim()]; // Start with the raw query
       
       // Only extract keywords for complex queries
       if (query.length > 50) {
         const extractedTerms = await extractKeywordsForContextSearch(query);
         console.log('[DEBUG searchFireflies] Extracted keywords:', extractedTerms);
         // Add extracted terms but keep the original simpler terms too
-        searchTerms = [...new Set([...searchTerms, ...extractedTerms])];
+        searchTerms = [...new Set([...searchTerms, ...extractedTerms])].filter(term => term && term.trim() !== '');
       }
       
       console.log('[DEBUG searchFireflies] Final search terms:', searchTerms);
+    }
+    
+    // If no valid search terms, get recent transcripts
+    if (searchTerms.length === 0) {
+      console.log('[DEBUG searchFireflies] No valid search terms, fetching recent transcripts');
+      const filters = {
+        limit: options.limit || 10
+      };
+      
+      if (options.fromDate) {
+        filters.fromDate = options.fromDate;
+      }
+      
+      const results = await firefliesAPI.searchTranscripts(filters);
+      return {
+        transcripts: results
+      };
     }
     
     let allTranscripts = new Map();
     
     // Search for each term and combine results
     for (const term of searchTerms.slice(0, 10)) { // Increased limit
+      if (!term || term.trim() === '') continue; // Skip empty terms
+      
       try {
         console.log(`[DEBUG searchFireflies] Searching for term: "${term}"`);
         
         const filters = {
-          keyword: term,
+          keyword: term.trim(),
           limit: options.limit || 10 // Increased default limit
         };
         
@@ -1838,15 +1935,47 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
       for (const meeting of context.meetings) {
         if (meeting.title?.toLowerCase().includes(brandName.toLowerCase()) || 
             meeting.summary?.overview?.toLowerCase().includes(brandName.toLowerCase())) {
-          // Try to extract a relevant quote
+          
+          // Return structured insight with segments
+          const segments = [];
+          
+          // Add text segment
           if (meeting.summary?.action_items && meeting.summary.action_items.length > 0) {
-            const relevantAction = meeting.summary.action_items[0];
-            return `"${relevantAction}" - [Meeting ${meeting.dateString}](${meeting.transcript_url})`;
+            segments.push({
+              type: "text",
+              content: "Active discussions noted with action items from "
+            });
+          } else if (meeting.summary?.overview) {
+            segments.push({
+              type: "text",
+              content: "Recent meeting activity discussed in "
+            });
+          } else {
+            segments.push({
+              type: "text",
+              content: "Mentioned in "
+            });
           }
-          if (meeting.summary?.overview) {
-            const snippet = meeting.summary.overview.slice(0, 100);
-            return `Meeting discussed: "${snippet}..." - [${meeting.dateString}](${meeting.transcript_url})`;
+          
+          // Add link segment
+          segments.push({
+            type: "link",
+            content: `"${meeting.title}" on ${meeting.dateString}`,
+            url: meeting.transcript_url || '#'
+          });
+          
+          // Add any trailing context
+          if (meeting.summary?.action_items && meeting.summary.action_items.length > 0) {
+            segments.push({
+              type: "text",
+              content: ` - "${meeting.summary.action_items[0]}"`
+            });
           }
+          
+          return {
+            segments: segments,
+            rawText: segments.map(s => s.content).join('') // For backward compatibility
+          };
         }
       }
     }
@@ -1857,7 +1986,19 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         if (email.subject?.toLowerCase().includes(brandName.toLowerCase()) || 
             email.preview?.toLowerCase().includes(brandName.toLowerCase())) {
           const date = new Date(email.receivedDate).toLocaleDateString();
-          return `Recent email from ${email.fromName || email.from}: "${email.subject}" (${date})`;
+          
+          // Return structured insight with segments
+          const segments = [
+            {
+              type: "text",
+              content: `Recent email from ${email.fromName || email.from}: "${email.subject}" (${date})`
+            }
+          ];
+          
+          return {
+            segments: segments,
+            rawText: segments[0].content // For backward compatibility
+          };
         }
       }
     }
@@ -1902,7 +2043,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     activityBrands.results.forEach(brand => {
       const id = brand.id;
       const brandName = brand.properties.brand_name || '';
-      const contextQuote = findBrandContext(brandName);
+      const contextData = findBrandContext(brandName);
       
       if (!brandMap.has(id)) {
         brandMap.set(id, {
@@ -1919,7 +2060,8 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
           tags: ['📧 Recent Activity'],
           relevanceScore: 95,
-          reason: contextQuote || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`
+          reason: contextData?.rawText || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`,
+          insight: contextData // Include structured insight data
         });
       }
       // Add additional tags based on status
@@ -1943,7 +2085,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   genreBrands.results?.forEach(brand => {
     const id = brand.id;
     const brandName = brand.properties.brand_name || '';
-    const contextQuote = findBrandContext(brandName);
+    const contextData = findBrandContext(brandName);
     
     if (!brandMap.has(id)) {
       brandMap.set(id, {
@@ -1960,11 +2102,16 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['🎭 Vibe Match'],
         relevanceScore: 85,
-        reason: contextQuote || generatePitch(brand.properties, synopsis)
+        reason: contextData?.rawText || generatePitch(brand.properties, synopsis),
+        insight: contextData // Include structured insight data
       });
     } else {
       brandMap.get(id).tags.push('🎭 Vibe Match');
       brandMap.get(id).relevanceScore = Math.min(98, brandMap.get(id).relevanceScore + 5);
+      // Update insight if we found context
+      if (contextData && !brandMap.get(id).insight) {
+        brandMap.get(id).insight = contextData;
+      }
     }
     // Add additional tags based on status
     const brandData = brandMap.get(id);
@@ -1986,7 +2133,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   activeBrands.results?.forEach(brand => {
     const id = brand.id;
     const brandName = brand.properties.brand_name || '';
-    const contextQuote = findBrandContext(brandName);
+    const contextData = findBrandContext(brandName);
     
     if (!brandMap.has(id)) {
       brandMap.set(id, {
@@ -2003,7 +2150,8 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['💰 Active Big-Budget Client', '🔥 Active Client'],
         relevanceScore: 90,
-        reason: contextQuote || `Budget proven: ${brand.properties.deals_count} deals, ${brand.properties.partnership_count} partnerships`
+        reason: contextData?.rawText || `Budget proven: ${brand.properties.deals_count} deals, ${brand.properties.partnership_count} partnerships`,
+        insight: contextData // Include structured insight data
       });
     } else {
       if (!brandMap.get(id).tags.includes('💰 Big Budget')) {
@@ -2013,6 +2161,10 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         brandMap.get(id).tags.push('🔥 Active Client');
       }
       brandMap.get(id).relevanceScore = Math.min(98, brandMap.get(id).relevanceScore + 8);
+      // Update insight if we found context
+      if (contextData && !brandMap.get(id).insight) {
+        brandMap.get(id).insight = contextData;
+      }
     }
     // Add additional tags based on activity levels
     const brandData = brandMap.get(id);
@@ -2346,39 +2498,85 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         // Search for each brand's detailed information
         mcpThinking.push({ type: 'search', text: '🔍 Gathering brand details from HubSpot...' });
-        mcpThinking.push({ type: 'search', text: '🎙️ Searching for relevant meetings in Fireflies...' });
-        mcpThinking.push({ type: 'search', text: '✉️ Searching for relevant emails in O365...' });
         
-        const brandDataPromises = brand_names.map(name => 
-          Promise.all([
-            hubspotAPI.searchSpecificBrand(name),
-            firefliesApiKey ? searchFireflies(`${name} ${lastProductionContext || ''}`, { limit: 5 }) : { transcripts: [] },
-            msftClientId ? o365API.searchEmails(`${name} ${lastProductionContext || ''}`, { days: 180 }) : []
-          ])
+        // First, get all brand details from HubSpot quickly
+        const brandDetailsPromises = brand_names.map(name => 
+          hubspotAPI.searchSpecificBrand(name)
         );
-
-        const allBrandData = await Promise.all(brandDataPromises);
-
-        const organizedBrands = allBrandData.map(([brand, firefliesData, o365Data], index) => {
-          if (!brand) {
-            mcpThinking.push({ 
-              type: 'error', 
-              text: `❌ Brand "${brand_names[index]}" not found in HubSpot.` 
-            });
-            return null;
-          }
+        
+        const brandDetails = await Promise.all(brandDetailsPromises);
+        
+        // Only search for meetings/emails if we have valid brands and it's 3 or fewer brands
+        let meetingsData = [];
+        let emailsData = [];
+        
+        if (brand_names.length <= 3) {
+          // For small number of brands, do targeted searches
+          mcpThinking.push({ type: 'search', text: '🎙️ Searching for relevant meetings...' });
+          mcpThinking.push({ type: 'search', text: '✉️ Searching for relevant emails...' });
+          
+          // Create a combined search query for all brands
+          const combinedSearchQuery = brand_names.join(' OR ');
+          
+          // Do ONE search for all brands together instead of separate searches
+          const [firefliesData, o365Data] = await Promise.all([
+            firefliesApiKey ? searchFireflies(combinedSearchQuery, { limit: 5 }) : { transcripts: [] },
+            msftClientId ? o365API.searchEmails(combinedSearchQuery, { days: 90, limit: 5 }) : []
+          ]);
+          
+          meetingsData = firefliesData.transcripts || [];
+          emailsData = o365Data || [];
           
           mcpThinking.push({ 
             type: 'result', 
-            text: `✅ Found ${firefliesData.transcripts?.length || 0} meetings and ${o365Data?.length || 0} emails for ${brand_names[index]}.` 
+            text: `✅ Found ${meetingsData.length} relevant meetings and ${emailsData.length} emails total.` 
           });
+        } else {
+          // For many brands, skip the slow searches
+          mcpThinking.push({ 
+            type: 'info', 
+            text: `⚡ Skipping detailed communication search for ${brand_names.length} brands (too many for deep dive).` 
+          });
+        }
+        
+        // Organize the results
+        const organizedBrands = brandDetails.map((brand, index) => {
+          if (!brand) {
+            mcpThinking.push({ 
+              type: 'warning', 
+              text: `⚠️ Brand "${brand_names[index]}" not found in HubSpot.` 
+            });
+            
+            // Return a minimal object for brands not in HubSpot
+            return {
+              name: brand_names[index],
+              details: {
+                brand_name: brand_names[index],
+                client_status: 'Not in Database'
+              },
+              meetings: [],
+              emails: []
+            };
+          }
+          
+          // Filter meetings/emails relevant to this specific brand
+          const brandMeetings = meetingsData.filter(m => 
+            m.title?.toLowerCase().includes(brand_names[index].toLowerCase()) ||
+            m.summary?.overview?.toLowerCase().includes(brand_names[index].toLowerCase())
+          );
+          
+          const brandEmails = emailsData.filter(e => 
+            e.subject?.toLowerCase().includes(brand_names[index].toLowerCase()) ||
+            e.preview?.toLowerCase().includes(brand_names[index].toLowerCase())
+          );
           
           return {
+            name: brand_names[index],
             details: brand.properties,
-            meetings: firefliesData.transcripts || [],
-            emails: o365Data || []
+            meetings: brandMeetings.slice(0, 2), // Limit to 2 most relevant
+            emails: brandEmails.slice(0, 2) // Limit to 2 most relevant
           };
-        }).filter(Boolean);
+        });
 
         mcpThinking.push({ 
           type: 'complete', 
@@ -2390,7 +2588,8 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             dataType: 'DEEP_DIVE_ANALYSIS',
             productionContext: lastProductionContext || 'General brand integration analysis',
             brands: organizedBrands,
-            requestedBrands: brand_names
+            requestedBrands: brand_names,
+            searchOptimized: brand_names.length > 3 // Flag to indicate if we used optimized search
           },
           mcpThinking,
           usedMCP: true
