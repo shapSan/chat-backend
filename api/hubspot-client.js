@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 
-const hubspotApiKey = process.env.HUBSPOT_API_KEY;
+export const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 
 const hubspotAPI = {
   baseUrl: 'https://api.hubapi.com',
