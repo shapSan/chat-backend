@@ -668,32 +668,13 @@ const firefliesAPI = {
     try {
       console.log('[DEBUG firefliesAPI.searchTranscripts] Searching with filters:', filters);
       
-      // Build the GraphQL query dynamically based on filters
-      let queryParams = [];
-      let variables = {};
-      
-      // Only add keyword if it's not empty
-      if (filters.keyword && filters.keyword.trim() !== '') {
-        queryParams.push('keyword: $keyword');
-        variables.keyword = filters.keyword.trim();
-      }
-      
-      // Add limit
-      queryParams.push('limit: $limit');
-      variables.limit = filters.limit || 10;
-      
-      // Add fromDate if provided
-      if (filters.fromDate) {
-        queryParams.push('fromDate: $fromDate');
-        variables.fromDate = filters.fromDate;
-      }
-      
-      // Build the query string
-      const paramString = queryParams.length > 0 ? `(${queryParams.join(', ')})` : '';
-      
       const graphqlQuery = `
-        query SearchTranscripts${variables.keyword !== undefined ? '($keyword: String, $limit: Int, $fromDate: DateTime)' : '($limit: Int, $fromDate: DateTime)'} {
-          transcripts${paramString} {
+        query SearchTranscripts($keyword: String, $limit: Int, $fromDate: DateTime) {
+          transcripts(
+            keyword: $keyword, 
+            limit: $limit,
+            fromDate: $fromDate
+          ) {
             id
             title
             date
@@ -712,9 +693,6 @@ const firefliesAPI = {
         }
       `;
       
-      console.log('[DEBUG firefliesAPI.searchTranscripts] GraphQL Query:', graphqlQuery);
-      console.log('[DEBUG firefliesAPI.searchTranscripts] Variables:', variables);
-      
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
@@ -723,7 +701,11 @@ const firefliesAPI = {
         },
         body: JSON.stringify({
           query: graphqlQuery,
-          variables: variables
+          variables: {
+            keyword: filters.keyword || '',
+            limit: filters.limit || 10,
+            fromDate: filters.fromDate
+          }
         })
       });
       
@@ -739,13 +721,6 @@ const firefliesAPI = {
       
       if (data.errors) {
         console.error('[DEBUG firefliesAPI.searchTranscripts] GraphQL errors:', data.errors);
-        
-        // If keyword search failed, try without keyword
-        if (data.errors.some(e => e.code === 'invalid_arguments') && filters.keyword) {
-          console.log('[DEBUG firefliesAPI.searchTranscripts] Retrying without keyword...');
-          return this.searchTranscripts({ ...filters, keyword: undefined });
-        }
-        
         return [];
       }
       
@@ -876,73 +851,35 @@ async function searchFireflies(query, options = {}) {
     
     console.log('[DEBUG searchFireflies] Connection successful');
     
-    // If no query or empty query, get recent transcripts without keyword filter
-    if (!query || query.trim() === '') {
-      console.log('[DEBUG searchFireflies] No query provided, fetching recent transcripts');
-      const filters = {
-        limit: options.limit || 10
-      };
-      
-      if (options.fromDate) {
-        filters.fromDate = options.fromDate;
-      }
-      
-      const results = await firefliesAPI.searchTranscripts(filters);
-      console.log(`[DEBUG searchFireflies] Found ${results.length} recent transcripts`);
-      
-      return {
-        transcripts: results
-      };
-    }
-    
     // If query is an array, it's pre-extracted keywords
     let searchTerms;
     if (Array.isArray(query)) {
-      searchTerms = query.filter(term => term && term.trim() !== ''); // Filter out empty terms
+      searchTerms = query;
       console.log('[DEBUG searchFireflies] Using provided search terms:', searchTerms);
     } else {
       // For simple searches (like brand names), also search the raw query
-      searchTerms = [query.trim()]; // Start with the raw query
+      searchTerms = [query]; // Start with the raw query
       
       // Only extract keywords for complex queries
       if (query.length > 50) {
         const extractedTerms = await extractKeywordsForContextSearch(query);
         console.log('[DEBUG searchFireflies] Extracted keywords:', extractedTerms);
         // Add extracted terms but keep the original simpler terms too
-        searchTerms = [...new Set([...searchTerms, ...extractedTerms])].filter(term => term && term.trim() !== '');
+        searchTerms = [...new Set([...searchTerms, ...extractedTerms])];
       }
       
       console.log('[DEBUG searchFireflies] Final search terms:', searchTerms);
-    }
-    
-    // If no valid search terms, get recent transcripts
-    if (searchTerms.length === 0) {
-      console.log('[DEBUG searchFireflies] No valid search terms, fetching recent transcripts');
-      const filters = {
-        limit: options.limit || 10
-      };
-      
-      if (options.fromDate) {
-        filters.fromDate = options.fromDate;
-      }
-      
-      const results = await firefliesAPI.searchTranscripts(filters);
-      return {
-        transcripts: results
-      };
     }
     
     let allTranscripts = new Map();
     
     // Search for each term and combine results
     for (const term of searchTerms.slice(0, 10)) { // Increased limit
-      if (!term || term.trim() === '') continue; // Skip empty terms
-      
       try {
         console.log(`[DEBUG searchFireflies] Searching for term: "${term}"`);
         
         const filters = {
-          keyword: term.trim(),
+          keyword: term,
           limit: options.limit || 10 // Increased default limit
         };
         
@@ -1901,47 +1838,15 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
       for (const meeting of context.meetings) {
         if (meeting.title?.toLowerCase().includes(brandName.toLowerCase()) || 
             meeting.summary?.overview?.toLowerCase().includes(brandName.toLowerCase())) {
-          
-          // Return structured insight with segments
-          const segments = [];
-          
-          // Add text segment
+          // Try to extract a relevant quote
           if (meeting.summary?.action_items && meeting.summary.action_items.length > 0) {
-            segments.push({
-              type: "text",
-              content: "Active discussions noted with action items from "
-            });
-          } else if (meeting.summary?.overview) {
-            segments.push({
-              type: "text",
-              content: "Recent meeting activity discussed in "
-            });
-          } else {
-            segments.push({
-              type: "text",
-              content: "Mentioned in "
-            });
+            const relevantAction = meeting.summary.action_items[0];
+            return `"${relevantAction}" - [Meeting ${meeting.dateString}](${meeting.transcript_url})`;
           }
-          
-          // Add link segment
-          segments.push({
-            type: "link",
-            content: `"${meeting.title}" on ${meeting.dateString}`,
-            url: meeting.transcript_url || '#'
-          });
-          
-          // Add any trailing context
-          if (meeting.summary?.action_items && meeting.summary.action_items.length > 0) {
-            segments.push({
-              type: "text",
-              content: ` - "${meeting.summary.action_items[0]}"`
-            });
+          if (meeting.summary?.overview) {
+            const snippet = meeting.summary.overview.slice(0, 100);
+            return `Meeting discussed: "${snippet}..." - [${meeting.dateString}](${meeting.transcript_url})`;
           }
-          
-          return {
-            segments: segments,
-            rawText: segments.map(s => s.content).join('') // For backward compatibility
-          };
         }
       }
     }
@@ -1952,19 +1857,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         if (email.subject?.toLowerCase().includes(brandName.toLowerCase()) || 
             email.preview?.toLowerCase().includes(brandName.toLowerCase())) {
           const date = new Date(email.receivedDate).toLocaleDateString();
-          
-          // Return structured insight with segments
-          const segments = [
-            {
-              type: "text",
-              content: `Recent email from ${email.fromName || email.from}: "${email.subject}" (${date})`
-            }
-          ];
-          
-          return {
-            segments: segments,
-            rawText: segments[0].content // For backward compatibility
-          };
+          return `Recent email from ${email.fromName || email.from}: "${email.subject}" (${date})`;
         }
       }
     }
@@ -2009,7 +1902,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     activityBrands.results.forEach(brand => {
       const id = brand.id;
       const brandName = brand.properties.brand_name || '';
-      const contextData = findBrandContext(brandName);
+      const contextQuote = findBrandContext(brandName);
       
       if (!brandMap.has(id)) {
         brandMap.set(id, {
@@ -2026,8 +1919,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
           tags: ['📧 Recent Activity'],
           relevanceScore: 95,
-          reason: contextData?.rawText || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`,
-          insight: contextData // Include structured insight data
+          reason: contextQuote || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`
         });
       }
       // Add additional tags based on status
@@ -2051,7 +1943,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   genreBrands.results?.forEach(brand => {
     const id = brand.id;
     const brandName = brand.properties.brand_name || '';
-    const contextData = findBrandContext(brandName);
+    const contextQuote = findBrandContext(brandName);
     
     if (!brandMap.has(id)) {
       brandMap.set(id, {
@@ -2068,16 +1960,11 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['🎭 Vibe Match'],
         relevanceScore: 85,
-        reason: contextData?.rawText || generatePitch(brand.properties, synopsis),
-        insight: contextData // Include structured insight data
+        reason: contextQuote || generatePitch(brand.properties, synopsis)
       });
     } else {
       brandMap.get(id).tags.push('🎭 Vibe Match');
       brandMap.get(id).relevanceScore = Math.min(98, brandMap.get(id).relevanceScore + 5);
-      // Update insight if we found context
-      if (contextData && !brandMap.get(id).insight) {
-        brandMap.get(id).insight = contextData;
-      }
     }
     // Add additional tags based on status
     const brandData = brandMap.get(id);
@@ -2099,7 +1986,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   activeBrands.results?.forEach(brand => {
     const id = brand.id;
     const brandName = brand.properties.brand_name || '';
-    const contextData = findBrandContext(brandName);
+    const contextQuote = findBrandContext(brandName);
     
     if (!brandMap.has(id)) {
       brandMap.set(id, {
@@ -2116,8 +2003,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['💰 Active Big-Budget Client', '🔥 Active Client'],
         relevanceScore: 90,
-        reason: contextData?.rawText || `Budget proven: ${brand.properties.deals_count} deals, ${brand.properties.partnership_count} partnerships`,
-        insight: contextData // Include structured insight data
+        reason: contextQuote || `Budget proven: ${brand.properties.deals_count} deals, ${brand.properties.partnership_count} partnerships`
       });
     } else {
       if (!brandMap.get(id).tags.includes('💰 Big Budget')) {
@@ -2127,10 +2013,6 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         brandMap.get(id).tags.push('🔥 Active Client');
       }
       brandMap.get(id).relevanceScore = Math.min(98, brandMap.get(id).relevanceScore + 8);
-      // Update insight if we found context
-      if (contextData && !brandMap.get(id).insight) {
-        brandMap.get(id).insight = contextData;
-      }
     }
     // Add additional tags based on activity levels
     const brandData = brandMap.get(id);
