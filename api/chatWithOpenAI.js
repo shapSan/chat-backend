@@ -26,6 +26,27 @@ const msftTenantId = process.env.MICROSOFT_TENANT_ID;
 const msftClientId = process.env.MICROSOFT_CLIENT_ID;
 const msftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
+// Model configuration centralization
+const MODELS = {
+  openai: {
+    chat: 'gpt-4o',
+    chatMini: 'gpt-4o-mini',
+    chatLegacy: 'gpt-3.5-turbo',
+    image: 'gpt-image-1',
+    realtime: 'gpt-4o-realtime-preview-2024-10-01'
+  },
+  anthropic: {
+    claude: 'claude-3-5-sonnet-20241022'
+  },
+  elevenlabs: {
+    voice: 'eleven_monolingual_v1'
+  },
+  runway: {
+    default: 'gen3_alpha_turbo',
+    turbo: 'gen4_turbo'
+  }
+};
+
 const PROJECT_CONFIGS = {
   'default': {
     baseId: 'appTYnw2qIaBIGRbR',
@@ -53,10 +74,6 @@ const PROJECT_CONFIGS = {
   }
 };
 
-
-const microsoftTenantId = process.env.MICROSOFT_TENANT_ID;
-const microsoftClientId = process.env.MICROSOFT_CLIENT_ID;
-const microsoftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
 const o365API = {
   accessToken: null,
@@ -153,27 +170,19 @@ const o365API = {
       fromDate.setDate(fromDate.getDate() - (options.days || 90));
       const dateFilter = fromDate.toISOString();
       
-      // Search for each term
+      // Search for each term using $search API with ConsistencyLevel header
       for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
         try {
-          // Limit search term to 20 characters to avoid timeouts
-          let searchTerm = term.replace(/'/g, "''");
+          // Clean search term
+          let searchTerm = term.trim();
           
-          // If term is too long, truncate it intelligently
-          if (searchTerm.length > 20) {
-            // Try to cut at word boundary
-            searchTerm = searchTerm.substring(0, 20).split(' ').slice(0, -1).join(' ') || searchTerm.substring(0, 20);
-          }
-          
-          // Skip if search term is too short after processing
+          // Skip if search term is too short
           if (searchTerm.length < 2) continue;
           
-          console.log(`[DEBUG o365API.searchEmails] Searching for term: "${searchTerm}" (original: "${term}")`);
+          console.log(`[DEBUG o365API.searchEmails] Searching for term: "${searchTerm}"`);
           
-          // Search in both subject and body
-          const filter = `receivedDateTime ge ${dateFilter} and (contains(subject,'${searchTerm}') or contains(body/content,'${searchTerm}'))`;
-          
-          const messagesUrl = `https://graph.microsoft.com/v1.0/users/${userEmail}/messages?$filter=${encodeURIComponent(filter)}&$top=10&$select=id,subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
+          // Use $search instead of $filter for better performance
+          const messagesUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userEmail)}/messages?$search="${encodeURIComponent(searchTerm)}"&$top=10&$select=id,subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
           
           console.log('[DEBUG o365API.searchEmails] Request URL length:', messagesUrl.length);
           
@@ -185,7 +194,8 @@ const o365API = {
             const response = await fetch(messagesUrl, {
               headers: {
                 'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'ConsistencyLevel': 'eventual' // Required for $search
               },
               signal: controller.signal
             });
@@ -253,6 +263,8 @@ const o365API = {
     try {
       const accessToken = await this.getAccessToken();
       
+      const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
+      
       const draftData = {
         subject: subject,
         body: {
@@ -270,7 +282,7 @@ const o365API = {
           [{ emailAddress: { address: options.cc } }];
       }
       
-      const response = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      const response = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userEmail)}/messages`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -299,8 +311,9 @@ const o365API = {
   async testConnection() {
     try {
       const token = await this.getAccessToken();
+      const probeEmail = 'stacy@hollywoodbranded.com';
       
-      const response = await fetch('https://graph.microsoft.com/v1.0/me', {
+      const response = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(probeEmail)}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -464,7 +477,7 @@ async function extractKeywordsForHubSpot(synopsis) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
+        model: MODELS.openai.chatLegacy,
         messages: [
           { role: 'system', content: "Analyze this production synopsis and identify 3-5 brand categories that would resonate with its audience. Think about: What brands would viewers of this content naturally gravitate toward? What lifestyle/aspirations does this story represent? What demographic psychographics emerge? Return ONLY category keywords that brands use, separated by spaces. Be specific and insightful - go beyond obvious genre matches to find authentic brand-audience alignment." },
           { role: 'user', content: synopsis }
@@ -488,7 +501,7 @@ async function extractKeywordsForContextSearch(text) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
+        model: MODELS.openai.chatLegacy,
         messages: [
           { role: 'system', content: 'Extract key entities from text for database search. From the text, extract: 1) Primary Project/Film Title, 2) Up to 3 key brand names mentioned, 3) Up to 3 relevant themes/genres. Return as JSON: {"keywords": ["term1", "term2", ...]}. Example: {"keywords": ["The Last Mrs. Parrish", "Netflix", "thriller", "luxury"]}' },
           { role: 'user', content: text }
@@ -520,12 +533,17 @@ function withTimeout(promise, ms, defaultValue) {
 
 // Extract JSON from AI response text
 function extractJson(text) {
-  // First try to parse the whole text
+  if (!text) return null;
+  
+  // Remove code fences if present
+  const cleaned = text.replace(/^```json\s*|\s*```$/g, '').trim();
+  
+  // First try to parse the cleaned text
   try {
-    return JSON.parse(text);
+    return JSON.parse(cleaned);
   } catch (e) {
     // If that fails, look for JSON object pattern
-    const match = text.match(/\{[\s\S]*\}/);
+    const match = cleaned.match(/\{[\s\S]*\}/);
     if (match) {
       try {
         return JSON.parse(match[0]);
@@ -538,6 +556,53 @@ function extractJson(text) {
 }
 
 // REPLACE your old narrowWithIntelligentTags function with this
+async function narrowWithIntelligentTagsOpenAI(hubspotBrands, firefliesTranscripts, emails, userMessage) {
+  console.log('[DEBUG narrowWithIntelligentTagsOpenAI] Fallback function called with', hubspotBrands?.length || 0, 'brands');
+  
+  if (!hubspotBrands || hubspotBrands.length === 0) {
+    return { topBrands: [], taggedBrands: [] };
+  }
+  
+  if (!openAIApiKey) {
+    console.warn("[DEBUG narrowWithIntelligentTagsOpenAI] No OpenAI API key.");
+    return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
+  }
+  
+  try {
+    // Simple activity-based ranking as fallback
+    const rankedBrands = hubspotBrands
+      .map(brand => {
+        const partnershipCount = parseInt(brand.properties.partnership_count || 0);
+        const dealsCount = parseInt(brand.properties.deals_count || 0);
+        const activityScore = partnershipCount * 2 + dealsCount;
+        
+        return {
+          source: 'hubspot',
+          id: brand.id,
+          name: brand.properties.brand_name || '',
+          category: brand.properties.main_category || 'General',
+          subcategories: brand.properties.product_sub_category__multi_ || '',
+          clientStatus: brand.properties.client_status || '',
+          clientType: brand.properties.client_type || '',
+          partnershipCount: brand.properties.partnership_count || '0',
+          dealsCount: brand.properties.deals_count || '0',
+          lastActivity: brand.properties.hs_lastmodifieddate,
+          hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+          relevanceScore: Math.min(100, 50 + activityScore),
+          tags: ['Activity-Based Ranking'],
+          reason: `${partnershipCount} partnerships, ${dealsCount} deals`
+        };
+      })
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, 15);
+    
+    return { topBrands: rankedBrands, taggedBrands: rankedBrands };
+  } catch (error) {
+    console.error('[DEBUG narrowWithIntelligentTagsOpenAI] Error:', error);
+    return { topBrands: hubspotBrands.slice(0, 15), taggedBrands: [] };
+  }
+}
+
 async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, emails, userMessage) {
   console.log('[DEBUG narrowWithIntelligentTags] Starting with', hubspotBrands?.length || 0, 'brands');
   
@@ -627,7 +692,7 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'claude-3-5-sonnet-20241022',
+          model: MODELS.anthropic.claude,
           max_tokens: 1000,
           temperature: 0.2,
           messages: [
@@ -919,7 +984,7 @@ When the user references "this project" or is vague, COMBINE their request with 
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
       body: JSON.stringify({ 
-        model: 'gpt-4o-mini',
+        model: MODELS.openai.chatMini,
         messages, 
         tools, 
         tool_choice: 'auto',
@@ -976,7 +1041,7 @@ async function generateWildcardBrands(synopsis) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
+        model: MODELS.openai.chatLegacy,
         messages: [
           { 
             role: 'system', 
@@ -1686,7 +1751,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
 async function generateRunwayVideo({ 
   promptText, 
   promptImage, 
-  model = 'gen3_alpha_turbo',
+  model = MODELS.runway.default,
   ratio = '1104:832',
   duration = 5
 }) {
@@ -1865,7 +1930,9 @@ async function generateVeo3Video({
 
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  // CORS headers with proper origin handling
+  const origin = req.headers.origin || "*";
+  res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
   res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -1906,7 +1973,7 @@ export default async function handler(req, res) {
                 },
                 body: JSON.stringify({
                     text: prompt,
-                    model_id: 'eleven_monolingual_v1',
+                    model_id: MODELS.elevenlabs.voice,
                     voice_settings: voiceSettings
                 })
             });
@@ -1989,7 +2056,7 @@ export default async function handler(req, res) {
             result = await generateRunwayVideo({
               promptText,
               promptImage: imageToUse,
-              model: model || 'gen4_turbo',
+              model: model || MODELS.runway.turbo,
               ratio: ratio || '1104:832',
               duration: duration || 5
             });
@@ -2029,7 +2096,7 @@ export default async function handler(req, res) {
         }
 
         try {
-          const model = 'gpt-image-1';
+          const model = MODELS.openai.image;
           
           const requestBody = {
             model: model,
@@ -2154,7 +2221,10 @@ export default async function handler(req, res) {
         const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
         if (kbResponse.ok) {
           const knowledgeBaseData = await kbResponse.json();
-          const knowledgeEntries = knowledgeBaseData.records.map(record => record.fields.Summary).join('\n\n');
+          const knowledgeEntries = knowledgeBaseData.records
+            .map(record => record.fields?.Summary)
+            .filter(Boolean)
+            .join('\n\n');
           knowledgeBaseInstructions = knowledgeEntries;
         } else {
         }
@@ -2200,7 +2270,7 @@ export default async function handler(req, res) {
       if (audioData) {
         try {
           const audioBuffer = Buffer.from(audioData, 'base64');
-          const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
+          const openaiWsUrl = `wss://api.openai.com/v1/realtime?model=${MODELS.openai.realtime}`;
 
           const openaiWs = new WebSocket(openaiWsUrl, {
             headers: {
@@ -2257,7 +2327,12 @@ export default async function handler(req, res) {
           });
 
           openaiWs.on('error', (error) => {
+            console.error('WebSocket error:', error);
             res.status(500).json({ error: 'Failed to communicate with OpenAI' });
+          });
+          
+          openaiWs.on('close', (code, reason) => {
+            console.log(`WebSocket closed with code ${code}: ${reason}`);
           });
           
         } catch (error) {
@@ -2497,7 +2572,7 @@ async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageCo
         Authorization: `Bearer ${openAIApiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: MODELS.openai.chat,
         messages: messages,
         max_tokens: 1000,
         temperature: 0.7
@@ -2545,7 +2620,7 @@ Before responding, count your numbered items - it must match the total specified
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
+        model: MODELS.anthropic.claude,
         max_tokens: 4000, // Increased to ensure we don't cut off long lists
         temperature: 0.3, // Lower temperature for more consistent following of instructions
         messages: [
