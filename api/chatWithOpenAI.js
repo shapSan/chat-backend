@@ -668,13 +668,32 @@ const firefliesAPI = {
     try {
       console.log('[DEBUG firefliesAPI.searchTranscripts] Searching with filters:', filters);
       
+      // Build the GraphQL query dynamically based on filters
+      let queryParams = [];
+      let variables = {};
+      
+      // Only add keyword if it's not empty
+      if (filters.keyword && filters.keyword.trim() !== '') {
+        queryParams.push('keyword: $keyword');
+        variables.keyword = filters.keyword.trim();
+      }
+      
+      // Add limit
+      queryParams.push('limit: $limit');
+      variables.limit = filters.limit || 10;
+      
+      // Add fromDate if provided
+      if (filters.fromDate) {
+        queryParams.push('fromDate: $fromDate');
+        variables.fromDate = filters.fromDate;
+      }
+      
+      // Build the query string
+      const paramString = queryParams.length > 0 ? `(${queryParams.join(', ')})` : '';
+      
       const graphqlQuery = `
-        query SearchTranscripts($keyword: String, $limit: Int, $fromDate: DateTime) {
-          transcripts(
-            keyword: $keyword, 
-            limit: $limit,
-            fromDate: $fromDate
-          ) {
+        query SearchTranscripts${variables.keyword !== undefined ? '($keyword: String, $limit: Int, $fromDate: DateTime)' : '($limit: Int, $fromDate: DateTime)'} {
+          transcripts${paramString} {
             id
             title
             date
@@ -693,6 +712,9 @@ const firefliesAPI = {
         }
       `;
       
+      console.log('[DEBUG firefliesAPI.searchTranscripts] GraphQL Query:', graphqlQuery);
+      console.log('[DEBUG firefliesAPI.searchTranscripts] Variables:', variables);
+      
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
@@ -701,11 +723,7 @@ const firefliesAPI = {
         },
         body: JSON.stringify({
           query: graphqlQuery,
-          variables: {
-            keyword: filters.keyword || '',
-            limit: filters.limit || 10,
-            fromDate: filters.fromDate
-          }
+          variables: variables
         })
       });
       
@@ -721,6 +739,13 @@ const firefliesAPI = {
       
       if (data.errors) {
         console.error('[DEBUG firefliesAPI.searchTranscripts] GraphQL errors:', data.errors);
+        
+        // If keyword search failed, try without keyword
+        if (data.errors.some(e => e.code === 'invalid_arguments') && filters.keyword) {
+          console.log('[DEBUG firefliesAPI.searchTranscripts] Retrying without keyword...');
+          return this.searchTranscripts({ ...filters, keyword: undefined });
+        }
+        
         return [];
       }
       
@@ -851,35 +876,73 @@ async function searchFireflies(query, options = {}) {
     
     console.log('[DEBUG searchFireflies] Connection successful');
     
+    // If no query or empty query, get recent transcripts without keyword filter
+    if (!query || query.trim() === '') {
+      console.log('[DEBUG searchFireflies] No query provided, fetching recent transcripts');
+      const filters = {
+        limit: options.limit || 10
+      };
+      
+      if (options.fromDate) {
+        filters.fromDate = options.fromDate;
+      }
+      
+      const results = await firefliesAPI.searchTranscripts(filters);
+      console.log(`[DEBUG searchFireflies] Found ${results.length} recent transcripts`);
+      
+      return {
+        transcripts: results
+      };
+    }
+    
     // If query is an array, it's pre-extracted keywords
     let searchTerms;
     if (Array.isArray(query)) {
-      searchTerms = query;
+      searchTerms = query.filter(term => term && term.trim() !== ''); // Filter out empty terms
       console.log('[DEBUG searchFireflies] Using provided search terms:', searchTerms);
     } else {
       // For simple searches (like brand names), also search the raw query
-      searchTerms = [query]; // Start with the raw query
+      searchTerms = [query.trim()]; // Start with the raw query
       
       // Only extract keywords for complex queries
       if (query.length > 50) {
         const extractedTerms = await extractKeywordsForContextSearch(query);
         console.log('[DEBUG searchFireflies] Extracted keywords:', extractedTerms);
         // Add extracted terms but keep the original simpler terms too
-        searchTerms = [...new Set([...searchTerms, ...extractedTerms])];
+        searchTerms = [...new Set([...searchTerms, ...extractedTerms])].filter(term => term && term.trim() !== '');
       }
       
       console.log('[DEBUG searchFireflies] Final search terms:', searchTerms);
+    }
+    
+    // If no valid search terms, get recent transcripts
+    if (searchTerms.length === 0) {
+      console.log('[DEBUG searchFireflies] No valid search terms, fetching recent transcripts');
+      const filters = {
+        limit: options.limit || 10
+      };
+      
+      if (options.fromDate) {
+        filters.fromDate = options.fromDate;
+      }
+      
+      const results = await firefliesAPI.searchTranscripts(filters);
+      return {
+        transcripts: results
+      };
     }
     
     let allTranscripts = new Map();
     
     // Search for each term and combine results
     for (const term of searchTerms.slice(0, 10)) { // Increased limit
+      if (!term || term.trim() === '') continue; // Skip empty terms
+      
       try {
         console.log(`[DEBUG searchFireflies] Searching for term: "${term}"`);
         
         const filters = {
-          keyword: term,
+          keyword: term.trim(),
           limit: options.limit || 10 // Increased default limit
         };
         
