@@ -3,8 +3,8 @@ import fetch from 'node-fetch';
 import WebSocket from 'ws';
 import RunwayML from '@runwayml/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import hubspotAPI from './hubspot-client.js';
-import firefliesAPI from './fireflies-client.js';
+import hubspotAPI, { hubspotApiKey } from './hubspot-client.js';
+import firefliesAPI, { firefliesApiKey } from './fireflies-client.js';
 
 dotenv.config();
 
@@ -2959,3 +2959,4 @@ async function updateAirtableConversation(sessionId, projectId, chatUrl, headers
   } catch (error) {
   }
 }
+
