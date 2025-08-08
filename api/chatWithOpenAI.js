@@ -456,10 +456,6 @@ function getCurrentTimeInPDT() {
   }).format(new Date());
 }
 
-async function searchAirtable(query, projectId, searchType = 'auto', limit = 100) {
-  return { searchType, records: [], total: 0 };
-}
-
 // ADD THIS NEW HELPER FUNCTION
 async function extractKeywordsForHubSpot(synopsis) {
   if (!openAIApiKey) return '';
@@ -522,36 +518,6 @@ function withTimeout(promise, ms, defaultValue) {
   });
 }
 
-// Add vibe match helper for pre-filtering
-function isVibeMatch(productionSynopsis, brandCategory) {
-  if (!productionSynopsis || !brandCategory) return false;
-  
-  const synopsis = productionSynopsis.toLowerCase();
-  const category = brandCategory.toLowerCase();
-  
-  // Genre-to-category mapping
-  const genreMap = {
-    action: ['automotive', 'tech', 'gaming', 'energy drink', 'sports', 'electronics'],
-    comedy: ['snack food', 'beverage', 'casual apparel', 'gaming', 'entertainment', 'food'],
-    drama: ['luxury', 'fashion', 'automotive', 'beauty', 'home goods', 'apparel'],
-    thriller: ['tech', 'security', 'automotive', 'insurance', 'electronics'],
-    scifi: ['technology', 'automotive', 'gaming', 'aerospace', 'electronics', 'tech'],
-    romance: ['jewelry', 'fashion', 'travel', 'luxury', 'beauty', 'floral', 'apparel'],
-    family: ['food', 'beverage', 'entertainment', 'travel', 'home', 'baby'],
-    horror: ['entertainment', 'gaming', 'streaming'],
-    crime: ['automotive', 'security', 'tech', 'insurance']
-  };
-
-  for (const genre in genreMap) {
-    if (synopsis.includes(genre)) {
-      if (genreMap[genre].some(cat => category.includes(cat))) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 // Extract JSON from AI response text
 function extractJson(text) {
   // First try to parse the whole text
@@ -568,66 +534,6 @@ function extractJson(text) {
       }
     }
     return null;
-  }
-}
-
-async function narrowWithOpenAI(airtableBrands, hubspotBrands, meetings, firefliesTranscripts, userMessage) {
-  try {
-    const allBrands = [...hubspotBrands];
-    const result = await narrowWithIntelligentTags(allBrands, firefliesTranscripts || [], [], userMessage);
-    return {
-      topBrands: result.topBrands || [],
-      scores: {}
-    };
-  } catch (error) {
-    return { topBrands: [], scores: {} };
-  }
-}
-
-// REPLACE your old searchHubSpot function with this corrected version
-async function searchHubSpot(query, projectId, limit = 50) {
-  if (!hubspotApiKey) {
-    return { brands: [], productions: [] };
-  }
- 
-  try {
-    const isConnected = await hubspotAPI.testConnection();
-    if (!isConnected) {
-      return { brands: [], productions: [] };
-    }
-    
-    // The logic to extract a keyword has been removed, as the AI now handles this.
-    // We will now use a more general filter to get relevant brands.
-    const brandFilters = {
-      filterGroups: [
-        {
-          filters: [
-            { propertyName: 'brand_name', operator: 'HAS_PROPERTY' }
-          ]
-        },
-        {
-          filters: [
-            { propertyName: 'lifecyclestage', operator: 'IN', values: ['customer', 'opportunity', 'salesqualifiedlead'] }
-          ]
-        }
-      ]
-    };
-
-    const brandsData = await hubspotAPI.searchBrands({
-      ...brandFilters,
-      limit
-    });
-
-    const productionsData = await hubspotAPI.searchProductions({ limit });
-
-    return {
-      brands: brandsData.results || [],
-      productions: productionsData.results || []
-    };
-
-  } catch (error) {
-    console.error("Error in searchHubSpot:", error);
-    return { brands: [], productions: [] };
   }
 }
 
@@ -862,223 +768,6 @@ async function narrowWithIntelligentTags(hubspotBrands, firefliesTranscripts, em
   }
 }
 
-
-
-function analyzeBrandInsights(brandDetails, meetings, emails) {
-  const insights = {
-    engagementLevel: 'Unknown',
-    keyTopics: [],
-    decisionMakers: [],
-    painPoints: [],
-    opportunities: [],
-    lastTouchpoint: null,
-    sentimentTrend: 'Neutral'
-  };
-  
-  const recentMeetings = meetings.filter(m => {
-    const meetingDate = new Date(m.date);
-    const daysSince = (new Date() - meetingDate) / (1000 * 60 * 60 * 24);
-    return daysSince < 90;
-  }).length;
-  
-  const recentEmails = emails.filter(e => {
-    const emailDate = new Date(e.date);
-    const daysSince = (new Date() - emailDate) / (1000 * 60 * 60 * 24);
-    return daysSince < 30;
-  }).length;
-  
-  if (recentMeetings >= 3 || recentEmails >= 5) {
-    insights.engagementLevel = 'High';
-  } else if (recentMeetings >= 1 || recentEmails >= 2) {
-    insights.engagementLevel = 'Medium';
-  } else {
-    insights.engagementLevel = 'Low';
-  }
-  
-  const allTopics = [];
-  meetings.forEach(m => {
-    if (m.keywords) allTopics.push(...m.keywords);
-    if (m.topics) {
-      const topics = m.topics.toLowerCase();
-      if (topics.includes('budget')) insights.keyTopics.push('Budget Discussions');
-      if (topics.includes('integration')) insights.keyTopics.push('Integration Planning');
-      if (topics.includes('timeline')) insights.keyTopics.push('Timeline Alignment');
-      if (topics.includes('creative')) insights.keyTopics.push('Creative Direction');
-    }
-  });
-  
-  const emailSenders = {};
-  emails.forEach(e => {
-    if (e.from) {
-      emailSenders[e.from] = (emailSenders[e.from] || 0) + 1;
-    }
-  });
-  
-  insights.decisionMakers = Object.entries(emailSenders)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([name, count]) => ({ name, interactions: count }));
-  
-  meetings.forEach(m => {
-    const summary = (m.summary || '').toLowerCase();
-    
-    if (summary.includes('challenge') || summary.includes('concern')) {
-      insights.painPoints.push('Implementation challenges discussed');
-    }
-    if (summary.includes('budget') && summary.includes('constraint')) {
-      insights.painPoints.push('Budget constraints mentioned');
-    }
-    
-    if (summary.includes('interested') || summary.includes('excited')) {
-      insights.opportunities.push('High interest expressed');
-    }
-    if (m.actionItems && m.actionItems.length > 0) {
-      insights.opportunities.push(`${m.actionItems.length} action items pending`);
-    }
-  });
-  
-  const allTouchpoints = [
-    ...meetings.map(m => ({ type: 'meeting', date: new Date(m.date), title: m.title })),
-    ...emails.map(e => ({ type: 'email', date: new Date(e.date), title: e.subject }))
-  ].sort((a, b) => b.date - a.date);
-  
-  if (allTouchpoints.length > 0) {
-    insights.lastTouchpoint = allTouchpoints[0];
-  }
-  
-  if (insights.opportunities.length > insights.painPoints.length) {
-    insights.sentimentTrend = 'Positive';
-  } else if (insights.painPoints.length > insights.opportunities.length) {
-    insights.sentimentTrend = 'Cautious';
-  }
-  
-  return insights;
-}
-
-function generateIntegrationIdeas(brand, insights, currentProduction) {
-  const ideas = [];
-  
-  const category = (brand.category || '').toLowerCase();
-  
-  if (category.includes('auto') || category.includes('car')) {
-    ideas.push({
-      type: 'Hero Vehicle',
-      description: 'Feature brand vehicle as character\'s primary transportation',
-      rationale: 'Natural integration that adds production value'
-    });
-    ideas.push({
-      type: 'Chase Sequence',
-      description: 'Showcase vehicle performance in action sequence',
-      rationale: 'Highlights product capabilities authentically'
-    });
-  }
-  
-  if (category.includes('tech') || category.includes('electronics')) {
-    ideas.push({
-      type: 'Character Tool',
-      description: 'Integrate as essential character technology',
-      rationale: 'Shows product in realistic use cases'
-    });
-    ideas.push({
-      type: 'Plot Device',
-      description: 'Technology drives key story moments',
-      rationale: 'Deep integration increases brand recall'
-    });
-  }
-  
-  if (category.includes('fashion') || category.includes('apparel')) {
-    ideas.push({
-      type: 'Wardrobe Integration',
-      description: 'Outfit key characters in brand apparel',
-      rationale: 'Visual presence throughout production'
-    });
-    ideas.push({
-      type: 'Style Transformation',
-      description: 'Use fashion to show character development',
-      rationale: 'Emotional connection with brand'
-    });
-  }
-  
-  if (category.includes('food') || category.includes('beverage')) {
-    ideas.push({
-      type: 'Social Moments',
-      description: 'Feature in character bonding scenes',
-      rationale: 'Associates brand with positive emotions'
-    });
-    ideas.push({
-      type: 'Daily Ritual',
-      description: 'Part of character\'s routine',
-      rationale: 'Shows habitual product use'
-    });
-  }
-  
-  if (insights.engagementLevel === 'High') {
-    ideas.push({
-      type: 'Custom Integration',
-      description: 'Co-develop unique brand moment for production',
-      rationale: 'High engagement allows for creative collaboration'
-    });
-  }
-  
-  if (brand.budget && parseFloat(brand.budget) > 10) {
-    ideas.push({
-      type: 'Multi-Scene Presence',
-      description: 'Strategic placement across multiple episodes/scenes',
-      rationale: 'Budget supports extended integration'
-    });
-  }
-  
-  if (currentProduction) {
-    ideas.push({
-      type: 'Themed Integration',
-      description: `Align brand with ${currentProduction} themes`,
-      rationale: 'Leverages production\'s unique narrative'
-    });
-  }
-  
-  return ideas.slice(0, 5);
-}
-
-function checkVibeMatch(productionContext, brand) {
-  const brandName = brand.name.toLowerCase();
-  const category = brand.category.toLowerCase();
-  
-  if (productionContext.genre === 'action' || productionContext.genre === 'scifi') {
-    if (brandName.includes('tesla') || brandName.includes('red bull') || 
-        category.includes('tech') || category.includes('gaming')) {
-      return true;
-    }
-  }
-  
-  if (productionContext.genre === 'drama' || productionContext.genre === 'romance') {
-    if (category.includes('beauty') || category.includes('fashion') || 
-        category.includes('luxury') || category.includes('home')) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-function isEmergingCategory(category) {
-  const emergingCategories = [
-    'crypto', 'blockchain', 'nft', 'metaverse', 'ai', 'artificial intelligence',
-    'sustainability', 'sustainable', 'eco', 'green tech',
-    'plant-based', 'vegan', 'alternative protein',
-    'wellness', 'mental health', 'meditation', 'mindfulness',
-    'telehealth', 'digital health', 'healthtech',
-    'fintech', 'digital banking', 'payment',
-    'edtech', 'online learning', 'education technology',
-    'creator economy', 'influencer', 'content creation',
-    'subscription', 'saas', 'd2c', 'dtc', 'direct to consumer',
-    'ev', 'electric vehicle', 'renewable energy',
-    'gaming', 'esports', 'streaming'
-  ];
-  
-  const categoryLower = category.toLowerCase();
-  return emergingCategories.some(ec => categoryLower.includes(ec));
-}
-
 function extractGenreFromSynopsis(synopsis) {
   if (!synopsis) return null;
   
@@ -1136,44 +825,6 @@ function extractLastProduction(conversation) {
   return lastProduction;
 }
 
-function checkGenreMatch(productionGenre, brandCategory) {
-  const genreMap = {
-    sports: ['athletic', 'fitness', 'sports', 'energy', 'nutrition', 'wellness', 'performance'],
-    comedy: ['snack', 'beverage', 'casual', 'youth', 'entertainment', 'social', 'fun'],
-    action: ['automotive', 'technology', 'gaming', 'energy', 'extreme', 'adventure', 'performance'],
-    drama: ['fashion', 'beauty', 'lifestyle', 'home', 'family', 'luxury', 'wellness'],
-    documentary: ['education', 'health', 'environment', 'social', 'tech', 'nonprofit', 'sustainability'],
-    thriller: ['tech', 'security', 'automotive', 'insurance', 'home security', 'financial'],
-    romance: ['jewelry', 'fashion', 'beauty', 'travel', 'hospitality', 'dining', 'luxury'],
-    scifi: ['technology', 'gaming', 'electronics', 'automotive', 'innovation', 'future', 'ai'],
-    crime: ['security', 'insurance', 'automotive', 'tech', 'financial', 'legal']
-  };
-  
-  const relevantCategories = genreMap[productionGenre] || [];
-  const categoryLower = brandCategory.toLowerCase();
-  
-  // Direct match
-  if (relevantCategories.some(cat => categoryLower.includes(cat))) {
-    return true;
-  }
-  
-  // Smart matches for broader categories
-  if (productionGenre && categoryLower) {
-    // Tech/Innovation brands work well with action, scifi, thriller
-    if (['action', 'scifi', 'thriller'].includes(productionGenre) && 
-        (categoryLower.includes('tech') || categoryLower.includes('innovation') || categoryLower.includes('ai'))) {
-      return true;
-    }
-    
-    // Lifestyle brands work across multiple genres
-    if (['drama', 'romance', 'comedy'].includes(productionGenre) && 
-        (categoryLower.includes('lifestyle') || categoryLower.includes('consumer'))) {
-      return true;
-    }
-  }
-  
-  return false;
-}
 async function routeUserIntent(userMessage, conversationContext, lastProductionContext) {
   if (!openAIApiKey) return { tool: 'answer_general_question' };
 
@@ -2959,4 +2610,3 @@ async function updateAirtableConversation(sessionId, projectId, chatUrl, headers
   } catch (error) {
   }
 }
-
