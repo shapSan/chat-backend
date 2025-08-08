@@ -1838,15 +1838,47 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
       for (const meeting of context.meetings) {
         if (meeting.title?.toLowerCase().includes(brandName.toLowerCase()) || 
             meeting.summary?.overview?.toLowerCase().includes(brandName.toLowerCase())) {
-          // Try to extract a relevant quote
+          
+          // Return structured insight with segments
+          const segments = [];
+          
+          // Add text segment
           if (meeting.summary?.action_items && meeting.summary.action_items.length > 0) {
-            const relevantAction = meeting.summary.action_items[0];
-            return `"${relevantAction}" - [Meeting ${meeting.dateString}](${meeting.transcript_url})`;
+            segments.push({
+              type: "text",
+              content: "Active discussions noted with action items from "
+            });
+          } else if (meeting.summary?.overview) {
+            segments.push({
+              type: "text",
+              content: "Recent meeting activity discussed in "
+            });
+          } else {
+            segments.push({
+              type: "text",
+              content: "Mentioned in "
+            });
           }
-          if (meeting.summary?.overview) {
-            const snippet = meeting.summary.overview.slice(0, 100);
-            return `Meeting discussed: "${snippet}..." - [${meeting.dateString}](${meeting.transcript_url})`;
+          
+          // Add link segment
+          segments.push({
+            type: "link",
+            content: `"${meeting.title}" on ${meeting.dateString}`,
+            url: meeting.transcript_url || '#'
+          });
+          
+          // Add any trailing context
+          if (meeting.summary?.action_items && meeting.summary.action_items.length > 0) {
+            segments.push({
+              type: "text",
+              content: ` - "${meeting.summary.action_items[0]}"`
+            });
           }
+          
+          return {
+            segments: segments,
+            rawText: segments.map(s => s.content).join('') // For backward compatibility
+          };
         }
       }
     }
@@ -1857,7 +1889,19 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         if (email.subject?.toLowerCase().includes(brandName.toLowerCase()) || 
             email.preview?.toLowerCase().includes(brandName.toLowerCase())) {
           const date = new Date(email.receivedDate).toLocaleDateString();
-          return `Recent email from ${email.fromName || email.from}: "${email.subject}" (${date})`;
+          
+          // Return structured insight with segments
+          const segments = [
+            {
+              type: "text",
+              content: `Recent email from ${email.fromName || email.from}: "${email.subject}" (${date})`
+            }
+          ];
+          
+          return {
+            segments: segments,
+            rawText: segments[0].content // For backward compatibility
+          };
         }
       }
     }
@@ -1902,7 +1946,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     activityBrands.results.forEach(brand => {
       const id = brand.id;
       const brandName = brand.properties.brand_name || '';
-      const contextQuote = findBrandContext(brandName);
+      const contextData = findBrandContext(brandName);
       
       if (!brandMap.has(id)) {
         brandMap.set(id, {
@@ -1919,7 +1963,8 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
           tags: ['📧 Recent Activity'],
           relevanceScore: 95,
-          reason: contextQuote || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`
+          reason: contextData?.rawText || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`,
+          insight: contextData // Include structured insight data
         });
       }
       // Add additional tags based on status
@@ -1943,7 +1988,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   genreBrands.results?.forEach(brand => {
     const id = brand.id;
     const brandName = brand.properties.brand_name || '';
-    const contextQuote = findBrandContext(brandName);
+    const contextData = findBrandContext(brandName);
     
     if (!brandMap.has(id)) {
       brandMap.set(id, {
@@ -1960,11 +2005,16 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['🎭 Vibe Match'],
         relevanceScore: 85,
-        reason: contextQuote || generatePitch(brand.properties, synopsis)
+        reason: contextData?.rawText || generatePitch(brand.properties, synopsis),
+        insight: contextData // Include structured insight data
       });
     } else {
       brandMap.get(id).tags.push('🎭 Vibe Match');
       brandMap.get(id).relevanceScore = Math.min(98, brandMap.get(id).relevanceScore + 5);
+      // Update insight if we found context
+      if (contextData && !brandMap.get(id).insight) {
+        brandMap.get(id).insight = contextData;
+      }
     }
     // Add additional tags based on status
     const brandData = brandMap.get(id);
@@ -1986,7 +2036,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   activeBrands.results?.forEach(brand => {
     const id = brand.id;
     const brandName = brand.properties.brand_name || '';
-    const contextQuote = findBrandContext(brandName);
+    const contextData = findBrandContext(brandName);
     
     if (!brandMap.has(id)) {
       brandMap.set(id, {
@@ -2003,7 +2053,8 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
         tags: ['💰 Active Big-Budget Client', '🔥 Active Client'],
         relevanceScore: 90,
-        reason: contextQuote || `Budget proven: ${brand.properties.deals_count} deals, ${brand.properties.partnership_count} partnerships`
+        reason: contextData?.rawText || `Budget proven: ${brand.properties.deals_count} deals, ${brand.properties.partnership_count} partnerships`,
+        insight: contextData // Include structured insight data
       });
     } else {
       if (!brandMap.get(id).tags.includes('💰 Big Budget')) {
@@ -2013,6 +2064,10 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
         brandMap.get(id).tags.push('🔥 Active Client');
       }
       brandMap.get(id).relevanceScore = Math.min(98, brandMap.get(id).relevanceScore + 8);
+      // Update insight if we found context
+      if (contextData && !brandMap.get(id).insight) {
+        brandMap.get(id).insight = contextData;
+      }
     }
     // Add additional tags based on activity levels
     const brandData = brandMap.get(id);
