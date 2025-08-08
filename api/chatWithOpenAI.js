@@ -1678,6 +1678,33 @@ function extractGenreFromSynopsis(synopsis) {
   return 'general';
 }
 
+// Add this helper function to extract title from synopsis
+function extractTitleFromSynopsis(synopsis) {
+  if (!synopsis) return null;
+  
+  // Look for patterns like "Title: The Last Mrs. Parrish" or quotes around title
+  const patterns = [
+    /^["']([^"']+)["']/,  // Quoted title at beginning
+    /Title:\s*["']?([^"'\n]+)["']?/i,  // Title: format
+    /^([^.!?\n]+)(?:[.!?]|\n)/,  // First sentence as title
+  ];
+  
+  for (const pattern of patterns) {
+    const match = synopsis.match(pattern);
+    if (match && match[1]) {
+      const title = match[1].trim();
+      // Reasonable length for a title
+      if (title.length > 3 && title.length < 100) {
+        return title;
+      }
+    }
+  }
+  
+  // Fallback: use first few words
+  const words = synopsis.split(/\s+/).slice(0, 5).join(' ');
+  return words.length > 50 ? words.substring(0, 50) + '...' : words;
+}
+
 // Add this new helper function to extract last production context
 function extractLastProduction(conversation) {
   if (!conversation) return null;
@@ -2505,9 +2532,18 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Use the last known project context or create a generic one
         const contextDescription = lastProductionContext ? 'the last discussed project' : 'general integration ideas';
         
+        // Extract title if not provided by frontend (same as find_brands)
+        let extractedTitle;
+        if (knownProjectName) {
+            extractedTitle = knownProjectName;
+        } else if (lastProductionContext) {
+            // Try to extract title from the production context
+            extractedTitle = extractTitleFromSynopsis ? extractTitleFromSynopsis(lastProductionContext) : null;
+        }
+        
         mcpThinking.push({ 
           type: 'start', 
-          text: `🔬 Performing deep dive on ${brand_names.length} brand(s) for ${contextDescription}...` 
+          text: `🔬 Performing deep dive on ${brand_names.length} brand(s) for ${extractedTitle || contextDescription}...` 
         });
         
         // Search for each brand's detailed information
@@ -2601,6 +2637,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           organizedData: {
             dataType: 'DEEP_DIVE_ANALYSIS',
             productionContext: lastProductionContext || 'General brand integration analysis',
+            projectName: extractedTitle, // Include the project name here too!
             brands: organizedBrands,
             requestedBrands: brand_names,
             searchOptimized: brand_names.length > 3 // Flag to indicate if we used optimized search
