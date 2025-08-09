@@ -5,15 +5,31 @@ import RunwayML from '@runwayml/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import hubspotAPI, { hubspotApiKey } from './hubspot-client.js';
 import firefliesAPI, { firefliesApiKey } from './fireflies-client.js';
-import { Redis } from '@upstash/redis';
+import { kv } from '@vercel/kv';
 
 dotenv.config();
 
-// Initialize Redis client
-const redis = new Redis({
-  url: process.env.KV_REST_API_URL,
-  token: process.env.KV_REST_API_TOKEN,
-});
+// KV Progress helpers
+const progKey = (id) => `mcp:${id}`;
+
+async function progressInit(id) {
+  await kv.set(progKey(id), { steps: [], done: false, ts: Date.now() }, { ex: 900 });
+}
+
+async function progressPush(id, step) {
+  const key = progKey(id);
+  const s = (await kv.get(key)) || { steps: [], done: false, ts: Date.now() };
+  s.steps.push({ ...step, timestamp: Date.now() - s.ts });
+  if (s.steps.length > 100) s.steps = s.steps.slice(-100);
+  await kv.set(key, s, { ex: 900 });
+}
+
+async function progressDone(id) {
+  const key = progKey(id);
+  const s = (await kv.get(key)) || { steps: [], done: false, ts: Date.now() };
+  s.done = true;
+  await kv.set(key, s, { ex: 300 });
+}
 
 export const config = {
   api: {
@@ -1361,13 +1377,17 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     .slice(0, 45); // Limit to top 45 (15+15+10+5)
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, progressCallback) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, onStep = () => {}) {
   if (!anthropicApiKey) return null;
   
   const intent = await routeUserIntent(userMessage, conversationContext, lastProductionContext);
   if (!intent || intent.tool === 'answer_general_question') return null;
 
   const mcpThinking = [];
+  const add = (step) => {
+    mcpThinking.push(step);
+    try { onStep(step); } catch {}
+  };
 
   try {
     switch (intent.tool) {
@@ -1377,14 +1397,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Simple keyword search (under 50 chars)
         if (search_term.length < 50) {
           const startStep = { type: 'start', text: `🔍 Searching for brands matching "${search_term}"...` };
-          mcpThinking.push(startStep);
-          if (progressCallback) await progressCallback(startStep);
+          add(startStep);
           
           const brandsData = await hubspotAPI.searchBrands({ query: search_term, limit: 15 });
           
           const completeStep = { type: 'complete', text: `✅ Found ${brandsData.results.length} brands.` };
-          mcpThinking.push(completeStep);
-          if (progressCallback) await progressCallback(completeStep);
+          add(completeStep);
           
           return {
             organizedData: {
@@ -1407,8 +1425,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
 
         // Full "Four Lists" Synopsis Search
         const synopsisStep = { type: 'start', text: '🎬 Synopsis detected. Building diverse recommendations...' };
-        mcpThinking.push(synopsisStep);
-        if (progressCallback) await progressCallback(synopsisStep);
+        add(synopsisStep);
         
         // Extract title if not provided by frontend
         let extractedTitle;
@@ -1416,8 +1433,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             // If the frontend provided a title, trust it completely
             extractedTitle = knownProjectName;
             const projectStep = { type: 'process', text: `📌 Using known project: "${extractedTitle}"` };
-            mcpThinking.push(projectStep);
-            if (progressCallback) await progressCallback(projectStep);
+            add(projectStep);
         } else {
             // Only run extraction logic if no title was sent from frontend
             extractedTitle = null; // You can add extraction logic here if needed
@@ -1428,13 +1444,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const synopsisKeywords = await extractKeywordsForHubSpot(search_term);
         
         const genreStep = { type: 'process', text: `📊 Detected genre: ${genre || 'general'}` };
-        mcpThinking.push(genreStep);
-        if (progressCallback) await progressCallback(genreStep);
+        add(genreStep);
         
         if (synopsisKeywords) {
           const keywordsStep = { type: 'process', text: `🔑 Keywords extracted: ${synopsisKeywords}` };
-          mcpThinking.push(keywordsStep);
-          if (progressCallback) await progressCallback(keywordsStep);
+          add(keywordsStep);
         }
         
         // Launch parallel searches for the four lists
@@ -1446,8 +1460,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         ];
         
         for (const searchStep of searches) {
-          mcpThinking.push(searchStep);
-          if (progressCallback) await progressCallback(searchStep);
+          add(searchStep);
         }
         
         const [synopsisBrands, genreBrands, activeBrands, wildcardBrands] = await Promise.all([
@@ -1509,14 +1522,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         ];
         
         for (const resultStep of results) {
-          mcpThinking.push(resultStep);
-          if (progressCallback) await progressCallback(resultStep);
+          add(resultStep);
         }
         
         // Combine and tag all results
         const combineStep = { type: 'process', text: '🤝 Combining and ranking recommendations...' };
-        mcpThinking.push(combineStep);
-        if (progressCallback) await progressCallback(combineStep);
+        add(combineStep);
         
         const taggedBrands = tagAndCombineBrands({
           synopsisBrands,
@@ -1529,8 +1540,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         let supportingContext = { meetings: [], emails: [] };
         if (firefliesApiKey || msftClientId) {
           const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
-          mcpThinking.push(contextStep);
-          if (progressCallback) await progressCallback(contextStep);
+          add(contextStep);
           
           const contextKeywords = await extractKeywordsForContextSearch(search_term);
           
@@ -1546,14 +1556,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           
           if (supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) {
             const foundStep = { type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` };
-            mcpThinking.push(foundStep);
-            if (progressCallback) await progressCallback(foundStep);
+            add(foundStep);
           }
         }
 
         const finalStep = { type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` };
-        mcpThinking.push(finalStep);
-        if (progressCallback) await progressCallback(finalStep);
+        add(finalStep);
         
         return {
           organizedData: {
@@ -1571,8 +1579,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
       case 'get_brand_activity': {
         const { brand_name } = intent.args;
         const activityStep = { type: 'start', text: `🎬 Activity retrieval detected for "${brand_name}"...` };
-        mcpThinking.push(activityStep);
-        if (progressCallback) await progressCallback(activityStep);
+        add(activityStep);
         
         // Search for the brand and its activity
         const searchSteps = [
@@ -1582,8 +1589,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         ];
         
         for (const step of searchSteps) {
-          mcpThinking.push(step);
-          if (progressCallback) await progressCallback(step);
+          add(step);
         }
         
         // Run all searches in parallel for better performance
@@ -1595,35 +1601,29 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         if (!brand) {
           const errorStep = { type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` };
-          mcpThinking.push(errorStep);
-          if (progressCallback) await progressCallback(errorStep);
+          add(errorStep);
           // Still return meetings and emails even if brand not in HubSpot
         } else {
           const foundStep = { type: 'result', text: `✅ Found brand in HubSpot.` };
-          mcpThinking.push(foundStep);
-          if (progressCallback) await progressCallback(foundStep);
+          add(foundStep);
         }
         
         const meetingStep = { type: 'result', text: `✅ Found ${firefliesData.transcripts?.length || 0} meeting(s).` };
-        mcpThinking.push(meetingStep);
-        if (progressCallback) await progressCallback(meetingStep);
+        add(meetingStep);
         
         const emailStep = { type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` };
-        mcpThinking.push(emailStep);
-        if (progressCallback) await progressCallback(emailStep);
+        add(emailStep);
         
         // Get contacts if brand exists
         let contacts = [];
         if (brand) {
           const contactStep = { type: 'search', text: '👥 Retrieving brand contacts...' };
-          mcpThinking.push(contactStep);
-          if (progressCallback) await progressCallback(contactStep);
+          add(contactStep);
           
           contacts = await hubspotAPI.getContactsForBrand(brand.id);
           
           const contactResultStep = { type: 'result', text: `✅ Found ${contacts.length} contact(s).` };
-          mcpThinking.push(contactResultStep);
-          if (progressCallback) await progressCallback(contactResultStep);
+          add(contactResultStep);
         }
         
         // Combine and sort all communications chronologically
@@ -1668,8 +1668,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const emailCount = allCommunications.filter(c => c.type === 'email').length;
         
         const doneStep = { type: 'complete', text: `✨ Activity report generated with ${allCommunications.length} items.` };
-        mcpThinking.push(doneStep);
-        if (progressCallback) await progressCallback(doneStep);
+        add(doneStep);
         
         return {
           organizedData: {
@@ -1696,13 +1695,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           type: 'start', 
           text: `🔬 Performing deep dive on ${brand_names.length} brand(s) for ${contextDescription}...` 
         };
-        mcpThinking.push(startStep);
-        if (progressCallback) await progressCallback(startStep);
+        add(startStep);
         
         // Search for each brand's detailed information
         const searchStep = { type: 'search', text: '🔍 Gathering brand details from HubSpot...' };
-        mcpThinking.push(searchStep);
-        if (progressCallback) await progressCallback(searchStep);
+        add(searchStep);
         
         // First, get all brand details from HubSpot quickly
         const brandDetailsPromises = brand_names.map(name => 
@@ -1718,12 +1715,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         if (brand_names.length <= 3) {
           // For small number of brands, do targeted searches
           const meetingSearchStep = { type: 'search', text: '🎙️ Searching for relevant meetings...' };
-          mcpThinking.push(meetingSearchStep);
-          if (progressCallback) await progressCallback(meetingSearchStep);
+          add(meetingSearchStep);
           
           const emailSearchStep = { type: 'search', text: '✉️ Searching for relevant emails...' };
-          mcpThinking.push(emailSearchStep);
-          if (progressCallback) await progressCallback(emailSearchStep);
+          add(emailSearchStep);
           
           // Create a combined search query for all brands
           const combinedSearchQuery = brand_names.join(' OR ');
@@ -1741,16 +1736,14 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             type: 'result', 
             text: `✅ Found ${meetingsData.length} relevant meetings and ${emailsData.length} emails total.` 
           };
-          mcpThinking.push(foundStep);
-          if (progressCallback) await progressCallback(foundStep);
+          add(foundStep);
         } else {
           // For many brands, skip the slow searches
           const skipStep = { 
             type: 'info', 
             text: `⚡ Skipping detailed communication search for ${brand_names.length} brands (too many for deep dive).` 
           };
-          mcpThinking.push(skipStep);
-          if (progressCallback) await progressCallback(skipStep);
+          add(skipStep);
         }
         
         // Organize the results
@@ -1760,8 +1753,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
               type: 'warning', 
               text: `⚠️ Brand "${brand_names[index]}" not found in HubSpot.` 
             };
-            mcpThinking.push(warningStep);
-            if (progressCallback) progressCallback(warningStep); // No await in map
+            add(warningStep);
             
             // Return a minimal object for brands not in HubSpot
             return {
@@ -1798,8 +1790,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           type: 'complete', 
           text: `✨ Deep dive completed for ${organizedBrands.length} brand(s).` 
         };
-        mcpThinking.push(completeStep);
-        if (progressCallback) await progressCallback(completeStep);
+        add(completeStep);
 
         return {
           organizedData: {
@@ -1820,8 +1811,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
   } catch (error) {
     console.error(`Error executing tool "${intent.tool}":`, error);
     const errorStep = { type: 'error', text: `❌ Error: ${error.message}` };
-    mcpThinking.push(errorStep);
-    if (progressCallback) await progressCallback(errorStep);
+    add(errorStep);
     return null;
   }
 }
@@ -2023,18 +2013,8 @@ export default async function handler(req, res) {
   // GET endpoint for progress
   if (req.method === 'GET' && req.query.progress === 'true') {
     const sessionId = req.query.sessionId;
-    if (!sessionId) {
-      return res.status(400).json({ error: 'Missing sessionId' });
-    }
-    
-    try {
-      const data = await redis.get(progKey(sessionId));
-      const progress = data ? JSON.parse(data) : { steps: [], done: false };
-      return res.status(200).json(progress);
-    } catch (error) {
-      console.error('Redis get error:', error);
-      return res.status(200).json({ steps: [], done: false });
-    }
+    const s = (await kv.get(progKey(sessionId))) || { steps: [], done: false };
+    return res.status(200).json(s);
   }
   
   if (req.method === 'POST') {
@@ -2298,7 +2278,8 @@ export default async function handler(req, res) {
       }
 
       // Initialize progress tracking for this session
-      await initProgress(sessionId);
+      await progressInit(sessionId);
+      await progressPush(sessionId, { type: 'info', text: '🔎 Routing request...' });
 
       const projectConfig = getProjectConfig(projectId);
       const { baseId, chatTable, knowledgeTable } = projectConfig;
@@ -2413,6 +2394,7 @@ export default async function handler(req, res) {
           
           openaiWs.on('close', (code, reason) => {
             console.log(`WebSocket closed with code ${code}: ${reason}`);
+            progressDone(sessionId); // Mark done when websocket closes
           });
           
         } catch (error) {
@@ -2432,18 +2414,13 @@ export default async function handler(req, res) {
           // Extract the last production context for follow-up questions
           const lastProductionContext = extractLastProduction(conversationContext);
           
-          // Create progress callback
-          const progressCallback = async (step) => {
-            await pushProgress(sessionId, step);
-          };
-          
           const claudeResult = await handleClaudeSearch(
               userMessage,
               projectId,
               conversationContext,
               lastProductionContext,
               projectName, // Pass the known name from the request body
-              progressCallback // Pass the progress callback
+              (step) => progressPush(sessionId, step)
           );
 
           if (claudeResult) {
@@ -2567,7 +2544,7 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               ).catch(err => console.error('[DEBUG] Airtable update error:', err));
 
               // The final response now includes mcpSteps for the frontend
-              await finishProgress(sessionId); // Mark progress as done
+              await progressDone(sessionId); // Mark progress as done
               return res.json({
                   reply: aiReply,
                   structuredData: structuredData,
@@ -2583,13 +2560,13 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               });
           } else {
               console.error('[DEBUG] No AI reply received');
-              await finishProgress(sessionId); // Mark progress as done even on error
+              await progressDone(sessionId); // Mark progress as done even on error
               return res.status(500).json({ error: 'No text reply received.' });
           }
         } catch (error) {
           console.error("[CRASH DETECTED IN HANDLER]:", error);
           console.error("[STACK TRACE]:", error.stack);
-          await finishProgress(sessionId); // Mark progress as done even on crash
+          await progressDone(sessionId); // Mark progress as done even on crash
           return res.status(500).json({ 
             error: 'Internal server error', 
             details: error.message,
