@@ -5,6 +5,7 @@ import RunwayML from '@runwayml/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import hubspotAPI, { hubspotApiKey } from './hubspot-client.js';
 import firefliesAPI, { firefliesApiKey } from './fireflies-client.js';
+import { kv } from '@vercel/kv';
 
 dotenv.config();
 
@@ -1354,7 +1355,7 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     .slice(0, 45); // Limit to top 45 (15+15+10+5)
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, progressCallback) {
   if (!anthropicApiKey) return null;
   
   const intent = await routeUserIntent(userMessage, conversationContext, lastProductionContext);
@@ -1369,9 +1370,15 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         // Simple keyword search (under 50 chars)
         if (search_term.length < 50) {
-          mcpThinking.push({ type: 'start', text: `🔍 Searching for brands matching "${search_term}"...` });
+          const startStep = { type: 'start', text: `🔍 Searching for brands matching "${search_term}"...` };
+          mcpThinking.push(startStep);
+          if (progressCallback) await progressCallback(startStep);
+          
           const brandsData = await hubspotAPI.searchBrands({ query: search_term, limit: 15 });
-          mcpThinking.push({ type: 'complete', text: `✅ Found ${brandsData.results.length} brands.` });
+          
+          const completeStep = { type: 'complete', text: `✅ Found ${brandsData.results.length} brands.` };
+          mcpThinking.push(completeStep);
+          if (progressCallback) await progressCallback(completeStep);
           
           return {
             organizedData: {
@@ -1393,14 +1400,18 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         }
 
         // Full "Four Lists" Synopsis Search
-        mcpThinking.push({ type: 'start', text: '🎬 Synopsis detected. Building diverse recommendations...' });
+        const synopsisStep = { type: 'start', text: '🎬 Synopsis detected. Building diverse recommendations...' };
+        mcpThinking.push(synopsisStep);
+        if (progressCallback) await progressCallback(synopsisStep);
         
         // Extract title if not provided by frontend
         let extractedTitle;
         if (knownProjectName) {
             // If the frontend provided a title, trust it completely
             extractedTitle = knownProjectName;
-            mcpThinking.push({ type: 'process', text: `📌 Using known project: "${extractedTitle}"` });
+            const projectStep = { type: 'process', text: `📌 Using known project: "${extractedTitle}"` };
+            mcpThinking.push(projectStep);
+            if (progressCallback) await progressCallback(projectStep);
         } else {
             // Only run extraction logic if no title was sent from frontend
             extractedTitle = null; // You can add extraction logic here if needed
@@ -1409,16 +1420,29 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Extract genre and keywords for better matching
         const genre = extractGenreFromSynopsis(search_term);
         const synopsisKeywords = await extractKeywordsForHubSpot(search_term);
-        mcpThinking.push({ type: 'process', text: `📊 Detected genre: ${genre || 'general'}` });
+        
+        const genreStep = { type: 'process', text: `📊 Detected genre: ${genre || 'general'}` };
+        mcpThinking.push(genreStep);
+        if (progressCallback) await progressCallback(genreStep);
+        
         if (synopsisKeywords) {
-          mcpThinking.push({ type: 'process', text: `🔑 Keywords extracted: ${synopsisKeywords}` });
+          const keywordsStep = { type: 'process', text: `🔑 Keywords extracted: ${synopsisKeywords}` };
+          mcpThinking.push(keywordsStep);
+          if (progressCallback) await progressCallback(keywordsStep);
         }
         
         // Launch parallel searches for the four lists
-        mcpThinking.push({ type: 'search', text: '🎯 List 1: Synopsis-matched brands (15)...' });
-        mcpThinking.push({ type: 'search', text: '🎭 List 2: Vibe matches (15)...' });
-        mcpThinking.push({ type: 'search', text: '💰 List 3: Active big-budget clients (10)...' });
-        mcpThinking.push({ type: 'search', text: '🚀 List 4: Creative exploration (5 cold outreach)...' });
+        const searches = [
+          { type: 'search', text: '🎯 List 1: Synopsis-matched brands (15)...' },
+          { type: 'search', text: '🎭 List 2: Vibe matches (15)...' },
+          { type: 'search', text: '💰 List 3: Active big-budget clients (10)...' },
+          { type: 'search', text: '🚀 List 4: Creative exploration (5 cold outreach)...' }
+        ];
+        
+        for (const searchStep of searches) {
+          mcpThinking.push(searchStep);
+          if (progressCallback) await progressCallback(searchStep);
+        }
         
         const [synopsisBrands, genreBrands, activeBrands, wildcardBrands] = await Promise.all([
           // List 1: Synopsis-matched brands using extracted keywords (15)
@@ -1471,13 +1495,23 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         ]);
 
         // Report results
-        mcpThinking.push({ type: 'result', text: `✅ Synopsis matches: ${synopsisBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Vibe matches: ${genreBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Active big-budget: ${activeBrands.results?.length || 0} brands` });
-        mcpThinking.push({ type: 'result', text: `✅ Cold outreach ideas: ${wildcardBrands?.length || 0} suggestions` });
+        const results = [
+          { type: 'result', text: `✅ Synopsis matches: ${synopsisBrands.results?.length || 0} brands` },
+          { type: 'result', text: `✅ Vibe matches: ${genreBrands.results?.length || 0} brands` },
+          { type: 'result', text: `✅ Active big-budget: ${activeBrands.results?.length || 0} brands` },
+          { type: 'result', text: `✅ Cold outreach ideas: ${wildcardBrands?.length || 0} suggestions` }
+        ];
+        
+        for (const resultStep of results) {
+          mcpThinking.push(resultStep);
+          if (progressCallback) await progressCallback(resultStep);
+        }
         
         // Combine and tag all results
-        mcpThinking.push({ type: 'process', text: '🤝 Combining and ranking recommendations...' });
+        const combineStep = { type: 'process', text: '🤝 Combining and ranking recommendations...' };
+        mcpThinking.push(combineStep);
+        if (progressCallback) await progressCallback(combineStep);
+        
         const taggedBrands = tagAndCombineBrands({
           synopsisBrands,
           genreBrands,
@@ -1488,7 +1522,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Optional: Get supporting context from meetings/emails
         let supportingContext = { meetings: [], emails: [] };
         if (firefliesApiKey || msftClientId) {
-          mcpThinking.push({ type: 'search', text: '📧 Checking for related communications...' });
+          const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
+          mcpThinking.push(contextStep);
+          if (progressCallback) await progressCallback(contextStep);
+          
           const contextKeywords = await extractKeywordsForContextSearch(search_term);
           
           const [firefliesData, emailData] = await Promise.all([
@@ -1502,11 +1539,15 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           };
           
           if (supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) {
-            mcpThinking.push({ type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` });
+            const foundStep = { type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` };
+            mcpThinking.push(foundStep);
+            if (progressCallback) await progressCallback(foundStep);
           }
         }
 
-        mcpThinking.push({ type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` });
+        const finalStep = { type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` };
+        mcpThinking.push(finalStep);
+        if (progressCallback) await progressCallback(finalStep);
         
         return {
           organizedData: {
@@ -1523,14 +1564,21 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
 
       case 'get_brand_activity': {
         const { brand_name } = intent.args;
-        mcpThinking.push({ type: 'start', text: `🎬 Activity retrieval detected for "${brand_name}"...` });
-        
-        console.log('[DEBUG get_brand_activity] Starting search for:', brand_name);
+        const activityStep = { type: 'start', text: `🎬 Activity retrieval detected for "${brand_name}"...` };
+        mcpThinking.push(activityStep);
+        if (progressCallback) await progressCallback(activityStep);
         
         // Search for the brand and its activity
-        mcpThinking.push({ type: 'search', text: '🔍 Searching HubSpot for brand details...' });
-        mcpThinking.push({ type: 'search', text: '🎙️ Searching Fireflies for meetings...' });
-        mcpThinking.push({ type: 'search', text: '✉️ Searching O365 for emails...' });
+        const searchSteps = [
+          { type: 'search', text: '🔍 Searching HubSpot for brand details...' },
+          { type: 'search', text: '🎙️ Searching Fireflies for meetings...' },
+          { type: 'search', text: '✉️ Searching O365 for emails...' }
+        ];
+        
+        for (const step of searchSteps) {
+          mcpThinking.push(step);
+          if (progressCallback) await progressCallback(step);
+        }
         
         // Run all searches in parallel for better performance
         const [brand, firefliesData, o365Data] = await Promise.all([
@@ -1539,26 +1587,37 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           msftClientId ? o365API.searchEmails(brand_name, { days: 180, limit: 20 }) : []
         ]);
         
-        console.log('[DEBUG get_brand_activity] Brand found:', !!brand);
-        console.log('[DEBUG get_brand_activity] Meetings found:', firefliesData.transcripts?.length || 0);
-        console.log('[DEBUG get_brand_activity] Emails found:', o365Data?.length || 0);
-        
         if (!brand) {
-          mcpThinking.push({ type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` });
+          const errorStep = { type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` };
+          mcpThinking.push(errorStep);
+          if (progressCallback) await progressCallback(errorStep);
           // Still return meetings and emails even if brand not in HubSpot
         } else {
-          mcpThinking.push({ type: 'result', text: `✅ Found brand in HubSpot.` });
+          const foundStep = { type: 'result', text: `✅ Found brand in HubSpot.` };
+          mcpThinking.push(foundStep);
+          if (progressCallback) await progressCallback(foundStep);
         }
         
-        mcpThinking.push({ type: 'result', text: `✅ Found ${firefliesData.transcripts?.length || 0} meeting(s).` });
-        mcpThinking.push({ type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` });
+        const meetingStep = { type: 'result', text: `✅ Found ${firefliesData.transcripts?.length || 0} meeting(s).` };
+        mcpThinking.push(meetingStep);
+        if (progressCallback) await progressCallback(meetingStep);
+        
+        const emailStep = { type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` };
+        mcpThinking.push(emailStep);
+        if (progressCallback) await progressCallback(emailStep);
         
         // Get contacts if brand exists
         let contacts = [];
         if (brand) {
-          mcpThinking.push({ type: 'search', text: '👥 Retrieving brand contacts...' });
+          const contactStep = { type: 'search', text: '👥 Retrieving brand contacts...' };
+          mcpThinking.push(contactStep);
+          if (progressCallback) await progressCallback(contactStep);
+          
           contacts = await hubspotAPI.getContactsForBrand(brand.id);
-          mcpThinking.push({ type: 'result', text: `✅ Found ${contacts.length} contact(s).` });
+          
+          const contactResultStep = { type: 'result', text: `✅ Found ${contacts.length} contact(s).` };
+          mcpThinking.push(contactResultStep);
+          if (progressCallback) await progressCallback(contactResultStep);
         }
         
         // Combine and sort all communications chronologically
@@ -1598,19 +1657,13 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Sort by date (most recent first)
         allCommunications.sort((a, b) => b.date - a.date);
         
-        console.log('[DEBUG get_brand_activity] Total communications:', allCommunications.length);
-        console.log('[DEBUG get_brand_activity] Communications breakdown:');
-        allCommunications.forEach((comm, index) => {
-          console.log(`  ${index + 1}. [${comm.type}] ${comm.title} - ${comm.dateString}`);
-        });
-        
         // Verify data integrity
         const meetingCount = allCommunications.filter(c => c.type === 'meeting').length;
         const emailCount = allCommunications.filter(c => c.type === 'email').length;
-        console.log('[DEBUG get_brand_activity] Verification - Meetings in communications:', meetingCount);
-        console.log('[DEBUG get_brand_activity] Verification - Emails in communications:', emailCount);
         
-        mcpThinking.push({ type: 'complete', text: `✨ Activity report generated with ${allCommunications.length} items.` });
+        const doneStep = { type: 'complete', text: `✨ Activity report generated with ${allCommunications.length} items.` };
+        mcpThinking.push(doneStep);
+        if (progressCallback) await progressCallback(doneStep);
         
         return {
           organizedData: {
@@ -1633,13 +1686,17 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Use the last known project context or create a generic one
         const contextDescription = lastProductionContext ? 'the last discussed project' : 'general integration ideas';
         
-        mcpThinking.push({ 
+        const startStep = { 
           type: 'start', 
           text: `🔬 Performing deep dive on ${brand_names.length} brand(s) for ${contextDescription}...` 
-        });
+        };
+        mcpThinking.push(startStep);
+        if (progressCallback) await progressCallback(startStep);
         
         // Search for each brand's detailed information
-        mcpThinking.push({ type: 'search', text: '🔍 Gathering brand details from HubSpot...' });
+        const searchStep = { type: 'search', text: '🔍 Gathering brand details from HubSpot...' };
+        mcpThinking.push(searchStep);
+        if (progressCallback) await progressCallback(searchStep);
         
         // First, get all brand details from HubSpot quickly
         const brandDetailsPromises = brand_names.map(name => 
@@ -1654,8 +1711,13 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         if (brand_names.length <= 3) {
           // For small number of brands, do targeted searches
-          mcpThinking.push({ type: 'search', text: '🎙️ Searching for relevant meetings...' });
-          mcpThinking.push({ type: 'search', text: '✉️ Searching for relevant emails...' });
+          const meetingSearchStep = { type: 'search', text: '🎙️ Searching for relevant meetings...' };
+          mcpThinking.push(meetingSearchStep);
+          if (progressCallback) await progressCallback(meetingSearchStep);
+          
+          const emailSearchStep = { type: 'search', text: '✉️ Searching for relevant emails...' };
+          mcpThinking.push(emailSearchStep);
+          if (progressCallback) await progressCallback(emailSearchStep);
           
           // Create a combined search query for all brands
           const combinedSearchQuery = brand_names.join(' OR ');
@@ -1669,25 +1731,31 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           meetingsData = firefliesData.transcripts || [];
           emailsData = o365Data || [];
           
-          mcpThinking.push({ 
+          const foundStep = { 
             type: 'result', 
             text: `✅ Found ${meetingsData.length} relevant meetings and ${emailsData.length} emails total.` 
-          });
+          };
+          mcpThinking.push(foundStep);
+          if (progressCallback) await progressCallback(foundStep);
         } else {
           // For many brands, skip the slow searches
-          mcpThinking.push({ 
+          const skipStep = { 
             type: 'info', 
             text: `⚡ Skipping detailed communication search for ${brand_names.length} brands (too many for deep dive).` 
-          });
+          };
+          mcpThinking.push(skipStep);
+          if (progressCallback) await progressCallback(skipStep);
         }
         
         // Organize the results
         const organizedBrands = brandDetails.map((brand, index) => {
           if (!brand) {
-            mcpThinking.push({ 
+            const warningStep = { 
               type: 'warning', 
               text: `⚠️ Brand "${brand_names[index]}" not found in HubSpot.` 
-            });
+            };
+            mcpThinking.push(warningStep);
+            if (progressCallback) progressCallback(warningStep); // No await in map
             
             // Return a minimal object for brands not in HubSpot
             return {
@@ -1720,10 +1788,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           };
         });
 
-        mcpThinking.push({ 
+        const completeStep = { 
           type: 'complete', 
           text: `✨ Deep dive completed for ${organizedBrands.length} brand(s).` 
-        });
+        };
+        mcpThinking.push(completeStep);
+        if (progressCallback) await progressCallback(completeStep);
 
         return {
           organizedData: {
@@ -1743,7 +1813,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
     }
   } catch (error) {
     console.error(`Error executing tool "${intent.tool}":`, error);
-    mcpThinking.push({ type: 'error', text: `❌ Error: ${error.message}` });
+    const errorStep = { type: 'error', text: `❌ Error: ${error.message}` };
+    mcpThinking.push(errorStep);
+    if (progressCallback) await progressCallback(errorStep);
     return null;
   }
 }
@@ -1937,11 +2009,26 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Max-Age", "86400");
+  
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
   
-  const wantsStream = req.headers.accept === 'text/event-stream' || (req.body && req.body.stream === true);
+  // GET endpoint for progress
+  if (req.method === 'GET' && req.query.progress === 'true') {
+    const sessionId = req.query.sessionId;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Missing sessionId' });
+    }
+    
+    try {
+      const progress = (await kv.get(progKey(sessionId))) || { steps: [], done: false };
+      return res.status(200).json(progress);
+    } catch (error) {
+      console.error('KV get error:', error);
+      return res.status(200).json({ steps: [], done: false });
+    }
+  }
   
   if (req.method === 'POST') {
     try {
@@ -2203,6 +2290,9 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
+      // Initialize progress tracking for this session
+      await initProgress(sessionId);
+
       const projectConfig = getProjectConfig(projectId);
       const { baseId, chatTable, knowledgeTable } = projectConfig;
 
@@ -2250,23 +2340,6 @@ export default async function handler(req, res) {
 
       const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
       
-      let mcpRawOutput = [];
-      let mcpStartTime = Date.now();
-      
-      if (shouldSearchDatabases) {
-        mcpRawOutput.push({
-          text: '🎬 Production context detected - search needed',
-          timestamp: Date.now() - mcpStartTime
-        });
-      }
-      
-      if (shouldSearchDatabases) {
-        mcpRawOutput.push({
-          text: `🔍 Brand matching detection: ${shouldSearchDatabases ? 'YES' : 'NO'}`,
-          timestamp: Date.now() - mcpStartTime
-        });
-      }
-
       if (audioData) {
         try {
           const audioBuffer = Buffer.from(audioData, 'base64');
@@ -2340,31 +2413,31 @@ export default async function handler(req, res) {
         }
       // This is the complete and final code to paste inside the 'else if (userMessage) { ... }' block
 } else if (userMessage) {
-        console.log('[DEBUG] Starting message processing for:', userMessage);
         try {
-          // --- FIX APPLIED HERE ---
           // Timer and MCP steps are initialized at the very start of processing.
           const mcpStartTime = Date.now();
           let mcpSteps = []; 
-          // --- END FIX ---
-
+          
           let aiReply = '';
           let usedMCP = false;
           let structuredData = null;
-
-          console.log('[DEBUG] Calling handleClaudeSearch...');
           
           // Extract the last production context for follow-up questions
           const lastProductionContext = extractLastProduction(conversationContext);
+          
+          // Create progress callback
+          const progressCallback = async (step) => {
+            await pushProgress(sessionId, step);
+          };
           
           const claudeResult = await handleClaudeSearch(
               userMessage,
               projectId,
               conversationContext,
               lastProductionContext,
-              projectName // Pass the known name from the request body
+              projectName, // Pass the known name from the request body
+              progressCallback // Pass the progress callback
           );
-          console.log('[DEBUG] handleClaudeSearch returned:', claudeResult ? 'data' : 'null');
 
           if (claudeResult) {
               // A tool was successfully used!
@@ -2374,8 +2447,6 @@ export default async function handler(req, res) {
                     timestamp: Date.now() - mcpStartTime // Recalculate timestamp relative to the handler start
                 })) || [];
               structuredData = claudeResult.organizedData;
-
-              console.log('[DEBUG] Generating text summary with OpenAI...');
               let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
               
               // Special formatting for BRAND_ACTIVITY responses
@@ -2384,18 +2455,6 @@ export default async function handler(req, res) {
                 const totalCommunications = structuredData.communications?.length || 0;
                 const actualMeetings = structuredData.communications?.filter(c => c.type === 'meeting').length || 0;
                 const actualEmails = structuredData.communications?.filter(c => c.type === 'email').length || 0;
-                
-                console.log('[DEBUG Text Generation] Total communications to display:', totalCommunications);
-                console.log('[DEBUG Text Generation] Meetings to display:', actualMeetings);
-                console.log('[DEBUG Text Generation] Emails to display:', actualEmails);
-                
-                // Log first few items to verify data
-                if (structuredData.communications && structuredData.communications.length > 0) {
-                  console.log('[DEBUG Text Generation] First 3 items:');
-                  structuredData.communications.slice(0, 3).forEach((item, idx) => {
-                    console.log(`  ${idx + 1}. [${item.type}] ${item.title}`);
-                  });
-                }
                 
                 systemMessageContent += `\n\nYou have retrieved activity data for a brand. Format your response EXACTLY as follows:
 
@@ -2470,14 +2529,6 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
                 const meetingCount = structuredData.communications?.filter(c => c.type === 'meeting').length || 0;
                 const emailCount = structuredData.communications?.filter(c => c.type === 'email').length || 0;
                 
-                // Log what we're sending to AI
-                console.log('[DEBUG Final Verification] Sending to AI:');
-                console.log('- Total items in communications array:', totalItems);
-                console.log('- Meetings:', meetingCount);
-                console.log('- Emails:', emailCount);
-                console.log('- First email title:', structuredData.communications?.find(c => c.type === 'email')?.title);
-                console.log('- All email titles:', structuredData.communications?.filter(c => c.type === 'email').map(e => e.title));
-                
                 systemMessageContent += `\n\n**FINAL VERIFICATION BEFORE YOU RESPOND**: 
                 - The communications array has ${totalItems} items total
                 - Specifically: ${meetingCount} meetings and ${emailCount} emails
@@ -2490,11 +2541,9 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               }
 
               aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
-              console.log('[DEBUG] Claude response received');
 
           } else {
               // No tool was used, so it's a general conversation.
-              console.log('[DEBUG] No tool used, generating general response...');
               usedMCP = false;
               let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in brand integration into Hollywood entertainment.";
               if (conversationContext) {
@@ -2504,15 +2553,14 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
           }
 
           if (aiReply) {
-              console.log('[DEBUG] Updating Airtable conversation...');
               updateAirtableConversation(
                   sessionId, projectId, chatUrl, headersAirtable,
                   `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
                   existingRecordId
               ).catch(err => console.error('[DEBUG] Airtable update error:', err));
 
-              console.log('[DEBUG] Sending successful response');
               // The final response now includes mcpSteps for the frontend
+              await finishProgress(sessionId); // Mark progress as done
               return res.json({
                   reply: aiReply,
                   structuredData: structuredData,
@@ -2528,11 +2576,13 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               });
           } else {
               console.error('[DEBUG] No AI reply received');
+              await finishProgress(sessionId); // Mark progress as done even on error
               return res.status(500).json({ error: 'No text reply received.' });
           }
         } catch (error) {
           console.error("[CRASH DETECTED IN HANDLER]:", error);
           console.error("[STACK TRACE]:", error.stack);
+          await finishProgress(sessionId); // Mark progress as done even on crash
           return res.status(500).json({ 
             error: 'Internal server error', 
             details: error.message,
