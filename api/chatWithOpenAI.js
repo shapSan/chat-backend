@@ -5,9 +5,15 @@ import RunwayML from '@runwayml/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import hubspotAPI, { hubspotApiKey } from './hubspot-client.js';
 import firefliesAPI, { firefliesApiKey } from './fireflies-client.js';
-import { kv } from '@vercel/kv';
+import { Redis } from '@upstash/redis';
 
 dotenv.config();
+
+// Initialize Redis client
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN,
+});
 
 export const config = {
   api: {
@@ -2022,10 +2028,11 @@ export default async function handler(req, res) {
     }
     
     try {
-      const progress = (await kv.get(progKey(sessionId))) || { steps: [], done: false };
+      const data = await redis.get(progKey(sessionId));
+      const progress = data ? JSON.parse(data) : { steps: [], done: false };
       return res.status(200).json(progress);
     } catch (error) {
-      console.error('KV get error:', error);
+      console.error('Redis get error:', error);
       return res.status(200).json({ steps: [], done: false });
     }
   }
