@@ -101,6 +101,7 @@ const PROJECT_CONFIGS = {
 const o365API = {
   accessToken: null,
   tokenExpiry: null,
+  baseUrl: 'https://graph.microsoft.com/v1.0',
   
   async getAccessToken() {
     try {
@@ -152,6 +153,7 @@ const o365API = {
     }
   },
   
+  // --- O365 EMAIL SEARCH (fix: no $orderby with $search, client-side sort) ---
   async searchEmails(query, options = {}) {
     try {
       console.log('[DEBUG o365API.searchEmails] Starting search for:', query);
@@ -168,19 +170,15 @@ const o365API = {
       const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
       console.log('[DEBUG o365API.searchEmails] Searching emails for user:', userEmail);
       
-      // If query is an array, it's pre-extracted keywords
+      // Convert query to terms array
       let searchTerms;
       if (Array.isArray(query)) {
         searchTerms = query;
       } else {
-        // For simple searches (like brand names), use the raw query
         searchTerms = [query];
-        
-        // Only extract keywords for complex queries
-        if (query.length > 50) {
+        if (query && query.length > 50) {
           const extractedTerms = await extractKeywordsForContextSearch(query);
           if (extractedTerms.length > 0) {
-            // Combine raw query with extracted terms
             searchTerms = [...new Set([query.slice(0, 50), ...extractedTerms])];
           }
         }
@@ -188,89 +186,84 @@ const o365API = {
       
       console.log('[DEBUG o365API.searchEmails] Search terms:', searchTerms);
       
-      let allEmails = new Map();
-      const fromDate = new Date();
-      fromDate.setDate(fromDate.getDate() - (options.days || 90));
-      const dateFilter = fromDate.toISOString();
+      const results = [];
+      const top = options.limit || 20;
       
-      // Search for each term using $search API with ConsistencyLevel header
-      for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
+      for (const rawTerm of searchTerms.slice(0, 5)) {
+        const term = (rawTerm ?? '').toString().trim();
+        if (!term) continue;
+        
+        console.log(`[DEBUG o365API.searchEmails] Searching for term: "${term}"`);
+        
+        const url = new URL(`${this.baseUrl}/users/${encodeURIComponent(userEmail)}/messages`);
+        // IMPORTANT: cannot use $orderby with $search
+        url.searchParams.set('$top', String(top));
+        url.searchParams.set('$search', `"${term.replace(/"/g, '\\"')}"`);
+        url.searchParams.set('$select', 'id,subject,from,receivedDateTime,bodyPreview,webLink');
+        url.searchParams.set('$count', 'true');
+        
+        console.log('[DEBUG o365API.searchEmails] Request URL:', url.toString());
+        
+        // Add timeout to prevent hanging
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
         try {
-          // Clean search term
-          let searchTerm = term.trim();
+          const res = await fetch(url, {
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'ConsistencyLevel': 'eventual', // REQUIRED for $search
+              'Prefer': 'outlook.body-content-type="text"',
+            },
+            signal: controller.signal
+          });
           
-          // Skip if search term is too short
-          if (searchTerm.length < 2) continue;
+          clearTimeout(timeoutId);
           
-          console.log(`[DEBUG o365API.searchEmails] Searching for term: "${searchTerm}"`);
-          
-          // Use $search instead of $filter for better performance
-          const messagesUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userEmail)}/messages?$search="${encodeURIComponent(searchTerm)}"&$top=10&$select=id,subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
-          
-          console.log('[DEBUG o365API.searchEmails] Request URL length:', messagesUrl.length);
-          
-          // Add timeout to prevent hanging on 504 errors
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-          
-          try {
-            const response = await fetch(messagesUrl, {
-              headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json',
-                'ConsistencyLevel': 'eventual' // Required for $search
-              },
-              signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            
-            if (response.ok) {
-              const data = await response.json();
-              console.log(`[DEBUG o365API.searchEmails] Found ${data.value?.length || 0} emails for term "${searchTerm}"`);
-              
-              (data.value || []).forEach(email => {
-                allEmails.set(email.id, email);
-                console.log(`[DEBUG o365API.searchEmails] Added email: ${email.subject} from ${email.from?.emailAddress?.address}`);
-              });
-            } else {
-              const errorText = await response.text();
-              console.error(`[DEBUG o365API.searchEmails] Failed for term "${searchTerm}":`, response.status, errorText);
-              
-              // If we get a 504 timeout, skip remaining terms to avoid more timeouts
-              if (response.status === 504) {
-                console.warn('[DEBUG o365API.searchEmails] Got 504 timeout, skipping remaining search terms');
-                break;
-              }
-            }
-          } catch (fetchError) {
-            clearTimeout(timeoutId);
-            if (fetchError.name === 'AbortError') {
-              console.error(`[DEBUG o365API.searchEmails] Request timeout for term "${searchTerm}"`);
-              // Continue with next term instead of breaking
-            } else {
-              throw fetchError;
-            }
+          if (!res.ok) {
+            const body = await res.text();
+            console.log(`[DEBUG o365API.searchEmails] Failed for term "${term}": ${res.status} ${body}`);
+            continue; // don't throw; let other terms still run
           }
-        } catch (error) {
-          // Continue with other terms if one fails
-          console.error(`[DEBUG o365API.searchEmails] Error searching for term "${term}":`, error);
+          
+          const data = await res.json();
+          console.log(`[DEBUG o365API.searchEmails] Found ${data.value?.length || 0} emails for term "${term}"`);
+          
+          if (Array.isArray(data.value)) {
+            results.push(
+              ...data.value.map(m => ({
+                id: m.id,
+                subject: m.subject,
+                from: m.from?.emailAddress?.address,
+                fromName: m.from?.emailAddress?.name,
+                receivedDate: m.receivedDateTime,
+                preview: m.bodyPreview?.slice(0, 200),
+                webLink: m.webLink,
+              }))
+            );
+          }
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          if (fetchError.name === 'AbortError') {
+            console.error(`[DEBUG o365API.searchEmails] Request timeout for term "${term}"`);
+          } else {
+            console.error(`[DEBUG o365API.searchEmails] Error for term "${term}":`, fetchError);
+          }
+          continue; // Continue with next term
         }
       }
       
-      // Format and return unique emails
-      const formattedEmails = Array.from(allEmails.values()).map(email => ({
-        subject: email.subject,
-        from: email.from?.emailAddress?.address,
-        fromName: email.from?.emailAddress?.name,
-        receivedDate: email.receivedDateTime,
-        preview: email.bodyPreview?.slice(0, 200)
-      }));
+      // Client-side sort (newest first) and deduplicate
+      const uniqueEmails = new Map();
+      results.forEach(email => {
+        if (!uniqueEmails.has(email.id)) {
+          uniqueEmails.set(email.id, email);
+        }
+      });
       
-      // Sort by date and limit results
-      const sortedEmails = formattedEmails
+      const sortedEmails = Array.from(uniqueEmails.values())
         .sort((a, b) => new Date(b.receivedDate) - new Date(a.receivedDate))
-        .slice(0, options.limit || 20);
+        .slice(0, top);
       
       console.log(`[DEBUG o365API.searchEmails] Returning ${sortedEmails.length} total emails`);
       
@@ -372,8 +365,12 @@ async function searchFireflies(query, options = {}) {
     
     console.log('[DEBUG searchFireflies] Connection successful');
     
+    // Ensure query is always a safe string
+    const keyword = Array.isArray(query) ? query.join(' ') : (query ?? '');
+    const safeKeyword = String(keyword).trim();
+    
     // If no query or empty query, get recent transcripts without keyword filter
-    if (!query || query.trim() === '') {
+    if (!safeKeyword) {
       console.log('[DEBUG searchFireflies] No query provided, fetching recent transcripts');
       const filters = {
         limit: options.limit || 10
@@ -394,18 +391,18 @@ async function searchFireflies(query, options = {}) {
     // If query is an array, it's pre-extracted keywords
     let searchTerms;
     if (Array.isArray(query)) {
-      searchTerms = query.filter(term => term && term.trim() !== ''); // Filter out empty terms
+      searchTerms = query.filter(term => term && String(term).trim() !== ''); // Ensure each term is a string
       console.log('[DEBUG searchFireflies] Using provided search terms:', searchTerms);
     } else {
       // For simple searches (like brand names), also search the raw query
-      searchTerms = [query.trim()]; // Start with the raw query
+      searchTerms = [safeKeyword]; // Start with the safe keyword
       
       // Only extract keywords for complex queries
-      if (query.length > 50) {
-        const extractedTerms = await extractKeywordsForContextSearch(query);
+      if (safeKeyword.length > 50) {
+        const extractedTerms = await extractKeywordsForContextSearch(safeKeyword);
         console.log('[DEBUG searchFireflies] Extracted keywords:', extractedTerms);
         // Add extracted terms but keep the original simpler terms too
-        searchTerms = [...new Set([...searchTerms, ...extractedTerms])].filter(term => term && term.trim() !== '');
+        searchTerms = [...new Set([...searchTerms, ...extractedTerms])].filter(term => term && String(term).trim() !== '');
       }
       
       console.log('[DEBUG searchFireflies] Final search terms:', searchTerms);
@@ -432,13 +429,15 @@ async function searchFireflies(query, options = {}) {
     
     // Search for each term and combine results
     for (const term of searchTerms.slice(0, 10)) { // Increased limit
-      if (!term || term.trim() === '') continue; // Skip empty terms
+      if (!term || String(term).trim() === '') continue; // Skip empty terms
       
       try {
-        console.log(`[DEBUG searchFireflies] Searching for term: "${term}"`);
+        // Ensure term is always a string
+        const safeTerm = String(term).trim();
+        console.log(`[DEBUG searchFireflies] Searching for term: "${safeTerm}"`);
         
         const filters = {
-          keyword: term.trim(),
+          keyword: safeTerm, // Always a string now
           limit: options.limit || 10 // Increased default limit
         };
         
@@ -448,7 +447,7 @@ async function searchFireflies(query, options = {}) {
         }
         
         const results = await firefliesAPI.searchTranscripts(filters);
-        console.log(`[DEBUG searchFireflies] Found ${results.length} results for "${term}"`);
+        console.log(`[DEBUG searchFireflies] Found ${results.length} results for "${safeTerm}"`);
         
         results.forEach(t => {
           allTranscripts.set(t.id, t);
@@ -1609,12 +1608,35 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           add(step);
         }
         
-        // Run all searches in parallel for better performance
-        const [brand, firefliesData, o365Data] = await Promise.all([
+        console.log('[DEBUG comms] Starting communications search...');
+        console.log('[DEBUG comms] Search term:', brand_name);
+        
+        // Run all searches in parallel using Promise.allSettled
+        const [brandRes, firefliesRes, o365Res] = await Promise.allSettled([
           hubspotAPI.searchSpecificBrand(brand_name),
-          firefliesApiKey ? searchFireflies(brand_name, { limit: 20 }) : { transcripts: [] },
-          msftClientId ? o365API.searchEmails(brand_name, { days: 180, limit: 20 }) : []
+          firefliesApiKey ? searchFireflies(brand_name, { limit: 20 }) : Promise.resolve({ transcripts: [] }),
+          msftClientId ? o365API.searchEmails(brand_name, { days: 180, limit: 20 }) : Promise.resolve([])
         ]);
+        
+        // Handle brand result
+        const brand = brandRes.status === 'fulfilled' ? brandRes.value : null;
+        if (brandRes.status === 'rejected') {
+          console.log('[DEBUG comms] HubSpot failed:', brandRes.reason);
+        }
+        
+        // Handle Fireflies result
+        const firefliesData = firefliesRes.status === 'fulfilled' ? firefliesRes.value : { transcripts: [] };
+        if (firefliesRes.status === 'rejected') {
+          console.log('[DEBUG comms] Fireflies failed:', firefliesRes.reason);
+        }
+        
+        // Handle O365 result
+        const o365Data = o365Res.status === 'fulfilled' ? o365Res.value : [];
+        if (o365Res.status === 'rejected') {
+          console.log('[DEBUG comms] O365 failed:', o365Res.reason);
+        }
+        
+        console.log(`[DEBUG comms] Results - Brand: ${!!brand}, Meetings: ${firefliesData.transcripts?.length || 0}, Emails: ${o365Data?.length || 0}`);
         
         if (!brand) {
           const errorStep = { type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` };
@@ -1637,7 +1659,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           const contactStep = { type: 'search', text: '👥 Retrieving brand contacts...' };
           add(contactStep);
           
-          contacts = await hubspotAPI.getContactsForBrand(brand.id);
+          try {
+            contacts = await hubspotAPI.getContactsForBrand(brand.id);
+          } catch (error) {
+            console.log('[DEBUG comms] Contacts fetch failed:', error);
+            contacts = [];
+          }
           
           const contactResultStep = { type: 'result', text: `✅ Found ${contacts.length} contact(s).` };
           add(contactResultStep);
