@@ -16,9 +16,6 @@
     "ws": "^8.13.0",
     "@runwayml/sdk": "latest",
     "@google/generative-ai": "^0.21.0",
-    "@upstash/redis": "^1.34.0",
-    "@vercel/kv": "^1.0.1"
+    "@vercel/kv": "^1.0.0"
   }
 }
-
-
