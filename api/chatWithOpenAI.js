@@ -1560,15 +1560,32 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           
           const contextKeywords = await extractKeywordsForContextSearch(search_term);
           
-          const [firefliesData, emailData] = await Promise.all([
-            firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 3 }), 5000, { transcripts: [] }) : { transcripts: [] },
-            msftClientId ? withTimeout(o365API.searchEmails(contextKeywords, { days: 90, limit: 5 }), 5000, []) : []
+          console.log('[DEBUG comms] Searching for supporting context...');
+          console.log('[DEBUG comms] Keywords:', contextKeywords);
+          
+          const [firefliesRes, emailRes] = await Promise.allSettled([
+            firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 3 }), 5000, { transcripts: [] }) : Promise.resolve({ transcripts: [] }),
+            msftClientId ? withTimeout(o365API.searchEmails(contextKeywords, { days: 90, limit: 5 }), 5000, []) : Promise.resolve([])
           ]);
+          
+          // Handle Fireflies result
+          const firefliesData = firefliesRes.status === 'fulfilled' ? firefliesRes.value : { transcripts: [] };
+          if (firefliesRes.status === 'rejected') {
+            console.log('[DEBUG comms] Fireflies context search failed:', firefliesRes.reason);
+          }
+          
+          // Handle O365 result
+          const emailData = emailRes.status === 'fulfilled' ? emailRes.value : [];
+          if (emailRes.status === 'rejected') {
+            console.log('[DEBUG comms] O365 context search failed:', emailRes.reason);
+          }
           
           supportingContext = {
             meetings: firefliesData.transcripts || [],
             emails: emailData || []
           };
+          
+          console.log(`[DEBUG comms] Context found - Meetings: ${supportingContext.meetings.length}, Emails: ${supportingContext.emails.length}`);
           
           if (supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) {
             const foundStep = { type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` };
@@ -1610,6 +1627,8 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         console.log('[DEBUG comms] Starting communications search...');
         console.log('[DEBUG comms] Search term:', brand_name);
+        console.log('[DEBUG comms] Fireflies API key present:', !!firefliesApiKey);
+        console.log('[DEBUG comms] O365 credentials present:', !!msftClientId);
         
         // Run all searches in parallel using Promise.allSettled
         const [brandRes, firefliesRes, o365Res] = await Promise.allSettled([
@@ -1625,8 +1644,13 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         }
         
         // Handle Fireflies result
-        const firefliesData = firefliesRes.status === 'fulfilled' ? firefliesRes.value : { transcripts: [] };
-        if (firefliesRes.status === 'rejected') {
+        let firefliesData = { transcripts: [] };
+        if (firefliesRes.status === 'fulfilled') {
+          firefliesData = firefliesRes.value || { transcripts: [] };
+          console.log('[DEBUG comms] Fireflies raw response:', JSON.stringify(firefliesData, null, 2));
+          console.log('[DEBUG comms] Fireflies transcripts array:', firefliesData.transcripts);
+          console.log('[DEBUG comms] Fireflies transcripts is array?:', Array.isArray(firefliesData.transcripts));
+        } else if (firefliesRes.status === 'rejected') {
           console.log('[DEBUG comms] Fireflies failed:', firefliesRes.reason);
         }
         
@@ -1636,7 +1660,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           console.log('[DEBUG comms] O365 failed:', o365Res.reason);
         }
         
-        console.log(`[DEBUG comms] Results - Brand: ${!!brand}, Meetings: ${firefliesData.transcripts?.length || 0}, Emails: ${o365Data?.length || 0}`);
+        // Extract transcripts properly
+        const meetings = firefliesData.transcripts || firefliesData || [];
+        console.log('[DEBUG comms] Extracted meetings:', meetings.length);
+        
+        console.log(`[DEBUG comms] Results - Brand: ${!!brand}, Meetings: ${meetings.length}, Emails: ${o365Data?.length || 0}`);
         
         if (!brand) {
           const errorStep = { type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` };
@@ -1647,7 +1675,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           add(foundStep);
         }
         
-        const meetingStep = { type: 'result', text: `✅ Found ${firefliesData.transcripts?.length || 0} meeting(s).` };
+        const meetingStep = { type: 'result', text: `✅ Found ${meetings.length} meeting(s).` };
         add(meetingStep);
         
         const emailStep = { type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` };
@@ -1674,8 +1702,8 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const allCommunications = [];
         
         // Add meetings with type marker
-        if (firefliesData.transcripts && firefliesData.transcripts.length > 0) {
-          firefliesData.transcripts.forEach(meeting => {
+        if (meetings && meetings.length > 0) {
+          meetings.forEach(meeting => {
             allCommunications.push({
               type: 'meeting',
               title: meeting.title || 'Untitled Meeting',
@@ -1721,7 +1749,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             brand: brand ? brand.properties : null,
             contacts: contacts.map(c => c.properties),
             communications: allCommunications, // Sorted chronologically
-            meetings: firefliesData.transcripts || [], // Keep original for backward compatibility
+            meetings: meetings, // Use the properly extracted meetings
             emails: o365Data || [] // Keep original for backward compatibility
           }, 
           mcpThinking, 
