@@ -554,6 +554,23 @@ function withTimeout(promise, ms, defaultValue) {
   });
 }
 
+// Helper function to get conversation history for a session
+async function getConversationHistory(sessionId, projectId, chatUrl, headersAirtable) {
+  try {
+    const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId || 'default'}")`;
+    const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
+    if (historyResponse.ok) {
+      const result = await historyResponse.json();
+      if (result.records.length > 0) {
+        return result.records[0].fields.Conversation || '';
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching conversation history:', error);
+  }
+  return '';
+}
+
 // Extract JSON from AI response text
 function extractJson(text) {
   if (!text) return null;
@@ -2076,7 +2093,7 @@ export default async function handler(req, res) {
       }
 
       if (req.body.generateVideo === true) {
-        const { promptText, promptImage, projectId, model, ratio, duration, videoModel } = req.body;
+        const { promptText, promptImage, projectId, sessionId, model, ratio, duration, videoModel } = req.body;
 
         if (!promptText) {
           return res.status(400).json({ 
@@ -2086,6 +2103,28 @@ export default async function handler(req, res) {
         }
 
         try {
+          // Check if we should enhance the prompt with production context
+          let enhancedPromptText = promptText;
+          if (sessionId) {
+            // Try to get conversation history to find production context
+            const projectConfig = getProjectConfig(projectId);
+            const { baseId, chatTable } = projectConfig;
+            const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
+            const headersAirtable = { 
+              'Content-Type': 'application/json', 
+              Authorization: `Bearer ${airtableApiKey}` 
+            };
+            
+            const conversationContext = await getConversationHistory(sessionId, projectId, chatUrl, headersAirtable);
+            const lastProductionContext = extractLastProduction(conversationContext);
+            
+            if (lastProductionContext) {
+              // Enhance the prompt with production context
+              enhancedPromptText = `Continue working on this production: ${lastProductionContext}\n\n${promptText}`;
+              console.log('Enhanced video prompt with production context');
+            }
+          }
+          
           let result;
           
           if (videoModel === 'veo3') {
@@ -2102,7 +2141,7 @@ export default async function handler(req, res) {
             else if (ratio === '1920:1080') veo3AspectRatio = '16:9';
             
             result = await generateVeo3Video({
-              promptText,
+              promptText: enhancedPromptText,
               aspectRatio: veo3AspectRatio,
               duration
             });
@@ -2128,7 +2167,7 @@ export default async function handler(req, res) {
             }
             
             result = await generateRunwayVideo({
-              promptText,
+              promptText: enhancedPromptText,
               promptImage: imageToUse,
               model: model || MODELS.runway.turbo,
               ratio: ratio || '1104:832',
@@ -2170,11 +2209,33 @@ export default async function handler(req, res) {
         }
 
         try {
+          // Check if we should enhance the prompt with production context
+          let enhancedPrompt = prompt;
+          if (sessionId) {
+            // Try to get conversation history to find production context
+            const projectConfig = getProjectConfig(projectId);
+            const { baseId, chatTable } = projectConfig;
+            const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
+            const headersAirtable = { 
+              'Content-Type': 'application/json', 
+              Authorization: `Bearer ${airtableApiKey}` 
+            };
+            
+            const conversationContext = await getConversationHistory(sessionId, projectId, chatUrl, headersAirtable);
+            const lastProductionContext = extractLastProduction(conversationContext);
+            
+            if (lastProductionContext) {
+              // Enhance the prompt with production context
+              enhancedPrompt = `Continue working on this production: ${lastProductionContext}\n\n${prompt}`;
+              console.log('Enhanced image prompt with production context');
+            }
+          }
+          
           const model = MODELS.openai.image;
           
           const requestBody = {
             model: model,
-            prompt: prompt,
+            prompt: enhancedPrompt,
             n: 1
           };
           
