@@ -15,6 +15,7 @@
     "node-fetch": "^3.3.0",
     "ws": "^8.13.0",
     "@runwayml/sdk": "latest",
-    "@google/generative-ai": "^0.21.0"
+    "@google/generative-ai": "^0.21.0",
+    "@vercel/kv": "^1.0.0"
   }
 }
