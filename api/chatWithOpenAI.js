@@ -279,26 +279,30 @@ const o365API = {
     try {
       const accessToken = await this.getAccessToken();
       
-      const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
+      // IMPORTANT: Always use shap@hollywoodbranded.com as the sender for Push feature
+      const senderEmail = options.senderEmail || 'shap@hollywoodbranded.com';
       
       const draftData = {
         subject: subject,
         body: {
-          contentType: options.isHtml ? 'HTML' : 'Text',
+          contentType: options.isHtml !== false ? 'HTML' : 'Text', // Default to HTML
           content: body
         },
         toRecipients: Array.isArray(to) ? 
           to.map(email => ({ emailAddress: { address: email } })) : 
-          [{ emailAddress: { address: to } }]
+          (to ? [{ emailAddress: { address: to } }] : [{ emailAddress: { address: 'shap@hollywoodbranded.com' } }])
       };
       
       if (options.cc) {
         draftData.ccRecipients = Array.isArray(options.cc) ?
           options.cc.map(email => ({ emailAddress: { address: email } })) :
           [{ emailAddress: { address: options.cc } }];
+      } else {
+        draftData.ccRecipients = [];
       }
       
-      const response = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userEmail)}/messages`, {
+      // Create the draft
+      const response = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderEmail)}/messages`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -309,17 +313,40 @@ const o365API = {
       
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Draft creation failed: ${response.status}`);
+        console.error('[DEBUG o365API.createDraft] Draft creation failed:', response.status, errorText);
+        throw new Error(`Draft creation failed: ${response.status} - ${errorText}`);
       }
       
       const draft = await response.json();
       
+      // Now fetch the webLink separately since it's not included in the initial response
+      const webLinkResponse = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderEmail)}/messages/${draft.id}?$select=webLink`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      
+      if (!webLinkResponse.ok) {
+        console.error('[DEBUG o365API.createDraft] Failed to get webLink:', webLinkResponse.status);
+        // Still return the draft even if webLink fetch fails
+        return {
+          id: draft.id,
+          webLink: null
+        };
+      }
+      
+      const webLinkData = await webLinkResponse.json();
+      
+      console.log('[DEBUG o365API.createDraft] Draft created successfully with webLink');
+      
       return {
         id: draft.id,
-        webLink: draft.webLink
+        webLink: webLinkData.webLink || null
       };
       
     } catch (error) {
+      console.error('[DEBUG o365API.createDraft] Exception:', error);
       throw error;
     }
   },
@@ -2068,7 +2095,6 @@ async function generateVeo3Video({
   }
 }
 
-
 export default async function handler(req, res) {
   // CORS headers with proper origin handling
   const origin = req.headers.origin || "*";
@@ -2091,6 +2117,117 @@ export default async function handler(req, res) {
   
   if (req.method === 'POST') {
     try {
+      // Handle Push Draft endpoint
+      if (req.body.pushDraft === true) {
+        const { productionData, brands, sessionId } = req.body;
+        
+        if (!productionData || !brands || brands.length === 0) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'productionData and brands array are required'
+          });
+        }
+        
+        if (!openAIApiKey || !msftClientId || !msftClientSecret) {
+          return res.status(500).json({ 
+            error: 'Push feature not configured',
+            details: 'Missing OpenAI or Microsoft Graph credentials'
+          });
+        }
+        
+        try {
+          console.log('[DEBUG pushDraft] Starting push draft creation...');
+          console.log('[DEBUG pushDraft] Production:', productionData.projectName);
+          console.log('[DEBUG pushDraft] Brand count:', brands.length);
+          
+          // Step 1: Generate email content using OpenAI
+          const emailPrompt = `You are Shap, a brand partnership executive at Hollywood Branded. Write a PERSONAL, conversational email to yourself (as a draft) summarizing brand recommendations for a production.
+
+Production Details:
+- Title: ${productionData.projectName || 'Untitled Production'}
+- Vibe/Genre: ${productionData.vibe || 'Not specified'}
+- Cast: ${productionData.cast || 'TBD'}
+- Location: ${productionData.location || 'TBD'}
+- Notes: ${productionData.notes || 'None'}
+
+Selected Brands for Consideration (${brands.length} total):
+${brands.map((brand, i) => `
+${i + 1}. ${brand.name}
+   - Category: ${brand.category || 'General'}
+   - Why it works: ${brand.reason || brand.pitch || 'Good fit for production'}
+   - Status: ${brand.clientStatus || 'Prospect'}
+   ${brand.tags ? `- Tags: ${Array.isArray(brand.tags) ? brand.tags.join(', ') : brand.tags}` : ''}
+`).join('\n')}
+
+Write a draft email to yourself that:
+1. Opens with a brief, personal reminder about this production (1-2 sentences)
+2. Lists the brands with quick notes on why each could work
+3. Includes any action items or next steps
+4. Keeps a casual, note-to-self tone (this is YOUR draft folder)
+5. Signs off as "- Shap" or similar
+
+Format as HTML with simple formatting (use <br> for line breaks, <b> for emphasis, <ul>/<li> for lists).
+Keep it under 300 words.`;
+
+          const openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${openAIApiKey}`
+            },
+            body: JSON.stringify({
+              model: MODELS.openai.chatMini,
+              messages: [
+                { role: 'system', content: 'You are Shap, writing a draft email to yourself about brand partnerships. Keep it personal and conversational.' },
+                { role: 'user', content: emailPrompt }
+              ],
+              temperature: 0.7,
+              max_tokens: 800
+            })
+          });
+          
+          if (!openAIResponse.ok) {
+            console.error('[DEBUG pushDraft] OpenAI failed:', openAIResponse.status);
+            throw new Error('Failed to generate email content');
+          }
+          
+          const aiData = await openAIResponse.json();
+          const emailBody = aiData.choices[0].message.content;
+          
+          console.log('[DEBUG pushDraft] Email content generated');
+          
+          // Step 2: Create draft in Outlook
+          const emailSubject = `Brand Recs: ${productionData.projectName || 'Untitled Production'} (${brands.length} brands)`;
+          
+          const draftResult = await o365API.createDraft(
+            emailSubject,
+            emailBody,
+            'shap@hollywoodbranded.com', // To self
+            { 
+              senderEmail: 'shap@hollywoodbranded.com',
+              isHtml: true 
+            }
+          );
+          
+          console.log('[DEBUG pushDraft] Draft created:', draftResult.id);
+          console.log('[DEBUG pushDraft] WebLink:', draftResult.webLink);
+          
+          return res.status(200).json({
+            success: true,
+            draftId: draftResult.id,
+            webLink: draftResult.webLink,
+            message: 'Draft created successfully in Outlook'
+          });
+          
+        } catch (error) {
+          console.error('[DEBUG pushDraft] Error:', error);
+          return res.status(500).json({ 
+            error: 'Failed to create draft',
+            details: error.message 
+          });
+        }
+      }
+      
       if (req.body.generateAudio === true) {
         const { prompt, projectId, sessionId } = req.body;
         if (!prompt) {
