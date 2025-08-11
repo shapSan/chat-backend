@@ -1,17 +1,10 @@
-// /api/pushDraft.js  — self-contained full handler with CORS + debug logs
-
-import OpenAI from "openai";
+// /api/pushDraft.js — ZERO top-level imports, robust CORS, dynamic OpenAI import
 
 export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
+// If your project ever defaults to Edge runtime, uncomment the next line:
+// export const runtime = "nodejs"; // Next.js pages API only
 
-// --- feature flags (flip to isolate issues) ---
-const ENABLE_OPENAI = true;
-const ENABLE_GRAPH  = true;
-
-// --- OpenAI client (inline) ---
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// --- CORS allow-list (Framer + prod + local) ---
+// ---------- CORS ----------
 const ALLOWED = [
   "https://www.selfrun.ai",
   "https://selfrun.ai",
@@ -23,7 +16,7 @@ function allowOrigin(origin = "") {
     if (!origin) return "";
     if (ALLOWED.includes(origin)) return origin;
     const host = new URL(origin).hostname;
-    if (host.endsWith(".framer.website")) return origin; // Framer preview
+    if (host.endsWith(".framer.website")) return origin; // allow Framer preview
     return "";
   } catch { return ""; }
 }
@@ -36,13 +29,12 @@ function applyCORS(req, res) {
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-// --- Graph (inline, application perms) ---
+// ---------- Graph (inline) ----------
 const TENANT = process.env.MICROSOFT_TENANT_ID;
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 
 async function getGraphToken() {
-  console.log("[pushDraft] Graph token: start");
   const url = `https://login.microsoftonline.com/${encodeURIComponent(TENANT)}/oauth2/v2.0/token`;
   const body = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -56,8 +48,7 @@ async function getGraphToken() {
     body,
   });
   if (!resp.ok) throw new Error(`Graph token failed: ${resp.status} ${await resp.text()}`);
-  console.log("[pushDraft] Graph token: ok");
-  return resp.json(); // { access_token, ... }
+  return resp.json(); // { access_token }
 }
 
 async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) {
@@ -67,15 +58,15 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
   const draftData = {
     subject,
     body: { contentType: "HTML", content: htmlBody },
-    toRecipients: (Array.isArray(to) ? to : [to]).filter(Boolean).slice(0, 10).map((email) => ({
-      emailAddress: { address: email },
-    })),
+    toRecipients: (Array.isArray(to) ? to : [to])
+      .filter(Boolean)
+      .slice(0, 10)
+      .map((email) => ({ emailAddress: { address: email } })),
   };
   if (Array.isArray(cc) && cc.length) {
     draftData.ccRecipients = cc.slice(0, 10).map((email) => ({ emailAddress: { address: email } }));
   }
 
-  console.log("[pushDraft] Graph create draft: start");
   const createUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/messages`;
   const createRes = await fetch(createUrl, {
     method: "POST",
@@ -84,17 +75,14 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
   });
   if (!createRes.ok) throw new Error(`Draft creation failed: ${createRes.status} ${await createRes.text()}`);
   const created = await createRes.json();
-  console.log("[pushDraft] Graph create draft: ok id", created?.id);
 
-  // Fetch webLink for UX
   const getUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/messages/${created.id}?$select=webLink`;
   const getRes = await fetch(getUrl, { headers: { Authorization: `Bearer ${access_token}` } });
   const getJson = getRes.ok ? await getRes.json() : {};
-  console.log("[pushDraft] Graph get webLink:", Boolean(getJson?.webLink));
   return { id: created.id, webLink: getJson.webLink || created.webLink || null };
 }
 
-// --- tiny helpers ---
+// ---------- helpers ----------
 const esc = (s = "") => String(s).replace(/[<&>]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
 const asArray = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 const dedupe = (arr) => Array.from(new Set(arr.filter(Boolean)));
@@ -102,7 +90,7 @@ const bullets = (arr) => arr.map((x) => `• ${x}`).join("\n");
 const normIdeas = (v) =>
   Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map((s) => s.trim()).filter(Boolean) : [];
 
-// --- handler ---
+// ---------- handler ----------
 export default async function handler(req, res) {
   applyCORS(req, res);
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -110,9 +98,8 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body || {};
-    console.log("[pushDraft] request in");
 
-    // Accept both shapes: top-level or productionData
+    // Accept both shapes (top-level or productionData)
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = body.projectName ?? pd.projectName ?? "Project";
     const cast        = body.cast        ?? pd.cast        ?? "";
@@ -123,12 +110,13 @@ export default async function handler(req, res) {
     const brands = Array.isArray(body.brands) ? body.brands : [];
     if (!brands.length) return res.status(400).json({ error: "No brands provided" });
 
+    // recipients: default to shap only
     const to = asArray(body.to);
     const cc = asArray(body.cc);
     const toRecipients = to.length ? to.slice(0, 10) : ["shap@hollywoodbranded.com"];
     const senderEmail = body.senderEmail || "shap@hollywoodbranded.com";
 
-    // Build AI prompt
+    // Build AI prompt blocks
     const brandTextBlocks = brands.map((b) => {
       const ideas = normIdeas(b.integrationIdeas);
       const assets = Array.isArray(b.assets) ? b.assets : [];
@@ -138,7 +126,6 @@ export default async function handler(req, res) {
         (b.pdfUrl ?? b.brandCardPDF) ? { title: "Proposal PDF", type: "pdf", url: b.pdfUrl ?? b.brandCardPDF } : null,
         b.audioUrl ? { title: "Audio Pitch", type: "audio", url: b.audioUrl } : null,
       ].filter(Boolean);
-
       const linksTxt = [...assets, ...extras]
         .map((a) => `${a.title || a.type || "Link"}: ${a.url}`)
         .join("\n");
@@ -153,9 +140,12 @@ ${linksTxt}
 `.trim();
     }).join("\n---\n");
 
+    // Dynamically import OpenAI so OPTIONS preflight never loads it
     let aiBody = "";
-    if (ENABLE_OPENAI) {
-      console.log("[pushDraft] OpenAI: start");
+    try {
+      const { default: OpenAI } = await import("openai");
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
       const prompt = `
 Write a short, natural, personal email to a brand contact about a potential partnership.
 Avoid marketing jargon. Sound like a human who knows them.
@@ -181,23 +171,20 @@ ${brandTextBlocks}
         temperature: 0.7,
       });
       aiBody = aiResp?.choices?.[0]?.message?.content?.trim() || "";
-      console.log("[pushDraft] OpenAI: ok, chars", aiBody.length);
-    } else {
-      aiBody = `Hi there — quick note on ${projectName}.`;
+    } catch (e) {
+      // Fallback if OpenAI lib/env not available
+      aiBody = `Hi there—quick note on ${projectName}.`;
     }
 
+    // Explicit link list (clear + clickable)
     const linkListBlocks = brands.map((b) => {
       const links = [];
       const push = (title, url) => url && links.push(`${title}: ${url}`);
-
-      (Array.isArray(b.assets) ? b.assets : []).forEach((a) =>
-        push(a.title || a.type || "Link", a.url)
-      );
+      (Array.isArray(b.assets) ? b.assets : []).forEach((a) => push(a.title || a.type || "Link", a.url));
       push("Poster", b.posterUrl);
       push("Video", b.videoUrl ?? b.exportedVideo);
       push("Proposal PDF", b.pdfUrl ?? b.brandCardPDF);
       push("Audio Pitch", b.audioUrl);
-
       const unique = dedupe(links);
       return unique.length ? `${b.name || "Brand"}:\n${unique.join("\n")}` : "";
     }).filter(Boolean).join("\n\n");
@@ -214,24 +201,17 @@ ${brandTextBlocks}
       `${brands.slice(0, 3).map((b) => b.name).filter(Boolean).join(", ")}` +
       `${brands.length > 3 ? "…" : ""}`;
 
-    let draft = { webLink: null };
-    if (ENABLE_GRAPH) {
-      draft = await createDraftInMailbox({
-        subject,
-        htmlBody,
-        to: toRecipients,
-        cc,
-        senderEmail,
-      });
-    } else {
-      console.log("[pushDraft] Graph disabled; returning dummy link");
-      draft.webLink = null;
-    }
+    const draft = await createDraftInMailbox({
+      subject,
+      htmlBody,
+      to: toRecipients,
+      cc,
+      senderEmail,
+    });
 
-    console.log("[pushDraft] done, webLink?", Boolean(draft.webLink));
-    return res.status(200).json({ success: true, webLink: draft.webLink || null, subject });
+    return res.status(200).json({ success: true, webLink: draft?.webLink || null, subject });
   } catch (err) {
-    console.error("[pushDraft] error", err?.message || err);
+    // Keep CORS headers on error, too
     applyCORS(req, res);
     return res.status(500).json({ error: "Failed to push draft", details: err?.message || String(err) });
   }
