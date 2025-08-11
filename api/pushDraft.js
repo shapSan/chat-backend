@@ -1,126 +1,203 @@
-// api/pushDraft.js
-import fetch from 'node-fetch';
-import { o365API } from './chatWithOpenAI.js'; // export your existing o365API from there
-import { openai } from './openai-client.js';  // replace with your existing OpenAI client import
+// /api/pushDraft.js
+import fetch from "node-fetch";
+import { o365API } from "./chatWithOpenAI.js";   // adjust if your path differs
+import { openai } from "./openai-client.js";     // adjust if your path differs
 
 export const config = {
-  api: { bodyParser: { sizeLimit: '10mb' } }
+  api: { bodyParser: { sizeLimit: "10mb" } },
 };
 
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+// ---- CORS helpers (Framer + prod + local) ----
+const ALLOWED = [
+  "https://www.selfrun.ai",
+  "https://selfrun.ai",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+];
+function allowOrigin(origin = "") {
+  try {
+    if (!origin) return "";
+    if (ALLOWED.includes(origin)) return origin;
+    const host = new URL(origin).hostname;
+    // allow Framer preview sites like https://<proj>.framer.website
+    if (host.endsWith(".framer.website")) return origin;
+    return "";
+  } catch {
+    return "";
+  }
+}
+function applyCORS(req, res) {
+  const origin = allowOrigin(req.headers.origin || "");
+  res.setHeader("Vary", "Origin");
+  if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
+// ---- tiny utils ----
+const esc = (s = "") =>
+  String(s).replace(/[<&>]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+const asArray = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+const dedupe = (arr) => Array.from(new Set(arr.filter(Boolean)));
+const toBullets = (arr) => arr.map((x) => `• ${x}`).join("\n");
+
+// ---- main handler ----
+export default async function handler(req, res) {
+  applyCORS(req, res);
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
-    const {
-      projectName = 'Project',
-      cast = '',
-      location = '',
-      vibe = '',
-      brands = [],
-      notes = '',
-      to = [],
-      cc = [],
-      senderEmail = 'stacy@hollywoodbranded.com'
-    } = req.body || {};
+    const body = req.body || {};
 
-    if (!Array.isArray(brands) || brands.length === 0) {
-      return res.status(400).json({ error: 'No brands provided' });
+    // Support BOTH payload styles:
+    // A) { projectName, cast, location, vibe, brands, notes, to, cc, senderEmail }
+    // B) { productionData: {...}, brands, to, cc, senderEmail, pushDraft: true }
+    const pd = (body.productionData && typeof body.productionData === "object") ? body.productionData : {};
+
+    const projectName = body.projectName ?? pd.projectName ?? "Project";
+    const cast        = body.cast        ?? pd.cast        ?? "";
+    const location    = body.location    ?? pd.location    ?? "";
+    const vibe        = body.vibe        ?? pd.vibe        ?? "";
+    const notes       = body.notes       ?? pd.notes       ?? "";
+
+    const brands = Array.isArray(body.brands) ? body.brands : [];
+    if (!brands.length) {
+      return res.status(400).json({ error: "No brands provided" });
     }
 
-    // Resolve recipients
-    let toRecipients = Array.isArray(to) && to.length ? to.slice(0, 10) : [];
-    if (!toRecipients.length) {
-      toRecipients = ['stacy@hollywoodbranded.com', 'shap@hollywoodbranded.com'];
-    }
+    // Recipients (default to shap only, per your request)
+    const to = asArray(body.to);
+    const cc = asArray(body.cc);
+    let toRecipients = to.length ? to.slice(0, 10) : ["shap@hollywoodbranded.com"];
 
-    // Build asset links
-    const buildAssetSection = (assets = []) => {
-      if (!assets.length) return '';
-      return assets
-        .map(a => {
-          const label = a.title || a.type || 'Link';
-          return `${label}: ${a.url}`;
-        })
-        .join('\n');
-    };
+    const senderEmail = body.senderEmail || "shap@hollywoodbranded.com";
 
-    // Flatten brand details for the AI
-    const brandTextBlocks = brands.map(b => {
-      return `
-Brand: ${b.name || ''}
-Why it works: ${b.whyItWorks || ''}
-Integration ideas: ${(b.integrationIdeas || []).join('; ')}
-HB Insights: ${b.hbInsights || ''}
-${buildAssetSection(b.assets)}
-`;
-    }).join('\n---\n');
+    // Build asset text blocks (for AI context + explicit link list)
+    const normalizeIdeas = (v) =>
+      Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map((s) => s.trim()).filter(Boolean) : [];
 
-    // AI prompt for a personal-tone body
+    const brandTextBlocks = brands
+      .map((b) => {
+        const ideas = normalizeIdeas(b.integrationIdeas);
+        const assets = Array.isArray(b.assets) ? b.assets : [];
+
+        // also include top-level URLs if assets[] wasn't populated
+        const extraLinks = [
+          b.posterUrl ? { title: "Poster", type: "image", url: b.posterUrl } : null,
+          b.videoUrl  ?? b.exportedVideo ? { title: "Video", type: "video", url: b.videoUrl ?? b.exportedVideo } : null,
+          b.pdfUrl    ?? b.brandCardPDF  ? { title: "Proposal PDF", type: "pdf", url: b.pdfUrl ?? b.brandCardPDF } : null,
+          b.audioUrl  ? { title: "Audio Pitch", type: "audio", url: b.audioUrl } : null,
+        ].filter(Boolean);
+
+        const allLinks = [...assets, ...extraLinks];
+        const linksTxt = allLinks
+          .map((a) => `${a.title || a.type || "Link"}: ${a.url}`)
+          .join("\n");
+
+        return `
+Brand: ${b.name || ""}
+Why it works: ${b.whyItWorks || ""}
+Integration ideas:
+${ideas.length ? toBullets(ideas) : "-"}
+HB Insights: ${b.hbInsights || ""}
+${linksTxt}
+`.trim();
+      })
+      .join("\n---\n");
+
+    // AI prompt → personal tone, not salesy
     const prompt = `
-You are writing a short, natural, personal-tone email to a brand contact.
-No marketing fluff — it should read like a human typed it directly in their inbox.
-The email is about a project partnership.
+Write a short, natural, personal email to a brand contact about a potential partnership.
+Avoid marketing jargon. Sound like a human who knows them.
 
 Project: ${projectName}
 Vibe: ${vibe}
 Cast: ${cast}
 Location: ${location}
-Notes from sender: ${notes}
+Notes from sender: ${notes || "(none)"}
 
-For each brand below, naturally fold in the "Why it works", "Integration ideas", and "HB Insights" into the flow of the email. 
-Make it concise and personable, as if you already have a friendly relationship.
-At the end of the email, clearly list any provided links (video, PDF, audio, images) so they can access them easily.
+For each brand below, weave in "Why it works", the integration ideas, and any insights.
+Keep it concise and friendly. After the body, add a short, clearly labeled link list for easy access.
 
-Brands and details:
 ${brandTextBlocks}
-`;
+    `.trim();
 
     const aiResp = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // or your existing fast/good model
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: "You write personable, concise business emails." },
-        { role: "user", content: prompt }
+        { role: "user", content: prompt },
       ],
-      temperature: 0.7
+      temperature: 0.7,
     });
 
-    const aiBody = aiResp.choices[0]?.message?.content?.trim() || '';
+    const aiBody = aiResp?.choices?.[0]?.message?.content?.trim() || "";
 
-    // Add clean link list at bottom for absolute clarity
-    const linkList = brands.map(b => {
-      const links = (b.assets || []).map(a => `${a.title || a.type}: ${a.url}`);
-      return links.length ? `${b.name}:\n${links.join('\n')}` : '';
-    }).filter(Boolean).join('\n\n');
+    // Explicit link list (always clear + clickable)
+    const linkListBlocks = brands
+      .map((b) => {
+        const links = [];
+        const push = (title, url) => url && links.push(`${title}: ${url}`);
 
-    const finalHtml = `
+        // prefer assets[] if present
+        (Array.isArray(b.assets) ? b.assets : []).forEach((a) =>
+          push(a.title || a.type || "Link", a.url)
+        );
+
+        // include top-level URLs as backup
+        push("Poster", b.posterUrl);
+        push("Video", b.videoUrl ?? b.exportedVideo);
+        push("Proposal PDF", b.pdfUrl ?? b.brandCardPDF);
+        push("Audio Pitch", b.audioUrl);
+
+        const unique = dedupe(links);
+        return unique.length ? `${b.name || "Brand"}:\n${unique.join("\n")}` : "";
+      })
+      .filter(Boolean)
+      .join("\n\n");
+
+    const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">
-  ${aiBody.split('\n').map(line => `<div>${line}</div>`).join('')}
-  ${linkList ? `<div style="margin-top:12px;font-size:13px;white-space:pre-line;">${linkList}</div>` : ''}
+  ${aiBody
+    .split("\n")
+    .map((line) => `<div>${esc(line)}</div>`)
+    .join("")}
+  ${
+    linkListBlocks
+      ? `<div style="margin-top:12px;font-size:13px;white-space:pre-line;">${esc(linkListBlocks)}</div>`
+      : ""
+  }
 </div>
-`;
+    `.trim();
 
-    const subject = `[Pitch] ${projectName} — ${brands.slice(0,3).map(b => b.name).join(', ')}${brands.length>3?'…':''}`;
+    const subject =
+      `[Pitch] ${projectName} — ` +
+      `${brands.slice(0, 3).map((b) => b.name).filter(Boolean).join(", ")}` +
+      `${brands.length > 3 ? "…" : ""}`;
 
-    // Create draft in Outlook
-    const draft = await o365API.createDraft(
-      subject,
-      finalHtml,
-      toRecipients,
-      { isHtml: true, cc, senderEmail }
-    );
+    // Create the draft (Graph)
+    const draft = await o365API.createDraft(subject, htmlBody, toRecipients, {
+      isHtml: true,
+      cc,
+      senderEmail, // defaults to shap@
+    });
 
     return res.status(200).json({
       success: true,
-      webLink: draft.webLink || null,
-      subject
+      webLink: draft?.webLink || null,
+      subject,
     });
-
   } catch (err) {
-    console.error('pushDraft error', err);
-    return res.status(500).json({ error: 'Failed to push draft', details: err.message });
+    console.error("pushDraft error", err);
+    applyCORS(req, res); // ensure headers on error too
+    return res
+      .status(500)
+      .json({ error: "Failed to push draft", details: err?.message || String(err) });
   }
 }
