@@ -1,15 +1,17 @@
-// /api/pushDraft.js  (self-contained: no heavy imports)
-
+// /api/pushDraft.js  (SELF-CONTAINED)
 import OpenAI from "openai";
 
 export const config = {
   api: { bodyParser: { sizeLimit: "10mb" } },
+  // runtime: "nodejs", // uncomment if your project accidentally runs APIs at the edge
 };
 
-// ====== OpenAI (inline) ======
+console.log("pushDraft handler loaded"); // sanity log in Vercel
+
+// --- OpenAI client (inline) ---
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ====== CORS (Framer + prod + local) ======
+// --- CORS allow-list (Framer + prod + local) ---
 const ALLOWED = [
   "https://www.selfrun.ai",
   "https://selfrun.ai",
@@ -21,7 +23,7 @@ function allowOrigin(origin = "") {
     if (!origin) return "";
     if (ALLOWED.includes(origin)) return origin;
     const host = new URL(origin).hostname;
-    if (host.endsWith(".framer.website")) return origin; // Framer preview
+    if (host.endsWith(".framer.website")) return origin; // allow Framer preview
     return "";
   } catch { return ""; }
 }
@@ -34,7 +36,7 @@ function applyCORS(req, res) {
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-// ====== Tiny Graph client (inline, application perms) ======
+// --- Tiny Graph client (inline, app permissions) ---
 const TENANT = process.env.MICROSOFT_TENANT_ID;
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
@@ -52,10 +54,7 @@ async function getGraphToken() {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  if (!resp.ok) {
-    const t = await resp.text();
-    throw new Error(`Graph token failed: ${resp.status} ${t}`);
-  }
+  if (!resp.ok) throw new Error(`Graph token failed: ${resp.status} ${await resp.text()}`);
   return resp.json(); // { access_token, ... }
 }
 
@@ -78,26 +77,20 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
   const createUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/messages`;
   const createRes = await fetch(createUrl, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${access_token}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
     body: JSON.stringify(draftData),
   });
-  if (!createRes.ok) {
-    const t = await createRes.text();
-    throw new Error(`Draft creation failed: ${createRes.status} ${t}`);
-  }
+  if (!createRes.ok) throw new Error(`Draft creation failed: ${createRes.status} ${await createRes.text()}`);
   const created = await createRes.json();
 
-  // Fetch webLink
+  // Fetch webLink for UX
   const getUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/messages/${created.id}?$select=webLink`;
   const getRes = await fetch(getUrl, { headers: { Authorization: `Bearer ${access_token}` } });
   const getJson = getRes.ok ? await getRes.json() : {};
   return { id: created.id, webLink: getJson.webLink || created.webLink || null };
 }
 
-// ====== helpers ======
+// --- helpers ---
 const esc = (s = "") => String(s).replace(/[<&>]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
 const asArray = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 const dedupe = (arr) => Array.from(new Set(arr.filter(Boolean)));
@@ -105,7 +98,7 @@ const toBullets = (arr) => arr.map((x) => `• ${x}`).join("\n");
 const normIdeas = (v) =>
   Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map((s) => s.trim()).filter(Boolean) : [];
 
-// ====== handler ======
+// --- handler ---
 export default async function handler(req, res) {
   applyCORS(req, res);
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -115,7 +108,7 @@ export default async function handler(req, res) {
     const body = req.body || {};
 
     // Support both payload shapes
-    const pd = (body.productionData && typeof body.productionData === "object") ? body.productionData : {};
+    const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = body.projectName ?? pd.projectName ?? "Project";
     const cast        = body.cast        ?? pd.cast        ?? "";
     const location    = body.location    ?? pd.location    ?? "";
