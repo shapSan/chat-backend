@@ -53,7 +53,7 @@ async function getGraphToken() {
 
 async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) {
   const { access_token } = await getGraphToken();
-  const sender = senderEmail || "shap@hollywoodbranded.com";
+  const sender = senderEmail || "stacy@hollywoodbranded.com";
 
   const draftData = {
     subject,
