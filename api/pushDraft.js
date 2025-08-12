@@ -174,7 +174,8 @@ Keep it concise (5–8 sentences). After the body, links will be appended separa
       (resp?.choices?.[0]?.message?.content||'').length);
     
     return resp?.choices?.[0]?.message?.content?.trim() || fallback();
-  } catch {
+  } catch (e) {
+    console.log('[pushDraft] OpenAI fallback for', brand.name);
     return fallback();
   }
 }
@@ -188,9 +189,9 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     
-    // Log incoming request details
-    console.log('[pushDraft] split?', !!body.splitPerBrand,
-                'brands:', Array.isArray(body.brands) ? body.brands.length : 0);
+    // Diagnostic log for incoming request
+    console.log('[pushDraft] split?', !!req.body?.splitPerBrand, 
+                'brands:', Array.isArray(req.body?.brands) ? req.body.brands.length : 0);
     
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = body.projectName ?? pd.projectName ?? "Project";
