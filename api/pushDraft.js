@@ -137,7 +137,11 @@ ${brand.hbInsights ? "HB insights: " + brand.hbInsights + "\n\n" : ""}${
     
     const prompt = `
 Write a short, friendly email to a brand contact about a potential partnership.
-Avoid marketing fluff; sound like a person. Fold in the fields below naturally.
+- Sound like a person who knows them (warm, concise, 5–8 sentences).
+- Fold in the fields naturally (no bullet lists unless helpful).
+- Do NOT include a subject line.
+- Do NOT include placeholders like [Your Name], [Brand Contact's Name], or "Links:" sections.
+- Do NOT add a sign-off; I'll add it later.
 
 Project: ${project}
 Vibe: ${vibe}
@@ -147,13 +151,9 @@ Notes from sender: ${notes || "(none)"}
 
 Brand: ${brand.name}
 Why it works: ${brand.whyItWorks || "-"}
-Integration ideas:
-${brand.integrationIdeas?.length ? brand.integrationIdeas.map((x) => "• " + x).join("\n") : "-"}
+Integration ideas: ${brand.integrationIdeas?.length ? brand.integrationIdeas.map((x) => "• " + x).join("\n") : "-"}
 HB Insights: ${brand.hbInsights || "-"}
-Additional context:
-${brand.contentText || "-"}
-
-Keep it concise (5–8 sentences). After the body, links will be appended separately.
+Additional context: ${brand.contentText || "-"}
 `.trim();
 
     // Use OpenAI REST API directly (no SDK dependency)
@@ -197,9 +197,21 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     
-    // Diagnostic log for incoming request
-    console.log('[pushDraft] split?', !!req.body?.splitPerBrand, 
-                'brands:', Array.isArray(req.body?.brands) ? req.body.brands.length : 0);
+    // Flexible split mode detection - accept multiple formats
+    const splitPerBrand = Boolean(
+      body?.splitPerBrand === true ||
+      body?.split === true ||
+      (typeof body?.mode === 'string' && body.mode.toLowerCase() === 'split')
+    );
+    
+    // Better visibility logging
+    console.log('[pushDraft] split? (normalized)=', splitPerBrand, 
+                'raw:', {
+                  splitPerBrand: body?.splitPerBrand,
+                  split: body?.split,
+                  mode: body?.mode
+                },
+                'brands:', Array.isArray(body?.brands) ? body.brands.length : 0);
     
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = body.projectName ?? pd.projectName ?? "Project";
@@ -210,7 +222,6 @@ export default async function handler(req, res) {
     const toRecipients = Array.isArray(body.to) && body.to.length ? body.to.slice(0, 10) : ["shap@hollywoodbranded.com"];
     const ccRecipients = Array.isArray(body.cc) ? body.cc.slice(0, 10) : [];
     const senderEmail = body.senderEmail || "shap@hollywoodbranded.com";
-    const splitPerBrand = !!body.splitPerBrand;
 
     const brandsRaw = Array.isArray(body.brands) ? body.brands : [];
     if (!brandsRaw.length) return res.status(400).json({ error: "No brands provided" });
