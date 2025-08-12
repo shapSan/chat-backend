@@ -54,7 +54,7 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
   const sender = senderEmail || "shap@hollywoodbranded.com";
   const draftData = {
     subject,
-    body: { contentType: "HTML", content: htmlBody },
+    body: { contentType: "HTML", content: htmlBody }, // <- MUST be HTML
     toRecipients: (Array.isArray(to) ? to : [to])
       .filter(Boolean)
       .slice(0, 10)
@@ -164,6 +164,7 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
     const prompt = `
 Write a warm, professional email (5–8 sentences) from an experienced brand integration expert about a potential partnership.
 - Sound knowledgeable and confident in the space; avoid hype or marketing fluff.
+- Keep sentences tight; prefer concrete film/brand fit over generic fluff.
 - Weave in why the brand fits naturally, 1–3 integration ideas, and any insights.
 - Briefly reference available resources once: "${mention || '(none)'}".
 - Do NOT include a subject, signature, or placeholders.
@@ -191,7 +192,7 @@ Additional context: ${brand.contentText || '-'}
           { role:"system", content:"You write concise, personable business emails from an experienced Hollywood brand integration expert." },
           { role:"user", content: prompt }
         ],
-        temperature: 0.6
+        temperature: 0.55
       })
     });
     if (!resp.ok) return fallback();
@@ -231,15 +232,22 @@ export default async function handler(req, res) {
     const results = [];
     for (const b of brands) {
       try {
+        // Log brand assets for debugging
+        console.log('[pushDraft] brand', b.name, 'assets in:', (b.assets||[]).length, 
+                    (b.assets||[]).map(x => `${x.type}:${x.url}`).slice(0,4));
+        
         const bodyText = await generateAiBody({
           project: projectName, vibe, cast, location, notes, brand: b
         });
         
         const htmlBody = `
-<div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">
+<div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:720px;">
   ${bodyText.split('\n').map(line=>`<div>${esc(line)}</div>`).join('')}
   ${quickLinksHtml(b)}
 </div>`.trim();
+
+        // Log if Quick links made it into HTML
+        console.log('[pushDraft] html has links?', htmlBody.includes('Quick links'));
 
         const subject = `[Pitch] ${projectName} — ${b.name || 'Brand'}`;
         const draft = await createDraftInMailbox({
