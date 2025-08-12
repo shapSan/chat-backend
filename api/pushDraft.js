@@ -1,4 +1,5 @@
-// /api/pushDraft.js — split mode + sanitized URLs + clickable links
+// /api/pushDraft.js — split mode, sanitized URLs, resilient OpenAI fallback
+
 export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 
 // ---------- CORS ----------
@@ -70,6 +71,7 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
   });
   if (!createRes.ok) throw new Error(`Draft creation failed: ${createRes.status} ${await createRes.text()}`);
   const created = await createRes.json();
+
   const getUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/messages/${created.id}?$select=webLink`;
   const getRes = await fetch(getUrl, { headers: { Authorization: `Bearer ${access_token}` } });
   const getJson = getRes.ok ? await getRes.json() : {};
@@ -117,20 +119,25 @@ function linkListHtml(oneBrand) {
   return lines.length ? `<div style="margin-top:12px;">${lines.join("")}</div>` : "";
 }
 
-async function generateAiBody(project, vibe, cast, location, notes, brand) {
-  if (!process.env.OPENAI_API_KEY) {
-    // graceful fallback if key is missing
+// OpenAI: dynamic import + safe fallback
+async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
+  const fallback = () => {
     const idea = brand.integrationIdeas?.length ? `\n• ${brand.integrationIdeas.join("\n• ")}` : "";
-    return `Hi there—quick note on ${project}.\n\n${brand.name}\n${
-      brand.whyItWorks ? "Why it works: " + brand.whyItWorks + "\n\n" : ""
-    }${brand.hbInsights ? "HB insights: " + brand.hbInsights + "\n\n" : ""}${
-      idea ? "Integration ideas:\n" + idea + "\n\n" : ""
-    }${notes ? "Notes: " + notes + "\n" : ""}`;
-  }
-  const { default: OpenAI } = await import("openai");
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    return `Hi there—quick note on ${project}.
 
-  const prompt = `
+${brand.name}
+${brand.whyItWorks ? "Why it works: " + brand.whyItWorks + "\n\n" : ""}
+${brand.hbInsights ? "HB insights: " + brand.hbInsights + "\n\n" : ""}${
+      idea ? "Integration ideas:\n" + idea + "\n\n" : ""
+    }${notes ? "Notes: " + notes + "\n" : ""}`.trim();
+  };
+
+  try {
+    if (!process.env.OPENAI_API_KEY) return fallback();
+    const { default: OpenAI } = await import("openai");
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const prompt = `
 Write a short, friendly email to a brand contact about a potential partnership.
 Avoid marketing fluff; sound like a person. Fold in the fields below naturally.
 
@@ -148,18 +155,22 @@ HB Insights: ${brand.hbInsights || "-"}
 Additional context:
 ${brand.contentText || "-"}
 
-Keep it concise (5–8 sentences). After the body, I will append a clickable link list separately.
-  `.trim();
+Keep it concise (5–8 sentences). After the body, links will be appended separately.
+`.trim();
 
-  const resp = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: "You write personable, concise business emails." },
-      { role: "user", content: prompt },
-    ],
-    temperature: 0.7,
-  });
-  return resp?.choices?.[0]?.message?.content?.trim() || "";
+    const resp = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You write personable, concise business emails." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.7,
+    });
+
+    return resp?.choices?.[0]?.message?.content?.trim() || fallback();
+  } catch {
+    return fallback();
+  }
 }
 
 // ---------- handler ----------
@@ -190,15 +201,19 @@ export default async function handler(req, res) {
     if (splitPerBrand) {
       const results = [];
       for (const b of brands) {
-        const aiBody = await generateAiBody(projectName, vibe, cast, location, notes, b);
-        const htmlBody = `
+        try {
+          const aiBody = await generateAiBody({
+            project: projectName,
+            vibe, cast, location, notes,
+            brand: b,
+          });
+          const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">
   ${aiBody.split("\n").map((line) => `<div>${esc(line)}</div>`).join("")}
   ${linkListHtml(b)}
 </div>`.trim();
 
-        const subject = `[Pitch] ${projectName} — ${b.name || "Brand"}`;
-        try {
+          const subject = `[Pitch] ${projectName} — ${b.name || "Brand"}`;
           const draft = await createDraftInMailbox({
             subject,
             htmlBody,
@@ -208,7 +223,7 @@ export default async function handler(req, res) {
           });
           results.push({ brand: b.name || "Brand", subject, webLink: draft.webLink || null });
         } catch (e) {
-          results.push({ brand: b.name || "Brand", subject, error: String(e?.message || e) });
+          results.push({ brand: b.name || "Brand", error: String(e?.message || e) });
         }
       }
       const webLinks = results.map((r) => r.webLink).filter(Boolean);
@@ -232,33 +247,34 @@ ${(b.assets || []).map((a) => `${a.title || a.type || "Link"}: ${a.url}`).join("
       )
       .join("\n---\n");
 
-    const aiCombined = await generateAiBody(projectName, vibe, cast, location, notes, {
-      name: brands.map((b) => b.name).join(", "),
-      whyItWorks: brands.map((b) => b.whyItWorks).filter(Boolean).join(" | "),
-      integrationIdeas: brands.flatMap((b) => b.integrationIdeas || []),
-      hbInsights: brands.map((b) => b.hbInsights).filter(Boolean).join(" | "),
-      contentText: blocks,
-      assets: [],
+    const aiCombined = await generateAiBody({
+      project: projectName,
+      vibe, cast, location, notes,
+      brand: {
+        name: brands.map((b) => b.name).join(", "),
+        whyItWorks: brands.map((b) => b.whyItWorks).filter(Boolean).join(" | "),
+        integrationIdeas: brands.flatMap((b) => b.integrationIdeas || []),
+        hbInsights: brands.map((b) => b.hbInsights).filter(Boolean).join(" | "),
+        contentText: blocks,
+      },
     });
 
-    function linkListAll(brandsArr) {
-      const items = brandsArr
-        .map((b) => {
-          const lines = (b.assets || []).map(
-            (a) => `<div><a href="${a.url}" target="_blank" rel="noopener">${a.title || a.type || "Link"}</a></div>`
-          );
-          return lines.length
-            ? `<div style="margin-top:6px;"><div style="font-weight:600;">${b.name || "Brand"}</div>${lines.join("")}</div>`
-            : "";
-        })
-        .filter(Boolean);
-      return items.length ? `<div style="margin-top:12px;">${items.join("")}</div>` : "";
-    }
+    const linkListAll = brands
+      .map((b) => {
+        const lines = (b.assets || []).map(
+          (a) => `<div><a href="${a.url}" target="_blank" rel="noopener">${a.title || a.type || "Link"}</a></div>`
+        );
+        return lines.length
+          ? `<div style="margin-top:6px;"><div style="font-weight:600;">${b.name || "Brand"}</div>${lines.join("")}</div>`
+          : "";
+      })
+      .filter(Boolean)
+      .join("");
 
     const htmlCombined = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">
   ${aiCombined.split("\n").map((line) => `<div>${esc(line)}</div>`).join("")}
-  ${linkListAll(brands)}
+  ${linkListAll ? `<div style="margin-top:12px;">${linkListAll}</div>` : ""}
 </div>`.trim();
 
     const subject =
