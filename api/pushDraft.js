@@ -121,7 +121,10 @@ function linkListHtml(oneBrand) {
 
 // OpenAI: dynamic import + safe fallback
 async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
+  console.log('[pushDraft] OpenAI start for', brand.name);
+  
   const fallback = () => {
+    console.log('[pushDraft] OpenAI fallback for', brand.name);
     const idea = brand.integrationIdeas?.length ? `\n• ${brand.integrationIdeas.join("\n• ")}` : "";
     return `Hi there—quick note on ${project}.
 
@@ -167,6 +170,9 @@ Keep it concise (5–8 sentences). After the body, links will be appended separa
       temperature: 0.7,
     });
 
+    console.log('[pushDraft] OpenAI ok len', 
+      (resp?.choices?.[0]?.message?.content||'').length);
+    
     return resp?.choices?.[0]?.message?.content?.trim() || fallback();
   } catch {
     return fallback();
@@ -181,6 +187,11 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body || {};
+    
+    // Log incoming request details
+    console.log('[pushDraft] split?', !!body.splitPerBrand,
+                'brands:', Array.isArray(body.brands) ? body.brands.length : 0);
+    
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = body.projectName ?? pd.projectName ?? "Project";
     const cast = body.cast ?? pd.cast ?? "";
