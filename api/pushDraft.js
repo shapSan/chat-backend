@@ -137,11 +137,12 @@ ${brand.hbInsights ? "HB insights: " + brand.hbInsights + "\n\n" : ""}${
     
     const prompt = `
 Write a short, friendly email to a brand contact about a potential partnership.
-- Sound like a person who knows them (warm, concise, 5–8 sentences).
-- Fold in the fields naturally (no bullet lists unless helpful).
+- Sound personal and concise (5–8 sentences), not salesy.
+- Fold in the fields naturally (brand fit, ideas, HB insights).
 - Do NOT include a subject line.
-- Do NOT include placeholders like [Your Name], [Brand Contact's Name], or "Links:" sections.
-- Do NOT add a sign-off; I'll add it later.
+- Do NOT include any placeholders (no [Your Name], no [Brand Contact's Name]).
+- Do NOT add a "Links:" section; I will append links separately.
+- Do NOT ask the recipient to send information; this is an intro pitch.
 
 Project: ${project}
 Vibe: ${vibe}
@@ -197,21 +198,32 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     
-    // Flexible split mode detection - accept multiple formats
-    const splitPerBrand = Boolean(
-      body?.splitPerBrand === true ||
-      body?.split === true ||
-      (typeof body?.mode === 'string' && body.mode.toLowerCase() === 'split')
-    );
+    // Normalize flags
+    const rawSplit = {
+      splitPerBrand: body?.splitPerBrand,
+      split: body?.split,
+      mode: body?.mode
+    };
     
-    // Better visibility logging
+    // We'll decide after we parse brandsRaw
+    const brandsRaw = Array.isArray(body.brands) ? body.brands : [];
+    
+    let splitPerBrand = rawSplit.splitPerBrand === true ||
+                        rawSplit.split === true ||
+                        (typeof rawSplit.mode === 'string' && rawSplit.mode.toLowerCase() === 'split');
+    
+    // If caller sent NO split flags at all, default to split when >1 brands
+    if (!splitPerBrand && 
+        rawSplit.splitPerBrand === undefined && 
+        rawSplit.split === undefined && 
+        rawSplit.mode === undefined && 
+        brandsRaw.length > 1) {
+      splitPerBrand = true;
+    }
+    
     console.log('[pushDraft] split? (normalized)=', splitPerBrand, 
-                'raw:', {
-                  splitPerBrand: body?.splitPerBrand,
-                  split: body?.split,
-                  mode: body?.mode
-                },
-                'brands:', Array.isArray(body?.brands) ? body.brands.length : 0);
+                'raw:', rawSplit, 
+                'brands:', brandsRaw.length);
     
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = body.projectName ?? pd.projectName ?? "Project";
@@ -223,7 +235,6 @@ export default async function handler(req, res) {
     const ccRecipients = Array.isArray(body.cc) ? body.cc.slice(0, 10) : [];
     const senderEmail = body.senderEmail || "shap@hollywoodbranded.com";
 
-    const brandsRaw = Array.isArray(body.brands) ? body.brands : [];
     if (!brandsRaw.length) return res.status(400).json({ error: "No brands provided" });
 
     const brands = brandsRaw.map(sanitizeBrand).slice(0, 10); // safety cap
