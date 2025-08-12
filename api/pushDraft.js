@@ -79,114 +79,125 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
 }
 
 // ---------- helpers ----------
-const esc = (s = "") => String(s).replace(/[<&>]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-const isHttpUrl = (u) => typeof u === "string" && /^https?:\/\//i.test(u) && u.length < 1000;
-const trim = (s, n = 1400) => String(s || "").slice(0, n);
-const normIdeas = (v) =>
-  Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map((s) => s.trim()).filter(Boolean) : [];
+const esc = (s="") => String(s).replace(/[<&>]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const isHttp = u => typeof u==='string' && /^https?:\/\//i.test(u) && u.length < 1000;
+const trim = (s,n=1400)=>String(s||'').slice(0,n);
+const normIdeas = v => Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map(x=>x.trim()).filter(Boolean) : [];
 
-function sanitizeBrand(b = {}) {
-  const assets = (Array.isArray(b.assets) ? b.assets : [])
-    .filter((a) => a && isHttpUrl(a.url))
+// classify any asset to a sensible type
+function classifyAsset(item={}) {
+  const url = String(item.url||'');
+  let type = (item.type||'').toLowerCase();
+  if (!type) {
+    if (/\.pdf($|\?)/i.test(url)) type = 'pdf';
+    else if (/(youtube|vimeo|\.mp4|\.mov)/i.test(url)) type = 'video';
+    else if (/(\.mp3|\.wav)|spotify|soundcloud/i.test(url)) type = 'audio';
+    else if (/\.png|\.jpe?g|\.webp/i.test(url)) type = 'image';
+    else type = 'link';
+  }
+  const defaultTitle = ({video:'Video', pdf:'Proposal PDF', audio:'Audio Pitch', image:'Poster', link:'Link'})[type] || 'Link';
+  return { type, url, title: item.title || defaultTitle };
+}
+
+function sanitizeBrand(b={}) {
+  const base = [];
+  // fold any top-level url fields
+  if (isHttp(b.videoUrl || b.exportedVideo)) base.push({type:'video', url:b.videoUrl || b.exportedVideo, title:'Video'});
+  if (isHttp(b.pdfUrl || b.brandCardPDF))   base.push({type:'pdf',   url:b.pdfUrl || b.brandCardPDF,   title:'Proposal PDF'});
+  if (isHttp(b.audioUrl))                   base.push({type:'audio', url:b.audioUrl,                   title:'Audio Pitch'});
+  if (isHttp(b.posterUrl))                  base.push({type:'image', url:b.posterUrl,                  title:'Poster'});
+
+  const extras = (Array.isArray(b.assets)?b.assets:[])
+    .filter(a => a && isHttp(a.url))
     .slice(0, 12)
-    .map((a) => ({ title: a.title || a.type || "Link", type: a.type || "link", url: a.url }));
+    .map(classifyAsset);
 
-  const extras = [
-    b.posterUrl && isHttpUrl(b.posterUrl) ? { title: "Poster", type: "image", url: b.posterUrl } : null,
-    (b.videoUrl || b.exportedVideo) && isHttpUrl(b.videoUrl || b.exportedVideo)
-      ? { title: "Video", type: "video", url: b.videoUrl || b.exportedVideo }
-      : null,
-    (b.pdfUrl || b.brandCardPDF) && isHttpUrl(b.pdfUrl || b.brandCardPDF)
-      ? { title: "Proposal PDF", type: "pdf", url: b.pdfUrl || b.brandCardPDF }
-      : null,
-    b.audioUrl && isHttpUrl(b.audioUrl) ? { title: "Audio Pitch", type: "audio", url: b.audioUrl } : null,
-  ].filter(Boolean);
+  // de-dupe by url
+  const seen = new Set(); const assets = [];
+  [...base, ...extras].forEach(a => { if (!seen.has(a.url)) { seen.add(a.url); assets.push(a); } });
 
   return {
-    name: b.name || "",
+    name: b.name || b.brand || '',
     whyItWorks: trim(b.whyItWorks),
     hbInsights: trim(b.hbInsights),
-    integrationIdeas: normIdeas(b.integrationIdeas).slice(0, 8).map((x) => trim(x, 200)),
-    contentText: trim(b.contentText, 2000), // fallback description
-    assets: [...assets, ...extras],
+    integrationIdeas: normIdeas(b.integrationIdeas).slice(0,8).map(x=>trim(x,200)),
+    contentText: trim(Array.isArray(b.content)? b.content.join('\n') : b.content, 2000),
+    assets
   };
 }
 
-function linkListHtml(oneBrand) {
-  const lines = (oneBrand.assets || []).map(
-    (a) => `<div><a href="${a.url}" target="_blank" rel="noopener">${a.title || a.type || "Link"}</a></div>`
-  );
-  return lines.length ? `<div style="margin-top:12px;">${lines.join("")}</div>` : "";
+// Natural one-liner that references resources, used inside the email
+function assetsNote(brand){
+  const t = (brand.assets||[]).map(a=>a.type);
+  const parts = [];
+  if (t.includes('video')) parts.push('a short video');
+  if (t.includes('pdf'))   parts.push('the proposal PDF');
+  if (t.includes('audio')) parts.push('a quick audio pitch');
+  if (t.includes('image')) parts.push('a one-sheet/poster');
+  if (!parts.length) return '';
+  if (parts.length === 1) return `I've included ${parts[0]} below for a quick skim.`;
+  return `I've included ${parts.slice(0,-1).join(', ')} and ${parts.slice(-1)} below for a quick skim.`;
 }
 
-// OpenAI: using plain fetch (no SDK dependency)
-async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
-  const fallback = () => {
-    const idea = brand.integrationIdeas?.length ? `\n• ${brand.integrationIdeas.join("\n• ")}` : "";
-    return `Hi there—quick note on ${project}.
+// Clickable links block under the body
+function quickLinksHtml(brand){
+  if (!brand.assets?.length) return '';
+  const rows = brand.assets.map(a =>
+    `<div style="margin:2px 0;"><a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a></div>`
+  ).join('');
+  return `<div style="margin-top:12px;">
+    <div style="font-weight:600;margin-bottom:4px;">Quick links</div>${rows}
+  </div>`;
+}
 
-${brand.name}
-${brand.whyItWorks ? "Why it works: " + brand.whyItWorks + "\n\n" : ""}
-${brand.hbInsights ? "HB insights: " + brand.hbInsights + "\n\n" : ""}${
-      idea ? "Integration ideas:\n" + idea + "\n\n" : ""
-    }${notes ? "Notes: " + notes + "\n" : ""}`.trim();
+// Professional email writer with natural resource mention
+async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
+  const mention = assetsNote(brand);
+  const fallback = () => {
+    const ideas = brand.integrationIdeas?.length ? ` (${brand.integrationIdeas.join('; ')})` : '';
+    return `Hi there—quick note on ${project}. ${brand.name} feels like a strong fit${ideas ? '—'+ideas : ''}. ${brand.whyItWorks||''} ${brand.hbInsights||''} ${mention}`.trim();
   };
 
   try {
     if (!process.env.OPENAI_API_KEY) return fallback();
-    
+
     const prompt = `
-Write a short, friendly email to a brand contact about a potential partnership.
-- Sound personal and concise (5–8 sentences), not salesy.
-- Fold in the fields naturally (brand fit, ideas, HB insights).
-- Do NOT include a subject line.
-- Do NOT include any placeholders (no [Your Name], no [Brand Contact's Name]).
-- Do NOT add a "Links:" section; I will append links separately.
-- Do NOT ask the recipient to send information; this is an intro pitch.
+Write a warm, professional email (5–8 sentences) from an experienced brand integration expert about a potential partnership.
+- Sound knowledgeable and confident in the space; avoid hype or marketing fluff.
+- Weave in why the brand fits naturally, 1–3 integration ideas, and any insights.
+- Briefly reference available resources once: "${mention || '(none)'}".
+- Do NOT include a subject, signature, or placeholders.
+- Do NOT add a "Links" section; links will be appended below.
+- Write as if you're reaching out directly, not as a formal pitch.
 
 Project: ${project}
 Vibe: ${vibe}
 Cast: ${cast}
 Location: ${location}
-Notes from sender: ${notes || "(none)"}
-
+Notes from sender: ${notes || '(none)'}
 Brand: ${brand.name}
-Why it works: ${brand.whyItWorks || "-"}
-Integration ideas: ${brand.integrationIdeas?.length ? brand.integrationIdeas.map((x) => "• " + x).join("\n") : "-"}
-HB Insights: ${brand.hbInsights || "-"}
-Additional context: ${brand.contentText || "-"}
+Why it works: ${brand.whyItWorks || '-'}
+Integration ideas: ${brand.integrationIdeas?.join(' | ') || '-'}
+Insights: ${brand.hbInsights || '-'}
+Additional context: ${brand.contentText || '-'}
 `.trim();
 
-    // Use OpenAI REST API directly (no SDK dependency)
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
-      },
+      headers: { "Content-Type":"application/json", "Authorization":`Bearer ${process.env.OPENAI_API_KEY}` },
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: "You write personable, concise business emails." },
-          { role: "user", content: prompt }
+          { role:"system", content:"You write concise, personable business emails from an experienced Hollywood brand integration expert." },
+          { role:"user", content: prompt }
         ],
-        temperature: 0.7
+        temperature: 0.6
       })
     });
-
-    if (!resp.ok) {
-      const errTxt = await resp.text();
-      console.log("[pushDraft] OpenAI HTTP error", resp.status, errTxt);
-      return fallback();
-    }
-
+    if (!resp.ok) return fallback();
     const json = await resp.json();
-    const content = json?.choices?.[0]?.message?.content?.trim();
-    return content || fallback();
-  } catch (e) {
-    console.log("[pushDraft] OpenAI fetch exception", e?.message || e);
-    return fallback();
-  }
+    return json?.choices?.[0]?.message?.content?.trim() || fallback();
+  } catch { return fallback(); }
 }
 
 // ---------- handler ----------
@@ -198,32 +209,9 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     
-    // Normalize flags
-    const rawSplit = {
-      splitPerBrand: body?.splitPerBrand,
-      split: body?.split,
-      mode: body?.mode
-    };
-    
-    // We'll decide after we parse brandsRaw
     const brandsRaw = Array.isArray(body.brands) ? body.brands : [];
     
-    let splitPerBrand = rawSplit.splitPerBrand === true ||
-                        rawSplit.split === true ||
-                        (typeof rawSplit.mode === 'string' && rawSplit.mode.toLowerCase() === 'split');
-    
-    // If caller sent NO split flags at all, default to split when >1 brands
-    if (!splitPerBrand && 
-        rawSplit.splitPerBrand === undefined && 
-        rawSplit.split === undefined && 
-        rawSplit.mode === undefined && 
-        brandsRaw.length > 1) {
-      splitPerBrand = true;
-    }
-    
-    console.log('[pushDraft] split? (normalized)=', splitPerBrand, 
-                'raw:', rawSplit, 
-                'brands:', brandsRaw.length);
+    console.log('[pushDraft] brands:', brandsRaw.length);
     
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = body.projectName ?? pd.projectName ?? "Project";
@@ -239,100 +227,36 @@ export default async function handler(req, res) {
 
     const brands = brandsRaw.map(sanitizeBrand).slice(0, 10); // safety cap
 
-    // --- SPLIT MODE: one draft per brand ---
-    if (splitPerBrand) {
-      const results = [];
-      for (const b of brands) {
-        try {
-          const aiBody = await generateAiBody({
-            project: projectName,
-            vibe, cast, location, notes,
-            brand: b,
-          });
-          const htmlBody = `
+    // --- ALWAYS SPLIT: one draft per brand ---
+    const results = [];
+    for (const b of brands) {
+      try {
+        const bodyText = await generateAiBody({
+          project: projectName, vibe, cast, location, notes, brand: b
+        });
+        
+        const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">
-  ${aiBody.split("\n").map((line) => `<div>${esc(line)}</div>`).join("")}
-  ${linkListHtml(b)}
+  ${bodyText.split('\n').map(line=>`<div>${esc(line)}</div>`).join('')}
+  ${quickLinksHtml(b)}
 </div>`.trim();
 
-          const subject = `[Pitch] ${projectName} — ${b.name || "Brand"}`;
-          const draft = await createDraftInMailbox({
-            subject,
-            htmlBody,
-            to: toRecipients,
-            cc: ccRecipients,
-            senderEmail,
-          });
-          results.push({ brand: b.name || "Brand", subject, webLink: draft.webLink || null });
-        } catch (e) {
-          results.push({ brand: b.name || "Brand", error: String(e?.message || e) });
-        }
+        const subject = `[Pitch] ${projectName} — ${b.name || 'Brand'}`;
+        const draft = await createDraftInMailbox({
+          subject,
+          htmlBody,
+          to: toRecipients,
+          cc: ccRecipients,
+          senderEmail,
+        });
+        results.push({ brand: b.name || "Brand", subject, webLink: draft.webLink || null });
+      } catch (e) {
+        results.push({ brand: b.name || "Brand", error: String(e?.message || e) });
       }
-      const webLinks = results.map((r) => r.webLink).filter(Boolean);
-      return res.status(200).json({ success: true, mode: "split", count: results.length, webLinks, results });
     }
-
-    // --- COMBINED MODE: one email with all brands ---
-    const blocks = brands
-      .map(
-        (b) => `
-Brand: ${b.name}
-Why it works: ${b.whyItWorks || "(inline below)"}
-Integration ideas:
-${b.integrationIdeas?.length ? b.integrationIdeas.map((x) => "• " + x).join("\n") : "-"}
-HB Insights: ${b.hbInsights || "-"}
-Additional context:
-${b.contentText || "-"}
-Links:
-${(b.assets || []).map((a) => `${a.title || a.type || "Link"}: ${a.url}`).join("\n")}
-`.trim()
-      )
-      .join("\n---\n");
-
-    const aiCombined = await generateAiBody({
-      project: projectName,
-      vibe, cast, location, notes,
-      brand: {
-        name: brands.map((b) => b.name).join(", "),
-        whyItWorks: brands.map((b) => b.whyItWorks).filter(Boolean).join(" | "),
-        integrationIdeas: brands.flatMap((b) => b.integrationIdeas || []),
-        hbInsights: brands.map((b) => b.hbInsights).filter(Boolean).join(" | "),
-        contentText: blocks,
-      },
-    });
-
-    const linkListAll = brands
-      .map((b) => {
-        const lines = (b.assets || []).map(
-          (a) => `<div><a href="${a.url}" target="_blank" rel="noopener">${a.title || a.type || "Link"}</a></div>`
-        );
-        return lines.length
-          ? `<div style="margin-top:6px;"><div style="font-weight:600;">${b.name || "Brand"}</div>${lines.join("")}</div>`
-          : "";
-      })
-      .filter(Boolean)
-      .join("");
-
-    const htmlCombined = `
-<div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">
-  ${aiCombined.split("\n").map((line) => `<div>${esc(line)}</div>`).join("")}
-  ${linkListAll ? `<div style="margin-top:12px;">${linkListAll}</div>` : ""}
-</div>`.trim();
-
-    const subject =
-      `[Pitch] ${projectName} — ` +
-      `${brands.slice(0, 3).map((b) => b.name).filter(Boolean).join(", ")}` +
-      `${brands.length > 3 ? "…" : ""}`;
-
-    const draft = await createDraftInMailbox({
-      subject,
-      htmlBody: htmlCombined,
-      to: toRecipients,
-      cc: ccRecipients,
-      senderEmail,
-    });
-
-    return res.status(200).json({ success: true, mode: "combined", webLink: draft.webLink || null, subject });
+    
+    const webLinks = results.map((r) => r.webLink).filter(Boolean);
+    return res.status(200).json({ success: true, mode: "split", count: results.length, webLinks, results });
   } catch (err) {
     applyCORS(req, res);
     return res.status(500).json({ error: "Failed to push draft", details: err?.message || String(err) });
