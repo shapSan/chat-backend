@@ -87,8 +87,53 @@ const esc = (s = "") => String(s).replace(/[<&>]/g, (c) => ({ "<": "&lt;", ">": 
 const asArray = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 const dedupe = (arr) => Array.from(new Set(arr.filter(Boolean)));
 const bullets = (arr) => arr.map((x) => `• ${x}`).join("\n");
-const normIdeas = (v) =>
-  Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map((s) => s.trim()).filter(Boolean) : [];
+const isHttpUrl = (u) => typeof u === 'string' && /^https?:\/\//i.test(u) && u.length < 1000;
+const trim = (s, n=1200) => String(s || '').slice(0, n);
+const normIdeas = (v) => 
+  Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map(s=>s.trim()).filter(Boolean) : [];
+
+function sanitizeBrand(b={}) {
+  const assets = (Array.isArray(b.assets) ? b.assets : [])
+    .filter(a => a && isHttpUrl(a.url))
+    .slice(0, 12)
+    .map(a => ({
+      title: a.title || a.type || 'Link',
+      type: a.type || 'link',
+      url: a.url
+    }));
+  
+  const extras = [
+    b.posterUrl && isHttpUrl(b.posterUrl) ? 
+      { title:'Poster', type:'image', url:b.posterUrl } : null,
+    (b.videoUrl || b.exportedVideo) && isHttpUrl(b.videoUrl || b.exportedVideo) ? 
+      { title:'Video', type:'video', url:b.videoUrl || b.exportedVideo } : null,
+    (b.pdfUrl || b.brandCardPDF) && isHttpUrl(b.pdfUrl || b.brandCardPDF) ? 
+      { title:'Proposal PDF', type:'pdf', url:b.pdfUrl || b.brandCardPDF } : null,
+    b.audioUrl && isHttpUrl(b.audioUrl) ? 
+      { title:'Audio Pitch', type:'audio', url:b.audioUrl } : null,
+  ].filter(Boolean);
+  
+  return {
+    name: b.name || '',
+    whyItWorks: trim(b.whyItWorks),
+    hbInsights: trim(b.hbInsights),
+    integrationIdeas: normIdeas(b.integrationIdeas).slice(0,8).map(x=>trim(x,200)),
+    assets: [...assets, ...extras]
+  };
+}
+
+function linkListHtml(brands) {
+  const blocks = brands.map(b => {
+    const lines = (b.assets || []).map(a => 
+      `<div><a href="${a.url}" target="_blank" rel="noopener">${esc(a.title || a.type || 'Link')}</a></div>`
+    ).join('');
+    return lines ? 
+      `<div style="margin-top:6px;"><div style="font-weight:600;">${esc(b.name || 'Brand')}</div>${lines}</div>` : '';
+  }).filter(Boolean);
+  
+  return blocks.length ? 
+    `<div style="margin-top:12px;">${blocks.join('')}</div>` : '';
+}
 
 // ---------- handler ----------
 export default async function handler(req, res) {
@@ -107,7 +152,8 @@ export default async function handler(req, res) {
     const vibe        = body.vibe        ?? pd.vibe        ?? "";
     const notes       = body.notes       ?? pd.notes       ?? "";
 
-    const brands = Array.isArray(body.brands) ? body.brands : [];
+    const brandsRaw = Array.isArray(body.brands) ? body.brands : [];
+    const brands = brandsRaw.map(sanitizeBrand);
     if (!brands.length) return res.status(400).json({ error: "No brands provided" });
 
     // recipients: default to shap only
@@ -118,15 +164,8 @@ export default async function handler(req, res) {
 
     // Build AI prompt blocks
     const brandTextBlocks = brands.map((b) => {
-      const ideas = normIdeas(b.integrationIdeas);
-      const assets = Array.isArray(b.assets) ? b.assets : [];
-      const extras = [
-        b.posterUrl ? { title: "Poster", type: "image", url: b.posterUrl } : null,
-        (b.videoUrl ?? b.exportedVideo) ? { title: "Video", type: "video", url: b.videoUrl ?? b.exportedVideo } : null,
-        (b.pdfUrl ?? b.brandCardPDF) ? { title: "Proposal PDF", type: "pdf", url: b.pdfUrl ?? b.brandCardPDF } : null,
-        b.audioUrl ? { title: "Audio Pitch", type: "audio", url: b.audioUrl } : null,
-      ].filter(Boolean);
-      const linksTxt = [...assets, ...extras]
+      const ideas = b.integrationIdeas;
+      const linksTxt = b.assets
         .map((a) => `${a.title || a.type || "Link"}: ${a.url}`)
         .join("\n");
 
@@ -176,23 +215,12 @@ ${brandTextBlocks}
       aiBody = `Hi there—quick note on ${projectName}.`;
     }
 
-    // Explicit link list (clear + clickable)
-    const linkListBlocks = brands.map((b) => {
-      const links = [];
-      const push = (title, url) => url && links.push(`${title}: ${url}`);
-      (Array.isArray(b.assets) ? b.assets : []).forEach((a) => push(a.title || a.type || "Link", a.url));
-      push("Poster", b.posterUrl);
-      push("Video", b.videoUrl ?? b.exportedVideo);
-      push("Proposal PDF", b.pdfUrl ?? b.brandCardPDF);
-      push("Audio Pitch", b.audioUrl);
-      const unique = dedupe(links);
-      return unique.length ? `${b.name || "Brand"}:\n${unique.join("\n")}` : "";
-    }).filter(Boolean).join("\n\n");
+    // Explicit link list (clear + clickable) - removed since we're using linkListHtml now
 
     const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;">
   ${aiBody.split("\n").map((line) => `<div>${esc(line)}</div>`).join("")}
-  ${linkListBlocks ? `<div style="margin-top:12px;font-size:13px;white-space:pre-line;">${esc(linkListBlocks)}</div>` : ""}
+  ${linkListHtml(brands)}
 </div>
     `.trim();
 
