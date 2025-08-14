@@ -384,10 +384,20 @@ async function searchFireflies(query, options = {}) {
     console.log('[DEBUG searchFireflies] Starting search with query:', query);
     console.log('[DEBUG searchFireflies] Options:', options);
     
+    // Ensure connection is established before first search
     const isConnected = await firefliesAPI.testConnection();
     if (!isConnected) {
       console.error('[DEBUG searchFireflies] Failed connection test');
-      return { transcripts: [] };
+      // Try to initialize/reconnect
+      if (firefliesAPI.initialize) {
+        await firefliesAPI.initialize();
+        const retryConnection = await firefliesAPI.testConnection();
+        if (!retryConnection) {
+          return { transcripts: [] };
+        }
+      } else {
+        return { transcripts: [] };
+      }
     }
     
     console.log('[DEBUG searchFireflies] Connection successful');
@@ -1423,6 +1433,21 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
 async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, onStep = () => {}) {
   if (!anthropicApiKey) return null;
   
+  // Ensure HubSpot is ready before any searches (cold start fix)
+  if (hubspotAPI && hubspotAPI.testConnection) {
+    console.log('[DEBUG handleClaudeSearch] Testing HubSpot connection...');
+    const hubspotReady = await hubspotAPI.testConnection();
+    if (!hubspotReady) {
+      console.log('[DEBUG handleClaudeSearch] HubSpot not ready, attempting initialization...');
+      // If HubSpot has an initialize method, call it
+      if (hubspotAPI.initialize) {
+        await hubspotAPI.initialize();
+      }
+      // Small delay to ensure initialization completes
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  
   const intent = await routeUserIntent(userMessage, conversationContext, lastProductionContext);
   if (!intent || intent.tool === 'answer_general_question') return null;
 
@@ -1506,20 +1531,37 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           add(searchStep);
         }
         
+        // Helper function to retry HubSpot search on cold start
+        const searchBrandsWithRetry = async (searchParams, retries = 1) => {
+          try {
+            const result = await hubspotAPI.searchBrands(searchParams);
+            // If we get 0 results on first try and it's a keyword search, retry once
+            if (result.results?.length === 0 && retries > 0 && searchParams.query) {
+              console.log('[DEBUG] Got 0 results, retrying after delay...');
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              return await hubspotAPI.searchBrands(searchParams);
+            }
+            return result;
+          } catch (error) {
+            console.error('[DEBUG] Search failed:', error);
+            return { results: [] };
+          }
+        };
+        
         const [synopsisBrands, genreBrands, activeBrands, wildcardBrands] = await Promise.all([
           // List 1: Synopsis-matched brands using extracted keywords (15)
           withTimeout(
-            hubspotAPI.searchBrands({
+            searchBrandsWithRetry({
               query: synopsisKeywords || search_term.slice(0, 100),
               limit: 15
             }),
-            7000,
+            8000,
             { results: [] }
           ),
           
           // List 2: Random demographic/genre matches (15)
           withTimeout(
-            hubspotAPI.searchBrands({
+            searchBrandsWithRetry({
               limit: 15,
               filterGroups: genre ? [{
                 filters: [
@@ -1534,7 +1576,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           
           // List 3: Active clients with big budgets (10)
           withTimeout(
-            hubspotAPI.searchBrands({
+            searchBrandsWithRetry({
               limit: 10,
               filterGroups: [{
                 filters: [
