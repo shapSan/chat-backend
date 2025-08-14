@@ -5,6 +5,8 @@ export const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 const hubspotAPI = {
   baseUrl: 'https://api.hubapi.com',
   portalId: '2944980',
+  isInitialized: false,
+  initializationPromise: null,
 
   OBJECTS: {
     BRANDS: '2-26628489',
@@ -14,8 +16,57 @@ const hubspotAPI = {
     CONTACTS: 'contacts'
   },
 
+  // Add initialization method to warm up the connection
+  async initialize() {
+    if (this.isInitialized) return true;
+    
+    // If already initializing, wait for it
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    
+    this.initializationPromise = (async () => {
+      try {
+        console.log('[DEBUG HubSpot] Initializing connection...');
+        
+        // Make a simple test call to warm up the connection
+        const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}?limit=1`, {
+          headers: {
+            'Authorization': `Bearer ${hubspotApiKey}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!response.ok) {
+          console.error('[DEBUG HubSpot] Initialization failed:', response.status);
+          this.isInitialized = false;
+          return false;
+        }
+        
+        console.log('[DEBUG HubSpot] Connection initialized successfully');
+        this.isInitialized = true;
+        return true;
+      } catch (error) {
+        console.error('[DEBUG HubSpot] Initialization error:', error.message);
+        this.isInitialized = false;
+        return false;
+      }
+    })();
+    
+    return this.initializationPromise;
+  },
+
   async searchBrands(filters = {}) {
     console.log('[DEBUG searchBrands] Starting with filters:', filters);
+    
+    // Ensure we're initialized before searching
+    if (!this.isInitialized) {
+      console.log('[DEBUG searchBrands] Not initialized, initializing now...');
+      await this.initialize();
+      // Add a small delay after initialization to ensure everything is ready
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
     try {
       let searchBody = {
         properties: [
@@ -90,14 +141,27 @@ const hubspotAPI = {
 
       } else if (filters.query) {
         // Short keyword search - search by brand name
-        searchBody.query = filters.query;
+        console.log('[DEBUG searchBrands] Keyword search for:', filters.query);
+        
+        // For keyword searches, we'll try a more flexible approach
+        // Remove the status filter initially to ensure we get results
         searchBody.filterGroups = [{
           filters: [{
-            propertyName: 'client_status',
-            operator: 'IN',
-            values: ['Active', 'In Negotiation', 'Contract', 'Pending']
+            propertyName: 'brand_name',
+            operator: 'CONTAINS_TOKEN',
+            value: filters.query
           }]
         }];
+        
+        // Add the limit higher for keyword searches to get more results
+        searchBody.limit = filters.limit || 30;
+        
+        // Sort by relevance (partnership count) rather than filtering by status
+        searchBody.sorts = [{
+          propertyName: 'partnership_count',
+          direction: 'DESCENDING'
+        }];
+        
       } else {
         // Default: Get low hanging fruit - active brands with high activity
         searchBody.filterGroups = [{
@@ -120,51 +184,155 @@ const hubspotAPI = {
       }
 
       console.log('[DEBUG searchBrands] Making HubSpot API request...');
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${hubspotApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(searchBody)
-      });
+      
+      // Make the actual search request with retry logic
+      let attempts = 0;
+      const maxAttempts = 2;
+      let lastError = null;
+      
+      while (attempts < maxAttempts) {
+        attempts++;
+        
+        try {
+          const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${hubspotApiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(searchBody)
+          });
 
-      if (!response.ok) {
-        const errorBody = await response.text();
-        console.error('[DEBUG searchBrands] HubSpot API error:', response.status, errorBody);
-        throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
-      }
+          if (!response.ok) {
+            const errorBody = await response.text();
+            console.error(`[DEBUG searchBrands] HubSpot API error (attempt ${attempts}/${maxAttempts}):`, response.status, errorBody);
+            lastError = new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
+            
+            // If it's a 401, don't retry
+            if (response.status === 401) {
+              throw lastError;
+            }
+            
+            // Wait before retry
+            if (attempts < maxAttempts) {
+              console.log('[DEBUG searchBrands] Retrying after delay...');
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              continue;
+            }
+          }
 
-      const result = await response.json();
-      console.log('[DEBUG searchBrands] Success, got', result.results?.length || 0, 'brands');
+          const result = await response.json();
+          console.log(`[DEBUG searchBrands] Success (attempt ${attempts}), got`, result.results?.length || 0, 'brands');
+          
+          // If we got 0 results on first attempt with a specific query, try different search method
+          if (attempts === 1 && result.results?.length === 0 && filters.query && filters.query.length < 50) {
+            console.log('[DEBUG searchBrands] Got 0 results for keyword search, trying without filters...');
+            
+            // Fallback: Try with just the query parameter and no filters
+            const fallbackBody = {
+              query: filters.query,
+              properties: searchBody.properties,
+              limit: 30
+            };
+            
+            const fallbackResponse = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${hubspotApiKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(fallbackBody)
+            });
+            
+            if (fallbackResponse.ok) {
+              const fallbackResult = await fallbackResponse.json();
+              console.log('[DEBUG searchBrands] Fallback search got', fallbackResult.results?.length || 0, 'brands');
+              if (fallbackResult.results?.length > 0) {
+                return fallbackResult;
+              }
+            }
+            
+            // If still no results, try one more time with a broader search
+            console.log('[DEBUG searchBrands] Trying broader search without any filters...');
+            const broaderBody = {
+              properties: searchBody.properties,
+              limit: 100,
+              sorts: [{
+                propertyName: 'hs_lastmodifieddate',
+                direction: 'DESCENDING'
+              }]
+            };
+            
+            const broaderResponse = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${hubspotApiKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(broaderBody)
+            });
+            
+            if (broaderResponse.ok) {
+              const broaderResult = await broaderResponse.json();
+              console.log('[DEBUG searchBrands] Broader search got', broaderResult.results?.length || 0, 'brands');
+              
+              // Filter results client-side to match the query
+              if (broaderResult.results?.length > 0) {
+                const queryLower = filters.query.toLowerCase();
+                broaderResult.results = broaderResult.results.filter(brand => {
+                  const brandName = (brand.properties.brand_name || '').toLowerCase();
+                  return brandName.includes(queryLower);
+                });
+                console.log('[DEBUG searchBrands] After client-side filtering:', broaderResult.results.length, 'brands match');
+                return broaderResult;
+              }
+            }
+          }
 
-      // Include the search context in the result
-      if (filters.query && result.results) {
-        // Attach the genre categories that were used (if any)
-        const queryLower = filters.query.toLowerCase();
-        const genreMap = {
-          'action': ['Automotive', 'Electronics & Appliances', 'Sports & Fitness'],
-          'comedy': ['Food & Beverage', 'Entertainment'],
-          'drama': ['Fashion & Apparel', 'Health & Beauty', 'Home & Garden'],
-          'romance': ['Floral', 'Fashion & Apparel', 'Health & Beauty'],
-          'thriller': ['Automotive', 'Security', 'Electronics & Appliances']
-        };
+          // Include the search context in the result
+          if (filters.query && result.results) {
+            // Attach the genre categories that were used (if any)
+            const queryLower = filters.query.toLowerCase();
+            const genreMap = {
+              'action': ['Automotive', 'Electronics & Appliances', 'Sports & Fitness'],
+              'comedy': ['Food & Beverage', 'Entertainment'],
+              'drama': ['Fashion & Apparel', 'Health & Beauty', 'Home & Garden'],
+              'romance': ['Floral', 'Fashion & Apparel', 'Health & Beauty'],
+              'thriller': ['Automotive', 'Security', 'Electronics & Appliances']
+            };
 
-        let detectedGenres = [];
-        for (const [genre, cats] of Object.entries(genreMap)) {
-          if (queryLower.includes(genre)) {
-            detectedGenres.push(genre);
+            let detectedGenres = [];
+            for (const [genre, cats] of Object.entries(genreMap)) {
+              if (queryLower.includes(genre)) {
+                detectedGenres.push(genre);
+              }
+            }
+
+            if (detectedGenres.length > 0) {
+              result.searchContext = detectedGenres.join(', ');
+            }
+          }
+
+          return result;
+          
+        } catch (error) {
+          lastError = error;
+          if (attempts < maxAttempts) {
+            console.log(`[DEBUG searchBrands] Error on attempt ${attempts}, retrying...`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
           }
         }
-
-        if (detectedGenres.length > 0) {
-          result.searchContext = detectedGenres.join(', ');
-        }
       }
-
-      return result;
+      
+      // If we get here, all attempts failed
+      console.error("[DEBUG searchBrands] All attempts failed:", lastError);
+      console.error("[DEBUG searchBrands] Stack trace:", lastError?.stack);
+      return {
+        results: []
+      };
+      
     } catch (error) {
-      console.error("[DEBUG searchBrands] Error:", error);
+      console.error("[DEBUG searchBrands] Unexpected error:", error);
       console.error("[DEBUG searchBrands] Stack trace:", error.stack);
       return {
         results: []
@@ -173,6 +341,11 @@ const hubspotAPI = {
   },
 
   async searchProductions(filters = {}) {
+    // Ensure initialization
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+    
     try {
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.PARTNERSHIPS}/search`, {
         method: 'POST',
@@ -224,6 +397,11 @@ const hubspotAPI = {
   },
 
   async searchDeals(filters = {}) {
+    // Ensure initialization
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+    
     try {
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.DEALS}/search`, {
         method: 'POST',
@@ -268,6 +446,11 @@ const hubspotAPI = {
   },
 
   async getContactsForBrand(brandId) {
+    // Ensure initialization
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+    
     try {
       const response = await fetch(
         `${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/${brandId}/associations/${this.OBJECTS.CONTACTS}`, {
@@ -313,6 +496,11 @@ const hubspotAPI = {
   },
 
   async searchSpecificBrand(brandName) {
+    // Ensure initialization
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+    
     try {
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
         method: 'POST',
@@ -364,11 +552,14 @@ const hubspotAPI = {
 
       if (!response.ok) {
         const errorBody = await response.text();
+        console.error('[DEBUG testConnection] Failed:', response.status, errorBody);
         return false;
       }
 
+      console.log('[DEBUG testConnection] Connection successful');
       return true;
     } catch (error) {
+      console.error('[DEBUG testConnection] Error:', error.message);
       return false;
     }
   }
