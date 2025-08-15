@@ -143,11 +143,13 @@ function assetsNote(brand){
 function quickLinksHtml(brand){
   if (!brand.assets?.length) return '';
   const rows = brand.assets.map(a =>
-    `<div style="margin:2px 0;"><a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a></div>`
+    `<p style="margin:4px 0;"><a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;font-size:14px;">${esc(a.title)}</a></p>`
   ).join('');
-  return `<div style="margin-top:12px;">
-    <div style="font-weight:600;margin-bottom:4px;">Quick links</div>${rows}
-  </div>`;
+  return `
+    <div style="margin-top:24px;padding-top:16px;">
+      <p style="font-weight:600;margin:0 0 8px 0;font-size:14px;">Quick links</p>
+      ${rows}
+    </div>`;
 }
 
 // Professional email writer with natural resource mention
@@ -249,9 +251,15 @@ export default async function handler(req, res) {
           project: projectName, vibe, cast, location, notes, brand: b
         });
         
+        // Split text into paragraphs and add proper spacing
+        const paragraphs = bodyText.split('\n').filter(line => line.trim());
+        const formattedBody = paragraphs.map(para => 
+          `<p style="margin:0 0 16px 0;">${esc(para)}</p>`
+        ).join('');
+        
         const htmlBody = `
-<div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:720px;">
-  ${bodyText.split('\n').map(line=>`<div>${esc(line)}</div>`).join('')}
+<div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;max-width:720px;">
+  ${formattedBody}
   ${quickLinksHtml(b)}
 </div>`.trim();
 
