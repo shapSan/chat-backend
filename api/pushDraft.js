@@ -154,33 +154,42 @@ function quickLinksHtml(brand){
 async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
   const mention = assetsNote(brand);
   const fallback = () => {
-    const ideas = brand.integrationIdeas?.length ? ` (${brand.integrationIdeas.join('; ')})` : '';
-    return `Hi there—quick note on ${project}. ${brand.name} feels like a strong fit${ideas ? '—'+ideas : ''}. ${brand.whyItWorks||''} ${brand.hbInsights||''} ${mention}`.trim();
+    const ideas = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '';
+    return `Hello [name],\n\nI hope this message finds you well. I've been exploring the potential for ${brand.name} to integrate seamlessly into ${project}.\n\n${brand.whyItWorks || `The project's ${vibe} aligns perfectly with ${brand.name}'s brand identity.`}\n\n${ideas ? `Here's how I envision the integration: ${ideas}` : `${brand.name} could be featured naturally throughout the production.`}\n\n${brand.hbInsights || 'This collaboration could be a significant win for both the film and the brand.'}\n\n${mention ? mention + ' ' : ''}I'd love to discuss this further and explore how we can bring this vision to life. Let me know a convenient time for you to connect.`.trim();
   };
 
   try {
     if (!process.env.OPENAI_API_KEY) return fallback();
 
     const prompt = `
-Write a warm, professional email (5–8 sentences) from an experienced brand integration expert about a potential partnership.
-- Sound knowledgeable and confident in the space; avoid hype or marketing fluff.
-- Keep sentences tight; prefer concrete film/brand fit over generic fluff.
-- Weave in why the brand fits naturally, 1–3 integration ideas, and any insights.
-- Briefly reference available resources once: "${mention || '(none)'}".
-- Do NOT include a subject, signature, or placeholders.
-- Do NOT add a "Links" section; links will be appended below.
-- Write as if you're reaching out directly, not as a formal pitch.
+Write a professional brand integration email with this EXACT structure (5-6 paragraphs):
+
+1. Opening: "Hello [name]," then a warm greeting mentioning you've been exploring how ${brand.name} fits the project
+
+2. Project alignment paragraph: Explain how the film's themes/story align with the brand's values/products
+
+3. Integration vision paragraph: Paint a picture of specific integration ideas using concrete examples
+
+4. Value proposition: Why this partnership benefits both parties (mention track record if relevant)
+
+5. Closing with resource mention: "${mention || 'I have materials ready to share.'}" followed by invitation to discuss
 
 Project: ${project}
-Vibe: ${vibe}
+Genre/Vibe: ${vibe}
 Cast: ${cast}
 Location: ${location}
-Notes from sender: ${notes || '(none)'}
 Brand: ${brand.name}
-Why it works: ${brand.whyItWorks || '-'}
-Integration ideas: ${brand.integrationIdeas?.join(' | ') || '-'}
-Insights: ${brand.hbInsights || '-'}
-Additional context: ${brand.contentText || '-'}
+Why it works: ${brand.whyItWorks || 'Natural fit with story'}
+Integration ideas: ${brand.integrationIdeas?.join('; ') || 'Product placement opportunities'}
+Insights: ${brand.hbInsights || 'Strong partnership potential'}
+
+Guidelines:
+- Write conversationally but professionally
+- Use specific details about how the brand enhances the narrative
+- Reference cast/director when relevant
+- Keep sentences varied and natural
+- NO subject line, NO "Quick links" section, NO signature
+- Use [name] as placeholder for recipient
 `.trim();
 
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -189,10 +198,10 @@ Additional context: ${brand.contentText || '-'}
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [
-          { role:"system", content:"You write concise, personable business emails from an experienced Hollywood brand integration expert." },
+          { role:"system", content:"You write natural, conversational business emails about Hollywood brand integrations. Structure emails in clear paragraphs that flow naturally." },
           { role:"user", content: prompt }
         ],
-        temperature: 0.55
+        temperature: 0.65
       })
     });
     if (!resp.ok) return fallback();
