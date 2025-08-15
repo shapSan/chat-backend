@@ -157,41 +157,33 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
   const mention = assetsNote(brand);
   const fallback = () => {
     const ideas = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '';
-    return `Hello [name],\n\nI hope this message finds you well. I've been exploring the potential for ${brand.name} to integrate seamlessly into ${project}.\n\n${brand.whyItWorks || `The project's ${vibe} aligns perfectly with ${brand.name}'s brand identity.`}\n\n${ideas ? `Here's how I envision the integration: ${ideas}` : `${brand.name} could be featured naturally throughout the production.`}\n\n${brand.hbInsights || 'This collaboration could be a significant win for both the film and the brand.'}\n\n${mention ? mention + ' ' : ''}I'd love to discuss this further and explore how we can bring this vision to life. Let me know a convenient time for you to connect.`.trim();
+    return `Hello [name],\n\nI've been exploring how ${brand.name} fits perfectly into ${project}.\n\n${brand.whyItWorks || `The ${vibe} aligns beautifully with ${brand.name}'s brand identity.`}\n\n${ideas ? `Integration vision: ${ideas}` : `${brand.name} could enhance key narrative moments.`}\n\n${mention ? mention + ' ' : ''}Let me know a convenient time to discuss this exciting opportunity.`.trim();
   };
 
   try {
     if (!process.env.OPENAI_API_KEY) return fallback();
 
     const prompt = `
-Write a professional brand integration email with this EXACT structure (5-6 paragraphs):
+Write a concise brand integration email (4 paragraphs, keep it brief but complete):
 
-1. Opening: "Hello [name]," then a warm greeting mentioning you've been exploring how ${brand.name} fits the project
+1. "Hello [name]," + brief mention of exploring ${brand.name} for the project
 
-2. Project alignment paragraph: Explain how the film's themes/story align with the brand's values/products
+2. One paragraph on why the brand/film alignment works
 
-3. Integration vision paragraph: Paint a picture of specific integration ideas using concrete examples
+3. One specific integration example (concrete scene or usage)
 
-4. Value proposition: Why this partnership benefits both parties (mention track record if relevant)
-
-5. Closing with resource mention: "${mention || 'I have materials ready to share.'}" followed by invitation to discuss
+4. Closing: "${mention || 'I have materials ready.'}" + invitation to connect
 
 Project: ${project}
-Genre/Vibe: ${vibe}
+Genre: ${vibe}
 Cast: ${cast}
-Location: ${location}
 Brand: ${brand.name}
-Why it works: ${brand.whyItWorks || 'Natural fit with story'}
-Integration ideas: ${brand.integrationIdeas?.join('; ') || 'Product placement opportunities'}
-Insights: ${brand.hbInsights || 'Strong partnership potential'}
+Why it works: ${brand.whyItWorks || 'Natural fit'}
+Integration idea: ${(brand.integrationIdeas && brand.integrationIdeas[0]) || 'Product placement'}
 
-Guidelines:
-- Write conversationally but professionally
-- Use specific details about how the brand enhances the narrative
-- Reference cast/director when relevant
-- Keep sentences varied and natural
-- NO subject line, NO "Quick links" section, NO signature
-- Use [name] as placeholder for recipient
+Be conversational but concise. Aim for 3-4 sentences per paragraph.
+Complete all thoughts - don't cut off mid-sentence.
+NO subject, NO "Quick links", NO signature.
 `.trim();
 
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -200,10 +192,11 @@ Guidelines:
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [
-          { role:"system", content:"You write natural, conversational business emails about Hollywood brand integrations. Structure emails in clear paragraphs that flow naturally." },
+          { role:"system", content:"Write concise but complete emails. Each paragraph should be 3-4 sentences. Never cut off mid-thought." },
           { role:"user", content: prompt }
         ],
-        temperature: 0.65
+        temperature: 0.65,
+        max_tokens: 600  // Increased to ensure completion
       })
     });
     if (!resp.ok) return fallback();
@@ -244,8 +237,8 @@ export default async function handler(req, res) {
     for (const b of brands) {
       try {
         // Log brand assets for debugging
-        console.log('[pushDraft] brand', b.name, 'assets in:', (b.assets||[]).length, 
-                    (b.assets||[]).map(x => `${x.type}:${x.url}`).slice(0,4));
+        console.log('[pushDraft] brand', b.name, 'has assets:', b.assets);
+        console.log('[pushDraft] assets count:', (b.assets||[]).length);
         
         const bodyText = await generateAiBody({
           project: projectName, vibe, cast, location, notes, brand: b
@@ -257,14 +250,28 @@ export default async function handler(req, res) {
           `<p style="margin:0 0 16px 0;">${esc(para)}</p>`
         ).join('');
         
+        // Build Quick links section - ALWAYS include if there are assets
+        let quickLinksSection = '';
+        if (b.assets && b.assets.length > 0) {
+          const linkItems = b.assets.map(a => 
+            `<p style="margin:4px 0;"><a href="${a.url}" target="_blank" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a></p>`
+          ).join('');
+          quickLinksSection = `
+            <div style="margin-top:24px;padding-top:16px;">
+              <p style="font-weight:600;margin:0 0 8px 0;">Quick links</p>
+              ${linkItems}
+            </div>`;
+        }
+        
         const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;max-width:720px;">
   ${formattedBody}
-  ${quickLinksHtml(b)}
+  ${quickLinksSection}
 </div>`.trim();
 
         // Log if Quick links made it into HTML
-        console.log('[pushDraft] html has links?', htmlBody.includes('Quick links'));
+        console.log('[pushDraft] html includes Quick links?', htmlBody.includes('Quick links'));
+        console.log('[pushDraft] quickLinksSection:', quickLinksSection ? 'YES' : 'NO');
 
         const subject = `[Pitch] ${projectName} — ${b.name || 'Brand'}`;
         const draft = await createDraftInMailbox({
