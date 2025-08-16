@@ -2520,8 +2520,8 @@ Keep it under 300 words.`;
           const requestBody = {
             model: model,
             prompt: enhancedPrompt,
-            n: 1,
-            response_format: 'url' // Request URL format for easier fetching
+            n: 1
+            // NOTE: Don't add response_format here - OpenAI will return URL by default
           };
           
           if (dimensions) {
@@ -2563,6 +2563,7 @@ Keep it under 300 words.`;
                 errorDetails = errorJson.error?.message || errorData;
               } catch (e) {
               }
+              console.error('[DEBUG generateImage] 400 error details:', errorDetails);
               return res.status(400).json({ 
                 error: 'Invalid request',
                 details: errorDetails
