@@ -6,6 +6,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import hubspotAPI, { hubspotApiKey } from './hubspot-client.js';
 import firefliesAPI, { firefliesApiKey } from './fireflies-client.js';
 import { kv } from '@vercel/kv';
+import { put } from '@vercel/blob';
 
 dotenv.config();
 
@@ -2309,16 +2310,36 @@ Keep it under 300 words.`;
                     details: errorText
                 });
             }
+            
+            // Get the audio as a buffer
             const audioBuffer = await elevenLabsResponse.buffer();
-            const base64Audio = audioBuffer.toString('base64');
-            const audioDataUrl = `data:audio/mpeg;base64,${base64Audio}`;
+            
+            // Upload to Vercel Blob Storage
+            const timestamp = Date.now();
+            const filename = `audio/narration-${sessionId}-${timestamp}.mp3`;
+            
+            console.log('[DEBUG generateAudio] Uploading to blob storage:', filename);
+            
+            const { url: permanentUrl } = await put(
+                filename,
+                audioBuffer,
+                { 
+                    access: 'public',
+                    contentType: 'audio/mpeg'
+                }
+            );
+            
+            console.log('[DEBUG generateAudio] Audio uploaded to:', permanentUrl);
+            
             return res.status(200).json({
                 success: true,
-                audioUrl: audioDataUrl,
-                voiceUsed: voiceId
+                audioUrl: permanentUrl,
+                voiceUsed: voiceId,
+                storage: 'blob'
             });
             
         } catch (error) {
+            console.error('[DEBUG generateAudio] Error:', error);
             return res.status(500).json({ 
                 error: 'Failed to generate audio',
                 details: error.message 
@@ -2409,15 +2430,44 @@ Keep it under 300 words.`;
             });
           }
 
+          // Fetch the video from the temporary URL and upload to blob storage
+          console.log('[DEBUG generateVideo] Fetching video from temporary URL...');
+          const videoResponse = await fetch(result.url);
+          
+          if (!videoResponse.ok) {
+            throw new Error(`Failed to fetch video from temporary URL: ${videoResponse.status}`);
+          }
+          
+          const videoBuffer = await videoResponse.buffer();
+          
+          // Upload to Vercel Blob Storage
+          const timestamp = Date.now();
+          const filename = `videos/generated-${sessionId}-${timestamp}.mp4`;
+          
+          console.log('[DEBUG generateVideo] Uploading to blob storage:', filename);
+          
+          const { url: permanentUrl } = await put(
+            filename,
+            videoBuffer,
+            { 
+              access: 'public',
+              contentType: 'video/mp4'
+            }
+          );
+          
+          console.log('[DEBUG generateVideo] Video uploaded to:', permanentUrl);
+
           return res.status(200).json({
             success: true,
-            videoUrl: result.url,
+            videoUrl: permanentUrl,
             taskId: result.taskId,
             model: videoModel || 'runway',
-            metadata: result.metadata
+            metadata: result.metadata,
+            storage: 'blob'
           });
 
         } catch (error) {
+          console.error('[DEBUG generateVideo] Error:', error);
           return res.status(500).json({ 
             error: 'Failed to generate video',
             details: error.message 
@@ -2470,7 +2520,8 @@ Keep it under 300 words.`;
           const requestBody = {
             model: model,
             prompt: enhancedPrompt,
-            n: 1
+            n: 1,
+            response_format: 'url' // Request URL format for easier fetching
           };
           
           if (dimensions) {
@@ -2526,32 +2577,53 @@ Keep it under 300 words.`;
 
           const data = await imageResponse.json();
 
-          let imageUrl = null;
+          let temporaryImageUrl = null;
           
-          if (data.data && data.data.length > 0) {
-            if (data.data[0].url) {
-              imageUrl = data.data[0].url;
-            } else if (data.data[0].b64_json) {
-              const base64Image = data.data[0].b64_json;
-              imageUrl = `data:image/png;base64,${base64Image}`;
-            }
-          }
-          else if (data.url) {
-            imageUrl = data.url;
-          }
-          
-          if (imageUrl) {
-            return res.status(200).json({
-              success: true,
-              imageUrl: imageUrl,
-              revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
-              model: model
-            });
+          if (data.data && data.data.length > 0 && data.data[0].url) {
+            temporaryImageUrl = data.data[0].url;
+          } else if (data.url) {
+            temporaryImageUrl = data.url;
           } else {
-            throw new Error('No image URL found in response');
+            throw new Error('No image URL in OpenAI response');
           }
+          
+          // Fetch the image from OpenAI's temporary URL
+          console.log('[DEBUG generateImage] Fetching image from OpenAI URL...');
+          const imageDataResponse = await fetch(temporaryImageUrl);
+          
+          if (!imageDataResponse.ok) {
+            throw new Error(`Failed to fetch image from OpenAI URL: ${imageDataResponse.status}`);
+          }
+          
+          const imageBuffer = await imageDataResponse.buffer();
+          
+          // Upload to Vercel Blob Storage
+          const timestamp = Date.now();
+          const filename = `images/poster-${sessionId}-${timestamp}.png`;
+          
+          console.log('[DEBUG generateImage] Uploading to blob storage:', filename);
+          
+          const { url: permanentUrl } = await put(
+            filename,
+            imageBuffer,
+            { 
+              access: 'public',
+              contentType: 'image/png'
+            }
+          );
+          
+          console.log('[DEBUG generateImage] Image uploaded to:', permanentUrl);
+          
+          return res.status(200).json({
+            success: true,
+            imageUrl: permanentUrl,
+            revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
+            model: model,
+            storage: 'blob'
+          });
           
         } catch (error) {
+          console.error('[DEBUG generateImage] Error:', error);
           return res.status(500).json({ 
             error: 'Failed to generate image',
             details: error.message 
