@@ -10,27 +10,47 @@ import { put } from '@vercel/blob';
 
 dotenv.config();
 
-// KV Progress helpers with runId support
-const progKey = (sessionId, runId) => runId ? `progress:${sessionId}:${runId}` : `mcp:${sessionId}`;
+// KV Progress helpers with strict event schema
+const progKey = (sessionId, runId) => `progress:${sessionId}:${runId}`;
 
 async function progressInit(sessionId, runId) {
   const key = progKey(sessionId, runId);
-  await kv.set(key, { steps: [], done: false, runId: runId || null, ts: Date.now() }, { ex: 900 });
+  await kv.set(key, { 
+    sessionId,
+    runId,
+    steps: [], 
+    done: false, 
+    ts: Date.now() 
+  }, { ex: 900 });
 }
 
-async function progressPush(sessionId, runId, step) {
+async function progressPush(sessionId, runId, seq, evt) {
   const key = progKey(sessionId, runId);
-  const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null, ts: Date.now() };
-  s.steps.push({ ...step, timestamp: Date.now() - s.ts });
+  const s = (await kv.get(key)) || { sessionId, runId, steps: [], done: false, ts: Date.now() };
+  
+  const event = {
+    sessionId,
+    runId,
+    seq,
+    ts: Date.now(),
+    ...evt // {stage, label, meta}
+  };
+  
+  s.steps.push(event);
   if (s.steps.length > 100) s.steps = s.steps.slice(-100);
   await kv.set(key, s, { ex: 900 });
 }
 
 async function progressDone(sessionId, runId) {
   const key = progKey(sessionId, runId);
-  const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null, ts: Date.now() };
+  const s = (await kv.get(key)) || { sessionId, runId, steps: [], done: false, ts: Date.now() };
   s.done = true;
   await kv.set(key, s, { ex: 300 });
+}
+
+async function getProgress(sessionId, runId) {
+  const key = progKey(sessionId, runId);
+  return (await kv.get(key)) || { sessionId, runId, steps: [], done: false };
 }
 
 export const config = {
@@ -1462,8 +1482,21 @@ function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, acti
   return sortedBrands.slice(0, Math.min(targetSize, sortedBrands.length));
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, runId, onStep = () => {}) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, runId, sessionId, onStep = () => {}) {
   if (!anthropicApiKey) return null;
+  
+  let seq = 0;
+  const pushProgress = async (evt) => {
+    seq++;
+    await progressPush(sessionId, runId, seq, evt);
+    // Also call onStep for backward compatibility
+    if (evt.label) {
+      onStep({ type: evt.stage, text: evt.label });
+    }
+  };
+  
+  // Log intent routing
+  await pushProgress({ stage: 'intent.start', label: 'Analyzing intent...' });
   
   // Ensure HubSpot is ready before any searches (cold start fix)
   if (hubspotAPI && hubspotAPI.testConnection) {
@@ -1481,12 +1514,16 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
   }
   
   const intent = await routeUserIntent(userMessage, conversationContext, lastProductionContext);
-  if (!intent || intent.tool === 'answer_general_question') return null;
+  if (!intent || intent.tool === 'answer_general_question') {
+    await pushProgress({ stage: 'intent.done', label: 'General conversation' });
+    return null;
+  }
+  
+  await pushProgress({ stage: 'intent.done', label: `${intent.tool} agent` });
 
   const mcpThinking = [];
   const add = (step) => {
     mcpThinking.push(step);
-    try { onStep(step); } catch {}
   };
 
   try {
@@ -1642,50 +1679,83 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           add(resultStep);
         }
         
-        // Optional: Get supporting context from meetings/emails BEFORE combining
+        // Optional: Get supporting context from meetings/emails
         let supportingContext = { meetings: [], emails: [] };
         if (firefliesApiKey || msftClientId) {
-          const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
-          add(contextStep);
+          await pushProgress({ stage: 'comms.start', label: 'Searching recent communications...' });
           
           const contextKeywords = await extractKeywordsForContextSearch(search_term);
           
           console.log('[DEBUG comms] Searching for supporting context...');
           console.log('[DEBUG comms] Keywords:', contextKeywords);
           
-          const [firefliesRes, emailRes] = await Promise.allSettled([
-            firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 3 }), 5000, { transcripts: [] }) : Promise.resolve({ transcripts: [] }),
-            msftClientId ? withTimeout(o365API.searchEmails(contextKeywords, { days: 90, limit: 5 }), 5000, []) : Promise.resolve([])
-          ]);
-          
-          // Handle Fireflies result
-          const firefliesData = firefliesRes.status === 'fulfilled' ? firefliesRes.value : { transcripts: [] };
-          if (firefliesRes.status === 'rejected') {
-            console.log('[DEBUG comms] Fireflies context search failed:', firefliesRes.reason);
+          // Search Fireflies
+          if (firefliesApiKey) {
+            try {
+              const firefliesData = await withTimeout(
+                searchFireflies(contextKeywords, { limit: 3 }), 
+                5000, 
+                { transcripts: [] }
+              );
+              supportingContext.meetings = firefliesData.transcripts || [];
+              await pushProgress({ 
+                stage: 'comms.fireflies', 
+                label: 'Fireflies', 
+                meta: { 
+                  keywords: contextKeywords,
+                  count: supportingContext.meetings.length 
+                }
+              });
+            } catch (error) {
+              await pushProgress({ 
+                stage: 'comms.fireflies', 
+                label: 'Fireflies', 
+                meta: { 
+                  keywords: contextKeywords,
+                  error: error.message,
+                  count: 0 
+                }
+              });
+            }
           }
           
-          // Handle O365 result
-          const emailData = emailRes.status === 'fulfilled' ? emailRes.value : [];
-          if (emailRes.status === 'rejected') {
-            console.log('[DEBUG comms] O365 context search failed:', emailRes.reason);
+          // Search O365
+          if (msftClientId) {
+            try {
+              const emailData = await withTimeout(
+                o365API.searchEmails(contextKeywords, { days: 90, limit: 5 }), 
+                5000, 
+                []
+              );
+              supportingContext.emails = emailData || [];
+              await pushProgress({ 
+                stage: 'comms.o365', 
+                label: 'O365', 
+                meta: { 
+                  keywords: contextKeywords,
+                  count: supportingContext.emails.length 
+                }
+              });
+            } catch (error) {
+              await pushProgress({ 
+                stage: 'comms.o365', 
+                label: 'O365', 
+                meta: { 
+                  keywords: contextKeywords,
+                  error: error.message || 'Access denied',
+                  count: 0 
+                }
+              });
+            }
           }
           
-          supportingContext = {
-            meetings: firefliesData.transcripts || [],
-            emails: emailData || []
-          };
+          await pushProgress({ stage: 'comms.done', label: 'Communications search complete' });
           
           console.log(`[DEBUG comms] Context found - Meetings: ${supportingContext.meetings.length}, Emails: ${supportingContext.emails.length}`);
-          
-          if (supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) {
-            const foundStep = { type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` };
-            add(foundStep);
-          }
         }
         
         // Combine and tag all results with diversification
-        const combineStep = { type: 'process', text: '🤝 Building diverse recommendations...' };
-        add(combineStep);
+        await pushProgress({ stage: 'merge.start', label: 'Building diverse list...' });
         
         // Target size configuration
         const TARGET_MIN = 15;
@@ -1826,52 +1896,26 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         Object.entries(QUOTAS).forEach(([poolName, quota]) => {
           const pool = pools[poolName] || [];
           let added = 0;
-          const pickedIds = [];
           
           for (const brand of pool) {
             if (picks.length >= TARGET_MAX) break;
             if (added >= quota) break;
             if (addBrand(brand, poolName)) {
               added++;
-              pickedIds.push(brand.id || brand.name);
             }
           }
-          
-          // Log structured pool selection
-          add({
-            type: 'pool',
-            stage: 'select',
-            pool: poolName,
-            pickedCount: added,
-            pickedIds: pickedIds,
-            runId
-          });
         });
         
         // Backfill if under TARGET_MIN
         if (picks.length < TARGET_MIN) {
           const backfillOrder = ['fit', 'dormant', 'cold', 'activity', 'hot'];
-          let backfillCount = 0;
           
           for (const poolName of backfillOrder) {
             const pool = pools[poolName] || [];
-            const startCount = poolPicks[poolName].length;
             
             for (const brand of pool) {
               if (picks.length >= TARGET_MIN) break;
-              if (addBrand(brand, poolName)) {
-                backfillCount++;
-              }
-            }
-            
-            if (poolPicks[poolName].length > startCount) {
-              add({
-                type: 'pool',
-                stage: 'backfill',
-                pool: poolName,
-                pickedCount: poolPicks[poolName].length - startCount,
-                runId
-              });
+              addBrand(brand, poolName);
             }
             
             if (picks.length >= TARGET_MIN) break;
@@ -1888,24 +1932,17 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           Novel: poolPicks.novel.length
         };
         
-        // Log final merge with breakdown
-        add({
-          type: 'merge',
-          stage: 'combine',
-          total: picks.length,
-          breakdown: breakdown,
-          runId
+        await pushProgress({ 
+          stage: 'merge.done', 
+          label: 'Pool built', 
+          meta: { 
+            total: picks.length,
+            breakdown: breakdown
+          }
         });
         
-        // Structured console log for monitoring
-        console.info(JSON.stringify({
-          lvl: 'info',
-          src: 'matcher',
-          runId,
-          stage: 'merge',
-          total: picks.length,
-          breakdown
-        }));
+        // Ranking phase
+        await pushProgress({ stage: 'rank.start', label: `Ranking ${picks.length} candidates...` });
         
         // Transform to final format
         const taggedBrands = picks.map(({ brand, poolName }) => {
@@ -1968,6 +2005,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           }
         });
         
+        await pushProgress({ 
+          stage: 'rank.done', 
+          label: `Ranked ${taggedBrands.length}`, 
+          meta: { returned: taggedBrands.length }
+        });
+        
         // Update recent brands list for cooldown
         try {
           if (RECS_COOLDOWN && projectId && taggedBrands.length > 0) {
@@ -1985,8 +2028,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         console.log(`[DEBUG] Final diverse list: ${taggedBrands.length} brands (target: ${TARGET_MIN}-${TARGET_MAX})`);
         
-        const finalStep = { type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` };
-        add(finalStep);
+        await pushProgress({ 
+          stage: 'final.return', 
+          label: `Returning ${taggedBrands.length} brands`, 
+          meta: { runId }
+        });
         
         return {
           organizedData: {
@@ -2981,8 +3027,10 @@ Keep it under 300 words.`;
       
       let { userMessage, sessionId, audioData, projectId, projectName, runId: clientRunId } = req.body;
 
-      // Generate runId if not provided by client
+      // Generate runId with nanoid-like format
       const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+      let seq = 0; // Sequence counter for this run
+      
       res.setHeader("x-run-id", runId);
       res.setHeader("Cache-Control", "no-store");
 
@@ -2997,9 +3045,16 @@ Keep it under 300 words.`;
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      // Initialize progress tracking for this session with runId
+      // Initialize progress tracking for this run
       await progressInit(sessionId, runId);
-      await progressPush(sessionId, runId, { type: 'info', text: '🔎 Routing request...', runId });
+      
+      // Helper to push progress with auto-incrementing seq
+      const pushProgress = async (evt) => {
+        seq++;
+        await progressPush(sessionId, runId, seq, evt);
+      };
+      
+      await pushProgress({ stage: 'intent.start', label: 'Routing request...' });
 
       const projectConfig = getProjectConfig(projectId);
       const { baseId, chatTable, knowledgeTable } = projectConfig;
@@ -3140,8 +3195,9 @@ Keep it under 300 words.`;
               conversationContext,
               lastProductionContext,
               projectName, // Pass the known name from the request body
-              runId, // Pass runId for progress tracking
-              (step) => progressPush(sessionId, runId, step)
+              runId,
+              sessionId, // Pass sessionId for progress tracking
+              (step) => {} // Empty callback since we're using pushProgress internally
           );
 
           if (claudeResult) {
@@ -3264,15 +3320,20 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
                   existingRecordId
               ).catch(err => console.error('[DEBUG] Airtable update error:', err));
 
-              // The final response now includes mcpSteps for the frontend
+              // Get final progress steps
+              const progressData = await getProgress(sessionId, runId);
+              
+              // The final response now includes progress steps
               await progressDone(sessionId, runId); // Mark progress as done
+              
               return res.json({
-                  runId: runId, // Include runId in response
+                  runId: runId,
                   reply: aiReply,
                   structuredData: structuredData,
-                  mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
+                  steps: progressData.steps, // Include deterministic progress events
+                  mcpSteps: mcpSteps, // Keep for backward compatibility
                   usedMCP: usedMCP,
-                  breakdown: claudeResult?.breakdown, // Include breakdown if available
+                  breakdown: claudeResult?.breakdown,
                   // Add metadata for frontend parsing (only for BRAND_ACTIVITY)
                   activityMetadata: structuredData?.dataType === 'BRAND_ACTIVITY' ? {
                     totalCommunications: structuredData.communications?.length || 0,
