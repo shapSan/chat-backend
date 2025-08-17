@@ -1553,10 +1553,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         // Launch parallel searches for the four lists
         const searches = [
-          { type: 'search', text: '🎯 List 1: Synopsis-matched brands (15)...' },
-          { type: 'search', text: '🎭 List 2: Vibe matches (15)...' },
-          { type: 'search', text: '💰 List 3: Active big-budget clients (10)...' },
-          { type: 'search', text: '🚀 List 4: Creative exploration (5 cold outreach)...' }
+          { type: 'pool', stage: 'search', pool: 'Synopsis', text: '🎯 List 1: Synopsis-matched brands...', runId },
+          { type: 'pool', stage: 'search', pool: 'Vibe', text: '🎭 List 2: Vibe matches...', runId },
+          { type: 'pool', stage: 'search', pool: 'Hot', text: '💰 List 3: Active big-budget clients...', runId },
+          { type: 'pool', stage: 'search', pool: 'Cold', text: '🚀 List 4: Creative exploration...', runId }
         ];
         
         for (const searchStep of searches) {
@@ -1630,15 +1630,15 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           )
         ]);
 
-        // Report results
-        const results = [
-          { type: 'result', text: `✅ Synopsis matches: ${synopsisBrands.results?.length || 0} brands` },
-          { type: 'result', text: `✅ Vibe matches: ${genreBrands.results?.length || 0} brands` },
-          { type: 'result', text: `✅ Active big-budget: ${activeBrands.results?.length || 0} brands` },
-          { type: 'result', text: `✅ Cold outreach ideas: ${wildcardBrands?.length || 0} suggestions` }
+        // Report results with structured data
+        const poolResults = [
+          { type: 'pool', stage: 'result', pool: 'Synopsis', pickedCount: synopsisBrands.results?.length || 0, runId },
+          { type: 'pool', stage: 'result', pool: 'Vibe', pickedCount: genreBrands.results?.length || 0, runId },
+          { type: 'pool', stage: 'result', pool: 'Hot', pickedCount: activeBrands.results?.length || 0, runId },
+          { type: 'pool', stage: 'result', pool: 'Cold', pickedCount: wildcardBrands?.length || 0, runId }
         ];
         
-        for (const resultStep of results) {
+        for (const resultStep of poolResults) {
           add(resultStep);
         }
         
@@ -1799,8 +1799,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const picks = [];
         const seenIds = new Set();
         const seenCompanies = new Set();
+        const poolPicks = { hot: [], activity: [], dormant: [], fit: [], cold: [], novel: [] };
         
-        const addBrand = (brand, poolName) => {
+        const addBrand = (brand, poolName, isNovel = false) => {
           const brandId = brand.id || brand.name;
           const companyName = brand.properties?.parent_company || 
                              brand.properties?.brand_name || 
@@ -1808,13 +1809,16 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           
           // Skip if duplicate, on cooldown, or same parent company
           if (seenIds.has(brandId)) return false;
-          if (recentBrandIds.has(brandId)) return false;
+          if (recentBrandIds.has(brandId) && !isNovel) return false;
           if (companyName && seenCompanies.has(companyName.toLowerCase())) return false;
           
           seenIds.add(brandId);
           if (companyName) seenCompanies.add(companyName.toLowerCase());
           
           picks.push({ brand, poolName });
+          poolPicks[poolName].push(brand);
+          if (isNovel) poolPicks.novel.push(brand);
+          
           return true;
         };
         
@@ -1822,25 +1826,86 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         Object.entries(QUOTAS).forEach(([poolName, quota]) => {
           const pool = pools[poolName] || [];
           let added = 0;
+          const pickedIds = [];
+          
           for (const brand of pool) {
             if (picks.length >= TARGET_MAX) break;
             if (added >= quota) break;
-            if (addBrand(brand, poolName)) added++;
+            if (addBrand(brand, poolName)) {
+              added++;
+              pickedIds.push(brand.id || brand.name);
+            }
           }
+          
+          // Log structured pool selection
+          add({
+            type: 'pool',
+            stage: 'select',
+            pool: poolName,
+            pickedCount: added,
+            pickedIds: pickedIds,
+            runId
+          });
         });
         
         // Backfill if under TARGET_MIN
         if (picks.length < TARGET_MIN) {
           const backfillOrder = ['fit', 'dormant', 'cold', 'activity', 'hot'];
+          let backfillCount = 0;
+          
           for (const poolName of backfillOrder) {
             const pool = pools[poolName] || [];
+            const startCount = poolPicks[poolName].length;
+            
             for (const brand of pool) {
               if (picks.length >= TARGET_MIN) break;
-              addBrand(brand, poolName);
+              if (addBrand(brand, poolName)) {
+                backfillCount++;
+              }
             }
+            
+            if (poolPicks[poolName].length > startCount) {
+              add({
+                type: 'pool',
+                stage: 'backfill',
+                pool: poolName,
+                pickedCount: poolPicks[poolName].length - startCount,
+                runId
+              });
+            }
+            
             if (picks.length >= TARGET_MIN) break;
           }
         }
+        
+        // Calculate final breakdown
+        const breakdown = {
+          Hot: poolPicks.hot.length,
+          Activity: poolPicks.activity.length,
+          Vibe: poolPicks.fit.length,
+          Dormant: poolPicks.dormant.length,
+          Cold: poolPicks.cold.length,
+          Novel: poolPicks.novel.length
+        };
+        
+        // Log final merge with breakdown
+        add({
+          type: 'merge',
+          stage: 'combine',
+          total: picks.length,
+          breakdown: breakdown,
+          runId
+        });
+        
+        // Structured console log for monitoring
+        console.info(JSON.stringify({
+          lvl: 'info',
+          src: 'matcher',
+          runId,
+          stage: 'merge',
+          total: picks.length,
+          breakdown
+        }));
         
         // Transform to final format
         const taggedBrands = picks.map(({ brand, poolName }) => {
@@ -1929,10 +1994,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             productionContext: search_term,
             projectName: extractedTitle, // Use the definitive title
             brandSuggestions: taggedBrands,
-            supportingContext: supportingContext
+            supportingContext: supportingContext,
+            breakdown: breakdown // Include breakdown in response
           },
           mcpThinking,
-          usedMCP: true
+          usedMCP: true,
+          breakdown: breakdown // Also include at top level
         };
       }
 
@@ -2411,6 +2478,10 @@ export default async function handler(req, res) {
   // GET endpoint for progress with runId support
   if (req.method === 'GET' && req.query.progress === 'true') {
     const { sessionId, runId } = req.query;
+    
+    // Set no-cache headers
+    res.setHeader("Cache-Control", "no-store");
+    
     if (!sessionId) {
       return res.status(400).json({ error: 'sessionId required' });
     }
@@ -2908,7 +2979,12 @@ Keep it under 300 words.`;
         }
       }
       
-      let { userMessage, sessionId, audioData, projectId, projectName, runId } = req.body;
+      let { userMessage, sessionId, audioData, projectId, projectName, runId: clientRunId } = req.body;
+
+      // Generate runId if not provided by client
+      const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+      res.setHeader("x-run-id", runId);
+      res.setHeader("Cache-Control", "no-store");
 
       if (userMessage && userMessage.length > 5000) {
         userMessage = userMessage.slice(0, 5000) + "…";
@@ -2923,7 +2999,7 @@ Keep it under 300 words.`;
 
       // Initialize progress tracking for this session with runId
       await progressInit(sessionId, runId);
-      await progressPush(sessionId, runId, { type: 'info', text: '🔎 Routing request...' });
+      await progressPush(sessionId, runId, { type: 'info', text: '🔎 Routing request...', runId });
 
       const projectConfig = getProjectConfig(projectId);
       const { baseId, chatTable, knowledgeTable } = projectConfig;
@@ -3191,10 +3267,12 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               // The final response now includes mcpSteps for the frontend
               await progressDone(sessionId, runId); // Mark progress as done
               return res.json({
+                  runId: runId, // Include runId in response
                   reply: aiReply,
                   structuredData: structuredData,
                   mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
                   usedMCP: usedMCP,
+                  breakdown: claudeResult?.breakdown, // Include breakdown if available
                   // Add metadata for frontend parsing (only for BRAND_ACTIVITY)
                   activityMetadata: structuredData?.dataType === 'BRAND_ACTIVITY' ? {
                     totalCommunications: structuredData.communications?.length || 0,
