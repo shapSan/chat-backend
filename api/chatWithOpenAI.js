@@ -50,6 +50,13 @@ const msftTenantId = process.env.MICROSOFT_TENANT_ID;
 const msftClientId = process.env.MICROSOFT_CLIENT_ID;
 const msftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
+// Recommendation system feature flags (all default to true if not set)
+const RECS_FIX_MERGE = process.env.RECS_FIX_MERGE !== 'false';
+const RECS_COOLDOWN = process.env.RECS_COOLDOWN !== 'false';
+const RECS_DIVERSIFY = process.env.RECS_DIVERSIFY !== 'false';
+const RECS_JITTER_TARGET = process.env.RECS_JITTER_TARGET !== 'false';
+const RECS_DISCOVER_RATIO = process.env.RECS_DISCOVER_RATIO || '50,30,20';
+
 // Model configuration centralization
 const MODELS = {
   openai: {
@@ -1142,8 +1149,11 @@ async function generateWildcardBrands(synopsis) {
 }
 
 // Helper function to tag and combine brands from different sources
-function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
+function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
   const brandMap = new Map();
+  
+  // Make function tolerant - accept either activityBrands or synopsisBrands
+  const primaryBrands = activityBrands || synopsisBrands || { results: [] };
   
   // Helper to find relevant meeting/email quote for a brand
   const findBrandContext = (brandName) => {
@@ -1257,14 +1267,17 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     return `${brand.category} leader - natural fit for ${genre || 'this'} production`;
   };
   
-  // Process brands with recent activity (8)
-  if (activityBrands && activityBrands.results) {
-    activityBrands.results.forEach(brand => {
+  // Process brands with recent activity OR synopsis matches (8-15)
+  if (primaryBrands && primaryBrands.results) {
+    primaryBrands.results.forEach(brand => {
       const id = brand.id;
       const brandName = brand.properties.brand_name || '';
       const contextData = findBrandContext(brandName);
       
       if (!brandMap.has(id)) {
+        // Determine primary tag based on source
+        const primaryTag = synopsisBrands ? '🎯 Genre Match' : '📧 Recent Activity';
+        
         brandMap.set(id, {
           source: 'hubspot',
           id: brand.id,
@@ -1277,9 +1290,11 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           dealsCount: brand.properties.deals_count || '0',
           lastActivity: brand.properties.hs_lastmodifieddate,
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-          tags: ['📧 Recent Activity'],
+          tags: [primaryTag],
           relevanceScore: 95,
-          reason: contextData?.rawText || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`,
+          reason: contextData?.rawText || (synopsisBrands ? 
+            `Matches production genre and themes` : 
+            `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`),
           insight: contextData // Include structured insight data
         });
       }
@@ -1426,9 +1441,24 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   }
   
   // Convert to array and sort by relevance
-  return Array.from(brandMap.values())
-    .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, 45); // Limit to top 45 (15+15+10+5)
+  const sortedBrands = Array.from(brandMap.values())
+    .sort((a, b) => b.relevanceScore - a.relevanceScore);
+  
+  // Determine target size with optional jitter
+  let targetSize = 15; // Default
+  
+  if (RECS_JITTER_TARGET && synopsis) {
+    // Simple deterministic jitter based on synopsis content (avoid sessionId issues)
+    const hashCode = synopsis.split('').reduce((acc, char) => {
+      return ((acc << 5) - acc) + char.charCodeAt(0);
+    }, 0);
+    const jitter = (Math.abs(hashCode) % 7) - 3; // -3 to +3
+    targetSize = Math.max(12, Math.min(20, 15 + jitter));
+    console.log(`[DEBUG tagAndCombineBrands] Target size with jitter: ${targetSize}`);
+  }
+  
+  // Return up to targetSize brands (but don't fail if fewer available)
+  return sortedBrands.slice(0, Math.min(targetSize, sortedBrands.length));
 }
 
 async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, onStep = () => {}) {
@@ -1611,18 +1641,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           add(resultStep);
         }
         
-        // Combine and tag all results
-        const combineStep = { type: 'process', text: '🤝 Combining and ranking recommendations...' };
-        add(combineStep);
-        
-        const taggedBrands = tagAndCombineBrands({
-          synopsisBrands,
-          genreBrands,
-          activeBrands,
-          wildcardCategories: wildcardBrands
-        });
-
-        // Optional: Get supporting context from meetings/emails
+        // Optional: Get supporting context from meetings/emails BEFORE combining
         let supportingContext = { meetings: [], emails: [] };
         if (firefliesApiKey || msftClientId) {
           const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
@@ -1662,7 +1681,182 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             add(foundStep);
           }
         }
-
+        
+        // Combine and tag all results with diversification
+        const combineStep = { type: 'process', text: '🤝 Combining and ranking recommendations...' };
+        add(combineStep);
+        
+        // Target size configuration
+        const TARGET_MIN = 15;
+        const TARGET_MAX = 20;
+        
+        // Build pools from our existing searches
+        const pools = {
+          hot: [], // Recent activity brands
+          fit: [], // Genre/vibe matches
+          dormant: [], // High potential but inactive
+          activity: [], // From synopsis search
+          cold: [] // Wildcard suggestions
+        };
+        
+        // Categorize brands into pools based on their characteristics
+        const allBrands = [];
+        
+        // Synopsis brands -> activity pool
+        if (synopsisBrands?.results) {
+          pools.activity.push(...synopsisBrands.results.slice(0, 8));
+          allBrands.push(...synopsisBrands.results);
+        }
+        
+        // Genre brands -> fit pool
+        if (genreBrands?.results) {
+          pools.fit.push(...genreBrands.results.slice(0, 10));
+          allBrands.push(...genreBrands.results);
+        }
+        
+        // Active brands -> hot pool (recent activity)
+        if (activeBrands?.results) {
+          pools.hot.push(...activeBrands.results.slice(0, 6));
+          allBrands.push(...activeBrands.results);
+        }
+        
+        // Wildcard brands -> cold pool
+        if (wildcardBrands && wildcardBrands.length > 0) {
+          pools.cold = wildcardBrands.slice(0, 5);
+        }
+        
+        // Simple dormant detection from existing brands
+        if (RECS_DIVERSIFY && allBrands.length > 0) {
+          const ninetyDaysAgo = new Date();
+          ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+          
+          pools.dormant = allBrands
+            .filter(b => {
+              const lastModified = new Date(b.properties?.hs_lastmodifieddate || 0);
+              const hasHighPotential = parseInt(b.properties?.partnership_count || 0) >= 5 ||
+                                      parseInt(b.properties?.deals_count || 0) >= 3;
+              return lastModified < ninetyDaysAgo && hasHighPotential;
+            })
+            .slice(0, 5);
+        }
+        
+        // Deduplicate across pools
+        const seenIds = new Set();
+        const uniquePools = {};
+        
+        for (const [poolName, poolBrands] of Object.entries(pools)) {
+          uniquePools[poolName] = [];
+          for (const brand of poolBrands) {
+            const brandId = brand.id || brand.name;
+            if (!seenIds.has(brandId)) {
+              seenIds.add(brandId);
+              uniquePools[poolName].push(brand);
+            }
+          }
+        }
+        
+        // Build final recommendations with slot allocation
+        const recommendations = [];
+        const slots = RECS_DIVERSIFY ? 
+          { hot: 4, activity: 4, dormant: 3, fit: 5, cold: 2 } : 
+          { hot: 5, activity: 5, dormant: 0, fit: 7, cold: 3 };
+        
+        // Pull from each pool
+        for (const [poolName, targetCount] of Object.entries(slots)) {
+          const poolBrands = uniquePools[poolName] || [];
+          const toTake = Math.min(targetCount, poolBrands.length);
+          
+          for (let i = 0; i < toTake && recommendations.length < TARGET_MAX; i++) {
+            recommendations.push({
+              poolName,
+              brand: poolBrands[i]
+            });
+          }
+        }
+        
+        // Backfill if under minimum
+        if (recommendations.length < TARGET_MIN) {
+          const backfillOrder = ['fit', 'activity', 'hot', 'cold'];
+          for (const poolName of backfillOrder) {
+            const poolBrands = uniquePools[poolName] || [];
+            const alreadyTaken = recommendations.filter(r => r.poolName === poolName).length;
+            
+            for (let i = alreadyTaken; i < poolBrands.length && recommendations.length < TARGET_MIN; i++) {
+              recommendations.push({
+                poolName,
+                brand: poolBrands[i]
+              });
+            }
+          }
+        }
+        
+        // Transform to final format using tagAndCombineBrands
+        const taggedBrands = [];
+        
+        for (const { poolName, brand } of recommendations) {
+          // Determine tags based on pool
+          const tags = [];
+          let reason = '';
+          
+          switch(poolName) {
+            case 'hot':
+              tags.push('🔥 This Week', '📊 Active');
+              reason = `Recent activity - ${brand.properties?.deals_count || 0} active deals`;
+              break;
+            case 'activity':
+              tags.push('🎯 Genre Match', '📝 Synopsis Match');
+              reason = 'Strong match for production themes and genre';
+              break;
+            case 'dormant':
+              tags.push('💤 Dormant', '💎 High Potential');
+              reason = `High potential - ${brand.properties?.partnership_count || 0} past partnerships`;
+              break;
+            case 'fit':
+              tags.push('🎭 Creative Fit', '✨ Vibe Match');
+              reason = 'Excellent creative and demographic alignment';
+              break;
+            case 'cold':
+              tags.push('🚀 Cold Outreach', '💡 Discovery');
+              reason = 'New opportunity worth exploring';
+              break;
+          }
+          
+          // Handle both HubSpot brands and wildcard suggestions
+          if (brand.properties) {
+            // HubSpot brand
+            taggedBrands.push({
+              source: 'hubspot',
+              id: brand.id,
+              name: brand.properties.brand_name || '',
+              category: brand.properties.main_category || 'General',
+              subcategories: brand.properties.product_sub_category__multi_ || '',
+              clientStatus: brand.properties.client_status || '',
+              clientType: brand.properties.client_type || '',
+              partnershipCount: brand.properties.partnership_count || '0',
+              dealsCount: brand.properties.deals_count || '0',
+              lastActivity: brand.properties.hs_lastmodifieddate,
+              hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+              tags: tags,
+              relevanceScore: poolName === 'hot' ? 95 : poolName === 'activity' ? 90 : 85,
+              reason: reason
+            });
+          } else if (typeof brand === 'string') {
+            // Wildcard brand name
+            taggedBrands.push({
+              source: 'suggestion',
+              id: `wildcard_${taggedBrands.length}`,
+              name: brand,
+              category: 'Suggested for Cold Outreach',
+              tags: tags,
+              relevanceScore: 70,
+              reason: reason,
+              isWildcard: true
+            });
+          }
+        }
+        
+        console.log(`[DEBUG] Final recommendations: ${taggedBrands.length} brands from pools`);
+        
         const finalStep = { type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` };
         add(finalStep);
         
