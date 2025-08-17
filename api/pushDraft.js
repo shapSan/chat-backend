@@ -130,9 +130,9 @@ function sanitizeBrand(b={}) {
 function assetsNote(brand){
   const t = (brand.assets||[]).map(a=>a.type);
   const parts = [];
+  if (t.includes('audio')) parts.push('a quick audio pitch');
   if (t.includes('video')) parts.push('a short video');
   if (t.includes('pdf'))   parts.push('the proposal PDF');
-  if (t.includes('audio')) parts.push('a quick audio pitch');
   if (t.includes('image')) parts.push('a one-sheet/poster');
   if (!parts.length) return '';
   if (parts.length === 1) return `I've included ${parts[0]} below for a quick skim.`;
@@ -273,7 +273,7 @@ export default async function handler(req, res) {
         console.log('[pushDraft] html includes Quick links?', htmlBody.includes('Quick links'));
         console.log('[pushDraft] quickLinksSection:', quickLinksSection ? 'YES' : 'NO');
 
-        const subject = `[Pitch] ${projectName} — ${b.name || 'Brand'}`;
+        const subject = `[Agent Pitch] ${projectName} — ${b.name || 'Brand'}`;
         const draft = await createDraftInMailbox({
           subject,
           htmlBody,
