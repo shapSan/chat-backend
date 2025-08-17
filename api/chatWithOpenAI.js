@@ -2316,7 +2316,7 @@ Keep it under 300 words.`;
             
             // Upload to Vercel Blob Storage
             const timestamp = Date.now();
-            const filename = `audio/narration-${sessionId}-${timestamp}.mp3`;
+            const filename = `${sessionId || 'unknown-session'}/audio-narration-${timestamp}.mp3`;
             
             console.log('[DEBUG generateAudio] Uploading to blob storage:', filename);
             
@@ -2442,7 +2442,7 @@ Keep it under 300 words.`;
           
           // Upload to Vercel Blob Storage
           const timestamp = Date.now();
-          const filename = `videos/generated-${sessionId}-${timestamp}.mp4`;
+          const filename = `${sessionId || 'unknown-session'}/video-generated-${timestamp}.mp4`;
           
           console.log('[DEBUG generateVideo] Uploading to blob storage:', filename);
           
@@ -2612,7 +2612,7 @@ Keep it under 300 words.`;
           
           // Upload to Vercel Blob Storage
           const timestamp = Date.now();
-          const filename = `images/poster-${sessionId || 'unknown'}-${timestamp}.png`;
+          const filename = `${sessionId || 'unknown-session'}/poster-image-${timestamp}.png`;
           
           const { url } = await put(
             filename,
