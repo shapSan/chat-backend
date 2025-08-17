@@ -50,6 +50,27 @@ const msftTenantId = process.env.MICROSOFT_TENANT_ID;
 const msftClientId = process.env.MICROSOFT_CLIENT_ID;
 const msftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
+// Recommendation improvement flags (default true/enabled)
+const RECS_FLAGS = {
+  FIX_MERGE: process.env.RECS_FIX_MERGE !== 'false',
+  COOLDOWN: process.env.RECS_COOLDOWN !== 'false',
+  DIVERSIFY: process.env.RECS_DIVERSIFY !== 'false',
+  JITTER_TARGET: process.env.RECS_JITTER_TARGET !== 'false',
+  DISCOVER_RATIO: process.env.RECS_DISCOVER_RATIO || '50,30,20' // hot/fit/quiet
+};
+
+// Seeded random number generator for consistent jitter
+function seededRandom(seed) {
+  const str = String(seed);
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(Math.sin(hash)) % 1;
+}
+
 // Model configuration centralization
 const MODELS = {
   openai: {
@@ -1142,8 +1163,20 @@ async function generateWildcardBrands(synopsis) {
 }
 
 // Helper function to tag and combine brands from different sources
-function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
+function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context, targetSize = 15 }) {
   const brandMap = new Map();
+  
+  // Handle both old and new property names for compatibility
+  const activityList = activityBrands || synopsisBrands || { results: [] };
+  
+  // Apply jitter to target size if enabled
+  let finalTargetSize = targetSize;
+  if (RECS_FLAGS.JITTER_TARGET && synopsis) {
+    const seed = synopsis.substring(0, 50); // Use part of synopsis as seed for consistency
+    const jitter = Math.floor(seededRandom(seed) * 6 - 3); // -3 to +3
+    finalTargetSize = Math.max(12, Math.min(20, targetSize + jitter));
+    console.log(`[DEBUG tagAndCombine] Target size jittered from ${targetSize} to ${finalTargetSize}`);
+  }
   
   // Helper to find relevant meeting/email quote for a brand
   const findBrandContext = (brandName) => {
@@ -1257,14 +1290,18 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     return `${brand.category} leader - natural fit for ${genre || 'this'} production`;
   };
   
-  // Process brands with recent activity (8)
-  if (activityBrands && activityBrands.results) {
-    activityBrands.results.forEach(brand => {
+  // Process brands with recent activity OR synopsis matches (List 1)
+  if (activityList && activityList.results) {
+    activityList.results.forEach(brand => {
       const id = brand.id;
       const brandName = brand.properties.brand_name || '';
       const contextData = findBrandContext(brandName);
       
       if (!brandMap.has(id)) {
+        // Determine if this came from synopsis search or activity search
+        const isFromSynopsis = !activityBrands && synopsisBrands;
+        const primaryTag = isFromSynopsis ? '🎯 Genre Match' : '📧 Recent Activity';
+        
         brandMap.set(id, {
           source: 'hubspot',
           id: brand.id,
@@ -1277,9 +1314,11 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           dealsCount: brand.properties.deals_count || '0',
           lastActivity: brand.properties.hs_lastmodifieddate,
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-          tags: ['📧 Recent Activity'],
-          relevanceScore: 95,
-          reason: contextData?.rawText || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`,
+          tags: [primaryTag],
+          relevanceScore: isFromSynopsis ? 90 : 95,
+          reason: contextData?.rawText || (isFromSynopsis ? 
+            `Genre/keyword match for production` : 
+            `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`),
           insight: contextData // Include structured insight data
         });
       }
@@ -1426,9 +1465,11 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   }
   
   // Convert to array and sort by relevance
-  return Array.from(brandMap.values())
-    .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, 45); // Limit to top 45 (15+15+10+5)
+  const sortedBrands = Array.from(brandMap.values())
+    .sort((a, b) => b.relevanceScore - a.relevanceScore);
+  
+  // Return up to target size (with jitter applied)
+  return sortedBrands.slice(0, finalTargetSize);
 }
 
 async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, onStep = () => {}) {
@@ -1615,11 +1656,26 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const combineStep = { type: 'process', text: '🤝 Combining and ranking recommendations...' };
         add(combineStep);
         
+        // Determine target size with optional jitter
+        const baseTargetSize = 15;
+        let targetSize = baseTargetSize;
+        
+        if (RECS_FLAGS.JITTER_TARGET && sessionId && projectId) {
+          const seed = `${sessionId}-${projectId || 'default'}`;
+          const jitter = Math.floor(seededRandom(seed) * 6 - 3); // -3 to +3
+          targetSize = Math.max(12, Math.min(20, baseTargetSize + jitter));
+          console.log(`[DEBUG] Jittered target from ${baseTargetSize} to ${targetSize}`);
+        }
+        
         const taggedBrands = tagAndCombineBrands({
-          synopsisBrands,
+          activityBrands: RECS_FLAGS.FIX_MERGE ? synopsisBrands : undefined, // Fixed: pass synopsis brands as activity brands
+          synopsisBrands: synopsisBrands, // Also pass as fallback for compatibility
           genreBrands,
           activeBrands,
-          wildcardCategories: wildcardBrands
+          wildcardCategories: wildcardBrands,
+          synopsis: search_term,
+          context: supportingContext,
+          targetSize: targetSize
         });
 
         // Optional: Get supporting context from meetings/emails
