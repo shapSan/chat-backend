@@ -2258,7 +2258,8 @@ Keep it under 300 words.`;
           return res.status(200).json({
             success: true,
             draftId: draftResult.id,
-            webLink: draftResult.webLink,
+            webLink: draftResult.webLink,  // Keep for backward compatibility
+            webLinks: [draftResult.webLink], // Array format for consistency
             message: 'Draft created successfully in Outlook'
           });
           
