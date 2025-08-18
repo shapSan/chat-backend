@@ -10,26 +10,47 @@ import { put } from '@vercel/blob';
 
 dotenv.config();
 
-// KV Progress helpers
-const progKey = (id) => `mcp:${id}`;
+// KV Progress helpers with strict event schema
+const progKey = (sessionId, runId) => `progress:${sessionId}:${runId}`;
 
-async function progressInit(id) {
-  await kv.set(progKey(id), { steps: [], done: false, ts: Date.now() }, { ex: 900 });
+async function progressInit(sessionId, runId) {
+  const key = progKey(sessionId, runId);
+  await kv.set(key, { 
+    sessionId,
+    runId,
+    steps: [], 
+    done: false, 
+    ts: Date.now() 
+  }, { ex: 900 });
 }
 
-async function progressPush(id, step) {
-  const key = progKey(id);
-  const s = (await kv.get(key)) || { steps: [], done: false, ts: Date.now() };
-  s.steps.push({ ...step, timestamp: Date.now() - s.ts });
+async function progressPush(sessionId, runId, seq, evt) {
+  const key = progKey(sessionId, runId);
+  const s = (await kv.get(key)) || { sessionId, runId, steps: [], done: false, ts: Date.now() };
+  
+  const event = {
+    sessionId,
+    runId,
+    seq,
+    ts: Date.now(),
+    ...evt // {stage, label, meta}
+  };
+  
+  s.steps.push(event);
   if (s.steps.length > 100) s.steps = s.steps.slice(-100);
   await kv.set(key, s, { ex: 900 });
 }
 
-async function progressDone(id) {
-  const key = progKey(id);
-  const s = (await kv.get(key)) || { steps: [], done: false, ts: Date.now() };
+async function progressDone(sessionId, runId) {
+  const key = progKey(sessionId, runId);
+  const s = (await kv.get(key)) || { sessionId, runId, steps: [], done: false, ts: Date.now() };
   s.done = true;
   await kv.set(key, s, { ex: 300 });
+}
+
+async function getProgress(sessionId, runId) {
+  const key = progKey(sessionId, runId);
+  return (await kv.get(key)) || { sessionId, runId, steps: [], done: false };
 }
 
 export const config = {
@@ -49,6 +70,13 @@ const googleGeminiApiKey = process.env.GOOGLE_GEMINI_API_KEY;
 const msftTenantId = process.env.MICROSOFT_TENANT_ID;
 const msftClientId = process.env.MICROSOFT_CLIENT_ID;
 const msftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
+
+// Recommendation system feature flags (all default to true if not set)
+const RECS_FIX_MERGE = process.env.RECS_FIX_MERGE !== 'false';
+const RECS_COOLDOWN = process.env.RECS_COOLDOWN !== 'false';
+const RECS_DIVERSIFY = process.env.RECS_DIVERSIFY !== 'false';
+const RECS_JITTER_TARGET = process.env.RECS_JITTER_TARGET !== 'false';
+const RECS_DISCOVER_RATIO = process.env.RECS_DISCOVER_RATIO || '50,30,20';
 
 // Model configuration centralization
 const MODELS = {
@@ -1142,8 +1170,11 @@ async function generateWildcardBrands(synopsis) {
 }
 
 // Helper function to tag and combine brands from different sources
-function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
+function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
   const brandMap = new Map();
+  
+  // Make function tolerant - accept either activityBrands or synopsisBrands
+  const primaryBrands = activityBrands || synopsisBrands || { results: [] };
   
   // Helper to find relevant meeting/email quote for a brand
   const findBrandContext = (brandName) => {
@@ -1257,14 +1288,17 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
     return `${brand.category} leader - natural fit for ${genre || 'this'} production`;
   };
   
-  // Process brands with recent activity (8)
-  if (activityBrands && activityBrands.results) {
-    activityBrands.results.forEach(brand => {
+  // Process brands with recent activity OR synopsis matches (8-15)
+  if (primaryBrands && primaryBrands.results) {
+    primaryBrands.results.forEach(brand => {
       const id = brand.id;
       const brandName = brand.properties.brand_name || '';
       const contextData = findBrandContext(brandName);
       
       if (!brandMap.has(id)) {
+        // Determine primary tag based on source
+        const primaryTag = synopsisBrands ? '🎯 Genre Match' : '📧 Recent Activity';
+        
         brandMap.set(id, {
           source: 'hubspot',
           id: brand.id,
@@ -1277,9 +1311,11 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
           dealsCount: brand.properties.deals_count || '0',
           lastActivity: brand.properties.hs_lastmodifieddate,
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-          tags: ['📧 Recent Activity'],
+          tags: [primaryTag],
           relevanceScore: 95,
-          reason: contextData?.rawText || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`,
+          reason: contextData?.rawText || (synopsisBrands ? 
+            `Matches production genre and themes` : 
+            `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`),
           insight: contextData // Include structured insight data
         });
       }
@@ -1426,13 +1462,41 @@ function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildca
   }
   
   // Convert to array and sort by relevance
-  return Array.from(brandMap.values())
-    .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, 45); // Limit to top 45 (15+15+10+5)
+  const sortedBrands = Array.from(brandMap.values())
+    .sort((a, b) => b.relevanceScore - a.relevanceScore);
+  
+  // Determine target size with optional jitter
+  let targetSize = 15; // Default
+  
+  if (RECS_JITTER_TARGET && synopsis) {
+    // Simple deterministic jitter based on synopsis content (avoid sessionId issues)
+    const hashCode = synopsis.split('').reduce((acc, char) => {
+      return ((acc << 5) - acc) + char.charCodeAt(0);
+    }, 0);
+    const jitter = (Math.abs(hashCode) % 7) - 3; // -3 to +3
+    targetSize = Math.max(12, Math.min(20, 15 + jitter));
+    console.log(`[DEBUG tagAndCombineBrands] Target size with jitter: ${targetSize}`);
+  }
+  
+  // Return up to targetSize brands (but don't fail if fewer available)
+  return sortedBrands.slice(0, Math.min(targetSize, sortedBrands.length));
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, onStep = () => {}) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, runId, sessionId, onStep = () => {}) {
   if (!anthropicApiKey) return null;
+  
+  let seq = 0;
+  const pushProgress = async (evt) => {
+    seq++;
+    await progressPush(sessionId, runId, seq, evt);
+    // Also call onStep for backward compatibility
+    if (evt.label) {
+      onStep({ type: evt.stage, text: evt.label });
+    }
+  };
+  
+  // Log intent routing
+  await pushProgress({ stage: 'intent.start', label: 'Analyzing intent...' });
   
   // Ensure HubSpot is ready before any searches (cold start fix)
   if (hubspotAPI && hubspotAPI.testConnection) {
@@ -1450,12 +1514,16 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
   }
   
   const intent = await routeUserIntent(userMessage, conversationContext, lastProductionContext);
-  if (!intent || intent.tool === 'answer_general_question') return null;
+  if (!intent || intent.tool === 'answer_general_question') {
+    await pushProgress({ stage: 'intent.done', label: 'General conversation' });
+    return null;
+  }
+  
+  await pushProgress({ stage: 'intent.done', label: `${intent.tool} agent` });
 
   const mcpThinking = [];
   const add = (step) => {
     mcpThinking.push(step);
-    try { onStep(step); } catch {}
   };
 
   try {
@@ -1522,10 +1590,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         // Launch parallel searches for the four lists
         const searches = [
-          { type: 'search', text: '🎯 List 1: Synopsis-matched brands (15)...' },
-          { type: 'search', text: '🎭 List 2: Vibe matches (15)...' },
-          { type: 'search', text: '💰 List 3: Active big-budget clients (10)...' },
-          { type: 'search', text: '🚀 List 4: Creative exploration (5 cold outreach)...' }
+          { type: 'pool', stage: 'search', pool: 'Synopsis', text: '🎯 List 1: Synopsis-matched brands...', runId },
+          { type: 'pool', stage: 'search', pool: 'Vibe', text: '🎭 List 2: Vibe matches...', runId },
+          { type: 'pool', stage: 'search', pool: 'Hot', text: '💰 List 3: Active big-budget clients...', runId },
+          { type: 'pool', stage: 'search', pool: 'Cold', text: '🚀 List 4: Creative exploration...', runId }
         ];
         
         for (const searchStep of searches) {
@@ -1599,72 +1667,372 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           )
         ]);
 
-        // Report results
-        const results = [
-          { type: 'result', text: `✅ Synopsis matches: ${synopsisBrands.results?.length || 0} brands` },
-          { type: 'result', text: `✅ Vibe matches: ${genreBrands.results?.length || 0} brands` },
-          { type: 'result', text: `✅ Active big-budget: ${activeBrands.results?.length || 0} brands` },
-          { type: 'result', text: `✅ Cold outreach ideas: ${wildcardBrands?.length || 0} suggestions` }
+        // Report results with structured data
+        const poolResults = [
+          { type: 'pool', stage: 'result', pool: 'Synopsis', pickedCount: synopsisBrands.results?.length || 0, runId },
+          { type: 'pool', stage: 'result', pool: 'Vibe', pickedCount: genreBrands.results?.length || 0, runId },
+          { type: 'pool', stage: 'result', pool: 'Hot', pickedCount: activeBrands.results?.length || 0, runId },
+          { type: 'pool', stage: 'result', pool: 'Cold', pickedCount: wildcardBrands?.length || 0, runId }
         ];
         
-        for (const resultStep of results) {
+        for (const resultStep of poolResults) {
           add(resultStep);
         }
         
-        // Combine and tag all results
-        const combineStep = { type: 'process', text: '🤝 Combining and ranking recommendations...' };
-        add(combineStep);
-        
-        const taggedBrands = tagAndCombineBrands({
-          synopsisBrands,
-          genreBrands,
-          activeBrands,
-          wildcardCategories: wildcardBrands
-        });
-
         // Optional: Get supporting context from meetings/emails
         let supportingContext = { meetings: [], emails: [] };
         if (firefliesApiKey || msftClientId) {
-          const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
-          add(contextStep);
+          await pushProgress({ stage: 'comms.start', label: 'Searching recent communications...' });
           
           const contextKeywords = await extractKeywordsForContextSearch(search_term);
           
           console.log('[DEBUG comms] Searching for supporting context...');
           console.log('[DEBUG comms] Keywords:', contextKeywords);
           
-          const [firefliesRes, emailRes] = await Promise.allSettled([
-            firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 3 }), 5000, { transcripts: [] }) : Promise.resolve({ transcripts: [] }),
-            msftClientId ? withTimeout(o365API.searchEmails(contextKeywords, { days: 90, limit: 5 }), 5000, []) : Promise.resolve([])
-          ]);
-          
-          // Handle Fireflies result
-          const firefliesData = firefliesRes.status === 'fulfilled' ? firefliesRes.value : { transcripts: [] };
-          if (firefliesRes.status === 'rejected') {
-            console.log('[DEBUG comms] Fireflies context search failed:', firefliesRes.reason);
+          // Search Fireflies
+          if (firefliesApiKey) {
+            try {
+              const firefliesData = await withTimeout(
+                searchFireflies(contextKeywords, { limit: 3 }), 
+                5000, 
+                { transcripts: [] }
+              );
+              supportingContext.meetings = firefliesData.transcripts || [];
+              await pushProgress({ 
+                stage: 'comms.fireflies', 
+                label: 'Fireflies', 
+                meta: { 
+                  keywords: contextKeywords,
+                  count: supportingContext.meetings.length 
+                }
+              });
+            } catch (error) {
+              await pushProgress({ 
+                stage: 'comms.fireflies', 
+                label: 'Fireflies', 
+                meta: { 
+                  keywords: contextKeywords,
+                  error: error.message,
+                  count: 0 
+                }
+              });
+            }
           }
           
-          // Handle O365 result
-          const emailData = emailRes.status === 'fulfilled' ? emailRes.value : [];
-          if (emailRes.status === 'rejected') {
-            console.log('[DEBUG comms] O365 context search failed:', emailRes.reason);
+          // Search O365
+          if (msftClientId) {
+            try {
+              const emailData = await withTimeout(
+                o365API.searchEmails(contextKeywords, { days: 90, limit: 5 }), 
+                5000, 
+                []
+              );
+              supportingContext.emails = emailData || [];
+              await pushProgress({ 
+                stage: 'comms.o365', 
+                label: 'O365', 
+                meta: { 
+                  keywords: contextKeywords,
+                  count: supportingContext.emails.length 
+                }
+              });
+            } catch (error) {
+              await pushProgress({ 
+                stage: 'comms.o365', 
+                label: 'O365', 
+                meta: { 
+                  keywords: contextKeywords,
+                  error: error.message || 'Access denied',
+                  count: 0 
+                }
+              });
+            }
           }
           
-          supportingContext = {
-            meetings: firefliesData.transcripts || [],
-            emails: emailData || []
-          };
+          await pushProgress({ stage: 'comms.done', label: 'Communications search complete' });
           
           console.log(`[DEBUG comms] Context found - Meetings: ${supportingContext.meetings.length}, Emails: ${supportingContext.emails.length}`);
+        }
+        
+        // Combine and tag all results with diversification
+        await pushProgress({ stage: 'merge.start', label: 'Building diverse list...' });
+        
+        // Target size configuration
+        const TARGET_MIN = 15;
+        const TARGET_MAX = 20;
+        const QUOTAS = { hot: 4, activity: 4, dormant: 4, fit: 5, cold: 2 };
+        
+        // Build pools from our existing searches
+        const pools = {
+          hot: [], // Recent activity brands
+          activity: [], // Synopsis matches
+          dormant: [], // High potential but inactive
+          fit: [], // Genre/vibe matches
+          cold: [] // Wildcard suggestions
+        };
+        
+        // Categorize brands into pools
+        const allBrands = [];
+        
+        // Synopsis brands -> activity pool
+        if (synopsisBrands?.results) {
+          pools.activity.push(...synopsisBrands.results);
+          allBrands.push(...synopsisBrands.results);
+        }
+        
+        // Genre brands -> fit pool
+        if (genreBrands?.results) {
+          pools.fit.push(...genreBrands.results);
+          allBrands.push(...genreBrands.results);
+        }
+        
+        // Active brands -> hot pool
+        if (activeBrands?.results) {
+          pools.hot.push(...activeBrands.results);
+          allBrands.push(...activeBrands.results);
+        }
+        
+        // Detect dormant brands (inactive >90 days but high potential)
+        if (RECS_DIVERSIFY && allBrands.length > 0) {
+          const ninetyDaysAgo = new Date();
+          ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
           
-          if (supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) {
-            const foundStep = { type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` };
-            add(foundStep);
+          const dormantBrands = allBrands.filter(b => {
+            const lastModified = new Date(b.properties?.hs_lastmodifieddate || 0);
+            const partnershipCount = parseInt(b.properties?.partnership_count || 0);
+            const dealsCount = parseInt(b.properties?.deals_count || 0);
+            return lastModified < ninetyDaysAgo && (partnershipCount >= 5 || dealsCount >= 3);
+          });
+          
+          pools.dormant.push(...dormantBrands);
+        }
+        
+        // Wildcard brands -> cold pool
+        if (wildcardBrands && wildcardBrands.length > 0) {
+          pools.cold = wildcardBrands.map((name, i) => ({
+            id: `wildcard_${i}`,
+            name: name,
+            isWildcard: true
+          }));
+        }
+        
+        // Daily seeded shuffle for each pool
+        const today = new Date().toISOString().split('T')[0];
+        const seedBase = `${projectId || 'default'}-${today}`;
+        
+        const seededShuffle = (array, seed) => {
+          const arr = [...array];
+          let hash = 0;
+          for (let i = 0; i < seed.length; i++) {
+            hash = ((hash << 5) - hash) + seed.charCodeAt(i);
+            hash = hash & hash;
+          }
+          for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.abs(hash) % (i + 1);
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+            hash = ((hash << 5) - hash) + i;
+          }
+          return arr;
+        };
+        
+        // Shuffle each pool with daily seed
+        Object.keys(pools).forEach((poolName, idx) => {
+          pools[poolName] = seededShuffle(pools[poolName], `${seedBase}-${poolName}-${idx}`);
+        });
+        
+        // Get recent brands for cooldown (simple memory using KV)
+        let recentBrandIds = new Set();
+        try {
+          if (RECS_COOLDOWN && projectId) {
+            const recentKey = `recent:${projectId}`;
+            const recentData = await kv.get(recentKey);
+            if (recentData?.lists) {
+              // Count appearances in last 5 lists
+              const brandCounts = {};
+              recentData.lists.slice(-5).forEach(list => {
+                list.forEach(id => {
+                  brandCounts[id] = (brandCounts[id] || 0) + 1;
+                });
+              });
+              // Skip brands shown >2 times
+              Object.entries(brandCounts).forEach(([id, count]) => {
+                if (count > 2) recentBrandIds.add(id);
+              });
+            }
+          }
+        } catch (e) {
+          // Don't fail if KV unavailable
+          console.log('[DEBUG] Cooldown check failed:', e.message);
+        }
+        
+        // Build final list with quotas and deduplication
+        const picks = [];
+        const seenIds = new Set();
+        const seenCompanies = new Set();
+        const poolPicks = { hot: [], activity: [], dormant: [], fit: [], cold: [], novel: [] };
+        
+        const addBrand = (brand, poolName, isNovel = false) => {
+          const brandId = brand.id || brand.name;
+          const companyName = brand.properties?.parent_company || 
+                             brand.properties?.brand_name || 
+                             brand.name || '';
+          
+          // Skip if duplicate, on cooldown, or same parent company
+          if (seenIds.has(brandId)) return false;
+          if (recentBrandIds.has(brandId) && !isNovel) return false;
+          if (companyName && seenCompanies.has(companyName.toLowerCase())) return false;
+          
+          seenIds.add(brandId);
+          if (companyName) seenCompanies.add(companyName.toLowerCase());
+          
+          picks.push({ brand, poolName });
+          poolPicks[poolName].push(brand);
+          if (isNovel) poolPicks.novel.push(brand);
+          
+          return true;
+        };
+        
+        // First pass: try to fill quotas
+        Object.entries(QUOTAS).forEach(([poolName, quota]) => {
+          const pool = pools[poolName] || [];
+          let added = 0;
+          
+          for (const brand of pool) {
+            if (picks.length >= TARGET_MAX) break;
+            if (added >= quota) break;
+            if (addBrand(brand, poolName)) {
+              added++;
+            }
+          }
+        });
+        
+        // Backfill if under TARGET_MIN
+        if (picks.length < TARGET_MIN) {
+          const backfillOrder = ['fit', 'dormant', 'cold', 'activity', 'hot'];
+          
+          for (const poolName of backfillOrder) {
+            const pool = pools[poolName] || [];
+            
+            for (const brand of pool) {
+              if (picks.length >= TARGET_MIN) break;
+              addBrand(brand, poolName);
+            }
+            
+            if (picks.length >= TARGET_MIN) break;
           }
         }
-
-        const finalStep = { type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` };
-        add(finalStep);
+        
+        // Calculate final breakdown
+        const breakdown = {
+          Hot: poolPicks.hot.length,
+          Activity: poolPicks.activity.length,
+          Vibe: poolPicks.fit.length,
+          Dormant: poolPicks.dormant.length,
+          Cold: poolPicks.cold.length,
+          Novel: poolPicks.novel.length
+        };
+        
+        await pushProgress({ 
+          stage: 'merge.done', 
+          label: 'Pool built', 
+          meta: { 
+            total: picks.length,
+            breakdown: breakdown
+          }
+        });
+        
+        // Ranking phase
+        await pushProgress({ stage: 'rank.start', label: `Ranking ${picks.length} candidates...` });
+        
+        // Transform to final format
+        const taggedBrands = picks.map(({ brand, poolName }) => {
+          const tags = [];
+          let reason = '';
+          
+          // Assign tags based on pool
+          switch(poolName) {
+            case 'hot':
+              tags.push('🔥 This Week', 'Active');
+              reason = `Recent activity - ${brand.properties?.deals_count || 0} active deals`;
+              break;
+            case 'activity':
+              tags.push('🎯 Genre Match', 'Synopsis Match');
+              reason = 'Strong match for production themes';
+              break;
+            case 'dormant':
+              tags.push('💤 Dormant', 'High Potential');
+              reason = `Untapped potential - ${brand.properties?.partnership_count || 0} past partnerships`;
+              break;
+            case 'fit':
+              tags.push('🎭 Creative Fit', 'Vibe Match');
+              reason = 'Excellent creative alignment';
+              break;
+            case 'cold':
+              tags.push('🚀 Cold Outreach', 'Discovery');
+              reason = 'New opportunity worth exploring';
+              break;
+          }
+          
+          // Handle both HubSpot brands and wildcards
+          if (brand.properties) {
+            return {
+              source: 'hubspot',
+              id: brand.id,
+              name: brand.properties.brand_name || '',
+              category: brand.properties.main_category || 'General',
+              subcategories: brand.properties.product_sub_category__multi_ || '',
+              clientStatus: brand.properties.client_status || '',
+              clientType: brand.properties.client_type || '',
+              partnershipCount: brand.properties.partnership_count || '0',
+              dealsCount: brand.properties.deals_count || '0',
+              lastActivity: brand.properties.hs_lastmodifieddate,
+              hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
+              tags: tags,
+              relevanceScore: 85 + (poolName === 'hot' ? 10 : poolName === 'activity' ? 5 : 0),
+              reason: reason
+            };
+          } else {
+            return {
+              source: 'suggestion',
+              id: brand.id || `wildcard_${picks.indexOf({ brand, poolName })}`,
+              name: brand.name || brand,
+              category: 'Suggested',
+              tags: tags,
+              relevanceScore: 70,
+              reason: reason,
+              isWildcard: true
+            };
+          }
+        });
+        
+        await pushProgress({ 
+          stage: 'rank.done', 
+          label: `Ranked ${taggedBrands.length}`, 
+          meta: { returned: taggedBrands.length }
+        });
+        
+        // Update recent brands list for cooldown
+        try {
+          if (RECS_COOLDOWN && projectId && taggedBrands.length > 0) {
+            const recentKey = `recent:${projectId}`;
+            const recentData = (await kv.get(recentKey)) || { lists: [] };
+            recentData.lists.push(taggedBrands.map(b => b.id));
+            if (recentData.lists.length > 5) {
+              recentData.lists = recentData.lists.slice(-5);
+            }
+            await kv.set(recentKey, recentData, { ex: 86400 * 7 }); // Keep for 7 days
+          }
+        } catch (e) {
+          console.log('[DEBUG] Failed to update recent brands:', e.message);
+        }
+        
+        console.log(`[DEBUG] Final diverse list: ${taggedBrands.length} brands (target: ${TARGET_MIN}-${TARGET_MAX})`);
+        
+        await pushProgress({ 
+          stage: 'final.return', 
+          label: `Returning ${taggedBrands.length} brands`, 
+          meta: { runId }
+        });
         
         return {
           organizedData: {
@@ -1672,10 +2040,12 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             productionContext: search_term,
             projectName: extractedTitle, // Use the definitive title
             brandSuggestions: taggedBrands,
-            supportingContext: supportingContext
+            supportingContext: supportingContext,
+            breakdown: breakdown // Include breakdown in response
           },
           mcpThinking,
-          usedMCP: true
+          usedMCP: true,
+          breakdown: breakdown // Also include at top level
         };
       }
 
@@ -2151,10 +2521,22 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
   
-  // GET endpoint for progress
+  // GET endpoint for progress with runId support
   if (req.method === 'GET' && req.query.progress === 'true') {
-    const sessionId = req.query.sessionId;
-    const s = (await kv.get(progKey(sessionId))) || { steps: [], done: false };
+    const { sessionId, runId } = req.query;
+    
+    // Set no-cache headers
+    res.setHeader("Cache-Control", "no-store");
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId required' });
+    }
+    const key = progKey(sessionId, runId);
+    const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null };
+    // Only return steps if runId matches or no runId specified
+    if (runId && s.runId !== runId) {
+      return res.status(200).json({ steps: [], done: false, runId });
+    }
     return res.status(200).json(s);
   }
   
@@ -2258,7 +2640,8 @@ Keep it under 300 words.`;
           return res.status(200).json({
             success: true,
             draftId: draftResult.id,
-            webLink: draftResult.webLink,
+            webLink: draftResult.webLink,  // Keep for backward compatibility
+            webLinks: [draftResult.webLink], // Array format for consistency
             message: 'Draft created successfully in Outlook'
           });
           
@@ -2642,7 +3025,14 @@ Keep it under 300 words.`;
         }
       }
       
-      let { userMessage, sessionId, audioData, projectId, projectName } = req.body;
+      let { userMessage, sessionId, audioData, projectId, projectName, runId: clientRunId } = req.body;
+
+      // Generate runId with nanoid-like format
+      const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+      let seq = 0; // Sequence counter for this run
+      
+      res.setHeader("x-run-id", runId);
+      res.setHeader("Cache-Control", "no-store");
 
       if (userMessage && userMessage.length > 5000) {
         userMessage = userMessage.slice(0, 5000) + "…";
@@ -2655,9 +3045,16 @@ Keep it under 300 words.`;
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      // Initialize progress tracking for this session
-      await progressInit(sessionId);
-      await progressPush(sessionId, { type: 'info', text: '🔎 Routing request...' });
+      // Initialize progress tracking for this run
+      await progressInit(sessionId, runId);
+      
+      // Helper to push progress with auto-incrementing seq
+      const pushProgress = async (evt) => {
+        seq++;
+        await progressPush(sessionId, runId, seq, evt);
+      };
+      
+      await pushProgress({ stage: 'intent.start', label: 'Routing request...' });
 
       const projectConfig = getProjectConfig(projectId);
       const { baseId, chatTable, knowledgeTable } = projectConfig;
@@ -2798,7 +3195,9 @@ Keep it under 300 words.`;
               conversationContext,
               lastProductionContext,
               projectName, // Pass the known name from the request body
-              (step) => progressPush(sessionId, step)
+              runId,
+              sessionId, // Pass sessionId for progress tracking
+              (step) => {} // Empty callback since we're using pushProgress internally
           );
 
           if (claudeResult) {
@@ -2921,13 +3320,20 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
                   existingRecordId
               ).catch(err => console.error('[DEBUG] Airtable update error:', err));
 
-              // The final response now includes mcpSteps for the frontend
-              await progressDone(sessionId); // Mark progress as done
+              // Get final progress steps
+              const progressData = await getProgress(sessionId, runId);
+              
+              // The final response now includes progress steps
+              await progressDone(sessionId, runId); // Mark progress as done
+              
               return res.json({
+                  runId: runId,
                   reply: aiReply,
                   structuredData: structuredData,
-                  mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
+                  steps: progressData.steps, // Include deterministic progress events
+                  mcpSteps: mcpSteps, // Keep for backward compatibility
                   usedMCP: usedMCP,
+                  breakdown: claudeResult?.breakdown,
                   // Add metadata for frontend parsing (only for BRAND_ACTIVITY)
                   activityMetadata: structuredData?.dataType === 'BRAND_ACTIVITY' ? {
                     totalCommunications: structuredData.communications?.length || 0,
@@ -2938,13 +3344,13 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               });
           } else {
               console.error('[DEBUG] No AI reply received');
-              await progressDone(sessionId); // Mark progress as done even on error
+              await progressDone(sessionId, runId); // Mark progress as done even on error
               return res.status(500).json({ error: 'No text reply received.' });
           }
         } catch (error) {
           console.error("[CRASH DETECTED IN HANDLER]:", error);
           console.error("[STACK TRACE]:", error.stack);
-          await progressDone(sessionId); // Mark progress as done even on crash
+          await progressDone(sessionId, runId); // Mark progress as done even on crash
           return res.status(500).json({ 
             error: 'Internal server error', 
             details: error.message,
