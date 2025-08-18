@@ -1,5 +1,4 @@
 // /api/pushDraft.js — split mode, sanitized URLs, resilient OpenAI fallback
-
 export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 
 // ---------- CORS ----------
@@ -78,19 +77,46 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
   return { id: created.id, webLink: getJson.webLink || created.webLink || null };
 }
 
+// ADDED: send the draft you just created
+async function sendDraftMessage({ messageId, senderEmail }) {
+  const { access_token } = await getGraphToken();
+  const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderEmail)}/messages/${encodeURIComponent(messageId)}/send`;
+  const resp = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${access_token}` } });
+  if (!resp.ok) throw new Error(`Send failed: ${resp.status} ${await resp.text()}`);
+}
+
+// ADDED: send a simple notification email (separate from the pitch)
+async function sendSimpleMail({ subject, htmlBody, to, senderEmail }) {
+  const { access_token } = await getGraphToken();
+  const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderEmail)}/sendMail`;
+  const payload = {
+    message: {
+      subject,
+      body: { contentType: "HTML", content: htmlBody },
+      toRecipients: (to || []).slice(0, 10).map(email => ({ emailAddress: { address: email } })),
+    },
+    saveToSentItems: true
+  };
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error(`Notify send failed: ${resp.status} ${await resp.text()}`);
+}
+
 // ---------- helpers ----------
 const esc = (s="") => String(s).replace(/[<&>]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const isHttp = u => typeof u==='string' && /^https?:\/\//i.test(u) && u.length < 1000;
 const trim = (s,n=1400)=>String(s||'').slice(0,n);
 const normIdeas = v => Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map(x=>x.trim()).filter(Boolean) : [];
 
-// ADDED: fixed CC list to always include
+// ALWAYS-CC list (added to every draft)
 const ALWAYS_CC = [
-
-  "shap@hollywoodbranded.com",
+   "shap@hollywoodbranded.com",
 ];
 
-// ADDED: dedupe while preserving the first-seen casing/order
+// dedupe while preserving first-seen order
 function dedupeEmails(list = []) {
   const seen = new Set();
   const out = [];
@@ -218,7 +244,7 @@ NO subject, NO "Quick links", NO signature.
           { role:"user", content: prompt }
         ],
         temperature: 0.65,
-        max_tokens: 600  // Increased to ensure completion
+        max_tokens: 600
       })
     });
     if (!resp.ok) return fallback();
@@ -235,20 +261,23 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body || {};
-    
     const brandsRaw = Array.isArray(body.brands) ? body.brands : [];
-    
     console.log('[pushDraft] brands:', brandsRaw.length);
-    
+
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = body.projectName ?? pd.projectName ?? "Project";
     const cast = body.cast ?? pd.cast ?? "";
     const location = body.location ?? pd.location ?? "";
     const vibe = body.vibe ?? pd.vibe ?? "";
     const notes = body.notes ?? pd.notes ?? "";
+
     const toRecipients = Array.isArray(body.to) && body.to.length ? body.to.slice(0, 10) : ["shap@hollywoodbranded.com"];
-    
-    // ADDED: merge request CCs + always-CC, dedupe, cap 10
+
+    // optional flags
+    const sendNow = !!body.sendNow || !!body.send;     // send the draft immediately
+    const notifyWatchers = !!body.notifyWatchers;      // send separate FYI email to ALWAYS_CC
+
+    // merge request CCs + always-CC, dedupe, cap 10
     const requestedCC = Array.isArray(body.cc) ? body.cc.slice(0, 10) : [];
     const ccRecipients = dedupeEmails([...requestedCC, ...ALWAYS_CC]).slice(0, 10);
 
@@ -262,25 +291,21 @@ export default async function handler(req, res) {
     const results = [];
     for (const b of brands) {
       try {
-        // Log brand assets for debugging
         console.log('[pushDraft] brand', b.name, 'has assets:', b.assets);
         console.log('[pushDraft] assets count:', (b.assets||[]).length);
-        
-        const bodyText = await generateAiBody({
-          project: projectName, vibe, cast, location, notes, brand: b
-        });
-        
-        // Split text into paragraphs and add proper spacing
+
+        const bodyText = await generateAiBody({ project: projectName, vibe, cast, location, notes, brand: b });
+
         const paragraphs = bodyText.split('\n').filter(line => line.trim());
-        const formattedBody = paragraphs.map(para => 
+        const formattedBody = paragraphs.map(para =>
           `<p style="margin:0 0 16px 0;">${esc(para)}</p>`
         ).join('');
-        
+
         // Build Quick links section - ALWAYS include if there are assets
         let quickLinksSection = '';
         if (b.assets && b.assets.length > 0) {
-          const linkItems = b.assets.map(a => 
-            `<p style="margin:4px 0;"><a href="${a.url}" target="_blank" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a></p>`
+          const linkItems = b.assets.map(a =>
+            `<p style="margin:4px 0;"><a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a></p>`
           ).join('');
           quickLinksSection = `
             <div style="margin-top:24px;padding-top:16px;">
@@ -288,14 +313,13 @@ export default async function handler(req, res) {
               ${linkItems}
             </div>`;
         }
-        
+
         const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;max-width:720px;">
   ${formattedBody}
   ${quickLinksSection}
 </div>`.trim();
 
-        // Log if Quick links made it into HTML
         console.log('[pushDraft] html includes Quick links?', htmlBody.includes('Quick links'));
         console.log('[pushDraft] quickLinksSection:', quickLinksSection ? 'YES' : 'NO');
 
@@ -304,15 +328,45 @@ export default async function handler(req, res) {
           subject,
           htmlBody,
           to: toRecipients,
-          cc: ccRecipients, // ADDED: ensure our merged CCs are applied
+          cc: ccRecipients,
           senderEmail,
         });
-        results.push({ brand: b.name || "Brand", subject, webLink: draft.webLink || null });
+
+        // optionally send the draft now
+        let sent = false;
+        if (sendNow && draft?.id) {
+          try {
+            await sendDraftMessage({ messageId: draft.id, senderEmail });
+            sent = true;
+          } catch (e) {
+            console.error('[pushDraft] send failed:', e);
+          }
+        }
+
+        // optionally notify the watchers that a draft exists (separate email)
+        if (notifyWatchers) {
+          try {
+            const linkHtml = draft?.webLink ? `<p><a href="${draft.webLink}" target="_blank" rel="noopener">Open draft</a></p>` : '';
+            await sendSimpleMail({
+              subject: `Draft ready: ${subject}`,
+              htmlBody: `<div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;max-width:720px;">
+                <p>A draft for <b>${esc(b.name || 'Brand')}</b> on <b>${esc(projectName)}</b> is ready.</p>
+                ${linkHtml}
+              </div>`,
+              to: ALWAYS_CC,
+              senderEmail,
+            });
+          } catch (e) {
+            console.error('[pushDraft] notifyWatchers failed:', e);
+          }
+        }
+
+        results.push({ brand: b.name || "Brand", subject, webLink: draft.webLink || null, sent });
       } catch (e) {
         results.push({ brand: b.name || "Brand", error: String(e?.message || e) });
       }
     }
-    
+
     const webLinks = results.map((r) => r.webLink).filter(Boolean);
     return res.status(200).json({ success: true, mode: "split", count: results.length, webLinks, results });
   } catch (err) {
