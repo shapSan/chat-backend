@@ -125,10 +125,7 @@ const normIdeas = v => Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2
 
 // Team recipients (we will BCC these on send or send them a separate copy)
 const TEAM_RECIPS = [
-  "jo@hollywoodbranded.com",
-  "roman.rida@selfrun.ai",
-  "ian@hollywoodbranded.com",
-  "stacy@hollywoodbranded.com",
+  "shap@hollywoodbranded.com",
 ];
 
 // dedupe while preserving first-seen order
