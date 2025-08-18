@@ -1,4 +1,4 @@
-// /api/pushDraft.js — split mode, sanitized URLs, resilient OpenAI fallback
+// /api/pushDraft.js — split mode, clean drafts, BCC-on-send, optional internal copy
 export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 
 // ---------- CORS ----------
@@ -53,7 +53,7 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
   const sender = senderEmail || "shap@hollywoodbranded.com";
   const draftData = {
     subject,
-    body: { contentType: "HTML", content: htmlBody }, // <- MUST be HTML
+    body: { contentType: "HTML", content: htmlBody },
     toRecipients: (Array.isArray(to) ? to : [to])
       .filter(Boolean)
       .slice(0, 10)
@@ -77,7 +77,7 @@ async function createDraftInMailbox({ subject, htmlBody, to, cc, senderEmail }) 
   return { id: created.id, webLink: getJson.webLink || created.webLink || null };
 }
 
-// ADDED: send the draft you just created
+// Send the draft you just created
 async function sendDraftMessage({ messageId, senderEmail }) {
   const { access_token } = await getGraphToken();
   const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderEmail)}/messages/${encodeURIComponent(messageId)}/send`;
@@ -85,7 +85,19 @@ async function sendDraftMessage({ messageId, senderEmail }) {
   if (!resp.ok) throw new Error(`Send failed: ${resp.status} ${await resp.text()}`);
 }
 
-// ADDED: send a simple notification email (separate from the pitch)
+// PATCH the draft (e.g., add bccRecipients right before sending)
+async function patchMessage({ messageId, senderEmail, payload }) {
+  const { access_token } = await getGraphToken();
+  const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderEmail)}/messages/${encodeURIComponent(messageId)}`;
+  const resp = await fetch(url, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error(`Patch failed: ${resp.status} ${await resp.text()}`);
+}
+
+// Send a separate internal email (FYI or full copy)
 async function sendSimpleMail({ subject, htmlBody, to, senderEmail }) {
   const { access_token } = await getGraphToken();
   const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderEmail)}/sendMail`;
@@ -111,9 +123,12 @@ const isHttp = u => typeof u==='string' && /^https?:\/\//i.test(u) && u.length <
 const trim = (s,n=1400)=>String(s||'').slice(0,n);
 const normIdeas = v => Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map(x=>x.trim()).filter(Boolean) : [];
 
-// ALWAYS-CC list (added to every draft)
-const ALWAYS_CC = [
-   "shap@hollywoodbranded.com",
+// Team recipients (we will BCC these on send or send them a separate copy)
+const TEAM_RECIPS = [
+  "jo@hollywoodbranded.com",
+  "roman.rida@selfrun.ai",
+  "ian@hollywoodbranded.com",
+  "stacy@hollywoodbranded.com",
 ];
 
 // dedupe while preserving first-seen order
@@ -149,7 +164,6 @@ function classifyAsset(item={}) {
 
 function sanitizeBrand(b={}) {
   const base = [];
-  // fold any top-level url fields
   if (isHttp(b.videoUrl || b.exportedVideo)) base.push({type:'video', url:b.videoUrl || b.exportedVideo, title:'Video'});
   if (isHttp(b.pdfUrl || b.brandCardPDF))   base.push({type:'pdf',   url:b.pdfUrl || b.brandCardPDF,   title:'Proposal PDF'});
   if (isHttp(b.audioUrl))                   base.push({type:'audio', url:b.audioUrl,                   title:'Audio Pitch'});
@@ -160,7 +174,6 @@ function sanitizeBrand(b={}) {
     .slice(0, 12)
     .map(classifyAsset);
 
-  // de-dupe by url
   const seen = new Set(); const assets = [];
   [...base, ...extras].forEach(a => { if (!seen.has(a.url)) { seen.add(a.url); assets.push(a); } });
 
@@ -174,7 +187,6 @@ function sanitizeBrand(b={}) {
   };
 }
 
-// Natural one-liner that references resources, used inside the email
 function assetsNote(brand){
   const t = (brand.assets||[]).map(a=>a.type);
   const parts = [];
@@ -187,7 +199,6 @@ function assetsNote(brand){
   return `I've included ${parts.slice(0,-1).join(', ')} and ${parts.slice(-1)} below for a quick skim.`;
 }
 
-// Clickable links block under the body
 function quickLinksHtml(brand){
   if (!brand.assets?.length) return '';
   const rows = brand.assets.map(a =>
@@ -200,7 +211,6 @@ function quickLinksHtml(brand){
     </div>`;
 }
 
-// Professional email writer with natural resource mention
 async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
   const mention = assetsNote(brand);
   const fallback = () => {
@@ -215,11 +225,8 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
 Write a concise brand integration email (4 paragraphs, keep it brief but complete):
 
 1. "Hello [name]," + brief mention of exploring ${brand.name} for the project
-
 2. One paragraph on why the brand/film alignment works
-
 3. One specific integration example (concrete scene or usage)
-
 4. Closing: "${mention || 'I have materials ready.'}" + invitation to connect
 
 Project: ${project}
@@ -273,13 +280,15 @@ export default async function handler(req, res) {
 
     const toRecipients = Array.isArray(body.to) && body.to.length ? body.to.slice(0, 10) : ["shap@hollywoodbranded.com"];
 
-    // optional flags
-    const sendNow = !!body.sendNow || !!body.send;     // send the draft immediately
-    const notifyWatchers = !!body.notifyWatchers;      // send separate FYI email to ALWAYS_CC
+    // Flags:
+    const sendNow = !!body.sendNow || !!body.send;       // send externally now
+    const bccTeamOnSend = body.bccTeamOnSend !== false;  // default true: add TEAM_RECIPS as BCC only at send time
+    const sendTeamCopyNow = !!body.sendTeamCopyNow;      // send a separate full copy to TEAM_RECIPS now
+    const notifyWatchers = !!body.notifyWatchers;        // optional short FYI (kept for convenience)
 
-    // merge request CCs + always-CC, dedupe, cap 10
+    // Keep drafts clean; only use request CCs if provided
     const requestedCC = Array.isArray(body.cc) ? body.cc.slice(0, 10) : [];
-    const ccRecipients = dedupeEmails([...requestedCC, ...ALWAYS_CC]).slice(0, 10);
+    const ccRecipients = dedupeEmails(requestedCC).slice(0, 10);
 
     const senderEmail = body.senderEmail || "shap@hollywoodbranded.com";
 
@@ -287,21 +296,15 @@ export default async function handler(req, res) {
 
     const brands = brandsRaw.map(sanitizeBrand).slice(0, 10); // safety cap
 
-    // --- ALWAYS SPLIT: one draft per brand ---
     const results = [];
     for (const b of brands) {
       try {
         console.log('[pushDraft] brand', b.name, 'has assets:', b.assets);
-        console.log('[pushDraft] assets count:', (b.assets||[]).length);
 
         const bodyText = await generateAiBody({ project: projectName, vibe, cast, location, notes, brand: b });
-
         const paragraphs = bodyText.split('\n').filter(line => line.trim());
-        const formattedBody = paragraphs.map(para =>
-          `<p style="margin:0 0 16px 0;">${esc(para)}</p>`
-        ).join('');
+        const formattedBody = paragraphs.map(para => `<p style="margin:0 0 16px 0;">${esc(para)}</p>`).join('');
 
-        // Build Quick links section - ALWAYS include if there are assets
         let quickLinksSection = '';
         if (b.assets && b.assets.length > 0) {
           const linkItems = b.assets.map(a =>
@@ -320,30 +323,30 @@ export default async function handler(req, res) {
   ${quickLinksSection}
 </div>`.trim();
 
-        console.log('[pushDraft] html includes Quick links?', htmlBody.includes('Quick links'));
-        console.log('[pushDraft] quickLinksSection:', quickLinksSection ? 'YES' : 'NO');
-
         const subject = `[Agent Pitch] ${projectName} — ${b.name || 'Brand'}`;
         const draft = await createDraftInMailbox({
           subject,
           htmlBody,
           to: toRecipients,
-          cc: ccRecipients,
+          cc: ccRecipients,  // only caller-supplied CCs; team stays off the draft
           senderEmail,
         });
 
-        // optionally send the draft now
-        let sent = false;
-        if (sendNow && draft?.id) {
+        // If requested, send a separate internal full copy to the team immediately
+        if (sendTeamCopyNow) {
           try {
-            await sendDraftMessage({ messageId: draft.id, senderEmail });
-            sent = true;
+            await sendSimpleMail({
+              subject: `[INTERNAL COPY] ${subject}`,
+              htmlBody,
+              to: TEAM_RECIPS,
+              senderEmail,
+            });
           } catch (e) {
-            console.error('[pushDraft] send failed:', e);
+            console.error('[pushDraft] internal copy send failed:', e);
           }
         }
 
-        // optionally notify the watchers that a draft exists (separate email)
+        // Optional short FYI ping
         if (notifyWatchers) {
           try {
             const linkHtml = draft?.webLink ? `<p><a href="${draft.webLink}" target="_blank" rel="noopener">Open draft</a></p>` : '';
@@ -353,11 +356,26 @@ export default async function handler(req, res) {
                 <p>A draft for <b>${esc(b.name || 'Brand')}</b> on <b>${esc(projectName)}</b> is ready.</p>
                 ${linkHtml}
               </div>`,
-              to: ALWAYS_CC,
+              to: TEAM_RECIPS,
               senderEmail,
             });
           } catch (e) {
             console.error('[pushDraft] notifyWatchers failed:', e);
+          }
+        }
+
+        // If sending now, add team as BCC *right before send* and send it
+        let sent = false;
+        if (sendNow && draft?.id) {
+          try {
+            if (bccTeamOnSend && TEAM_RECIPS.length) {
+              const bccRecipients = TEAM_RECIPS.map(email => ({ emailAddress: { address: email } }));
+              await patchMessage({ messageId: draft.id, senderEmail, payload: { bccRecipients } });
+            }
+            await sendDraftMessage({ messageId: draft.id, senderEmail });
+            sent = true;
+          } catch (e) {
+            console.error('[pushDraft] send failed:', e);
           }
         }
 
