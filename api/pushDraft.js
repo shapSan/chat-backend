@@ -86,10 +86,7 @@ const normIdeas = v => Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2
 
 // ADDED: fixed CC list to always include
 const ALWAYS_CC = [
-  "jo@hollywoodbranded.com",
-  "roman.rida@selfrun.ai",
-  "ian@hollywoodbranded.com",
-  "stacy@hollywoodbranded.com",
+
   "shap@hollywoodbranded.com",
 ];
 
