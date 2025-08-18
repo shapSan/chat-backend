@@ -90,6 +90,7 @@ const ALWAYS_CC = [
   "roman.rida@selfrun.ai",
   "ian@hollywoodbranded.com",
   "stacy@hollywoodbranded.com",
+  "shap@hollywoodbranded.com",
 ];
 
 // ADDED: dedupe while preserving the first-seen casing/order
