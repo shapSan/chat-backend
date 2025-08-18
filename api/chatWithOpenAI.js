@@ -50,13 +50,6 @@ const msftTenantId = process.env.MICROSOFT_TENANT_ID;
 const msftClientId = process.env.MICROSOFT_CLIENT_ID;
 const msftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
 
-// Recommendation system feature flags (all default to true if not set)
-const RECS_FIX_MERGE = process.env.RECS_FIX_MERGE !== 'false';
-const RECS_COOLDOWN = process.env.RECS_COOLDOWN !== 'false';
-const RECS_DIVERSIFY = process.env.RECS_DIVERSIFY !== 'false';
-const RECS_JITTER_TARGET = process.env.RECS_JITTER_TARGET !== 'false';
-const RECS_DISCOVER_RATIO = process.env.RECS_DISCOVER_RATIO || '50,30,20';
-
 // Model configuration centralization
 const MODELS = {
   openai: {
@@ -1149,11 +1142,8 @@ async function generateWildcardBrands(synopsis) {
 }
 
 // Helper function to tag and combine brands from different sources
-function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
+function tagAndCombineBrands({ activityBrands, genreBrands, activeBrands, wildcardCategories, synopsis, context }) {
   const brandMap = new Map();
-  
-  // Make function tolerant - accept either activityBrands or synopsisBrands
-  const primaryBrands = activityBrands || synopsisBrands || { results: [] };
   
   // Helper to find relevant meeting/email quote for a brand
   const findBrandContext = (brandName) => {
@@ -1267,17 +1257,14 @@ function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, acti
     return `${brand.category} leader - natural fit for ${genre || 'this'} production`;
   };
   
-  // Process brands with recent activity OR synopsis matches (8-15)
-  if (primaryBrands && primaryBrands.results) {
-    primaryBrands.results.forEach(brand => {
+  // Process brands with recent activity (8)
+  if (activityBrands && activityBrands.results) {
+    activityBrands.results.forEach(brand => {
       const id = brand.id;
       const brandName = brand.properties.brand_name || '';
       const contextData = findBrandContext(brandName);
       
       if (!brandMap.has(id)) {
-        // Determine primary tag based on source
-        const primaryTag = synopsisBrands ? '🎯 Genre Match' : '📧 Recent Activity';
-        
         brandMap.set(id, {
           source: 'hubspot',
           id: brand.id,
@@ -1290,11 +1277,9 @@ function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, acti
           dealsCount: brand.properties.deals_count || '0',
           lastActivity: brand.properties.hs_lastmodifieddate,
           hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-          tags: [primaryTag],
+          tags: ['📧 Recent Activity'],
           relevanceScore: 95,
-          reason: contextData?.rawText || (synopsisBrands ? 
-            `Matches production genre and themes` : 
-            `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`),
+          reason: contextData?.rawText || `Recent engagement - last activity ${new Date(brand.properties.hs_lastmodifieddate).toLocaleDateString()}`,
           insight: contextData // Include structured insight data
         });
       }
@@ -1441,24 +1426,9 @@ function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, acti
   }
   
   // Convert to array and sort by relevance
-  const sortedBrands = Array.from(brandMap.values())
-    .sort((a, b) => b.relevanceScore - a.relevanceScore);
-  
-  // Determine target size with optional jitter
-  let targetSize = 15; // Default
-  
-  if (RECS_JITTER_TARGET && synopsis) {
-    // Simple deterministic jitter based on synopsis content (avoid sessionId issues)
-    const hashCode = synopsis.split('').reduce((acc, char) => {
-      return ((acc << 5) - acc) + char.charCodeAt(0);
-    }, 0);
-    const jitter = (Math.abs(hashCode) % 7) - 3; // -3 to +3
-    targetSize = Math.max(12, Math.min(20, 15 + jitter));
-    console.log(`[DEBUG tagAndCombineBrands] Target size with jitter: ${targetSize}`);
-  }
-  
-  // Return up to targetSize brands (but don't fail if fewer available)
-  return sortedBrands.slice(0, Math.min(targetSize, sortedBrands.length));
+  return Array.from(brandMap.values())
+    .sort((a, b) => b.relevanceScore - a.relevanceScore)
+    .slice(0, 45); // Limit to top 45 (15+15+10+5)
 }
 
 async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, onStep = () => {}) {
@@ -1645,15 +1615,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const combineStep = { type: 'process', text: '🤝 Combining and ranking recommendations...' };
         add(combineStep);
         
-        // FIX: Pass synopsisBrands as activityBrands (primary list)
         const taggedBrands = tagAndCombineBrands({
-          activityBrands: RECS_FIX_MERGE ? synopsisBrands : undefined,
-          synopsisBrands: synopsisBrands, // Also pass as backup
+          synopsisBrands,
           genreBrands,
           activeBrands,
-          wildcardCategories: wildcardBrands,
-          synopsis: search_term,
-          context: supportingContext
+          wildcardCategories: wildcardBrands
         });
 
         // Optional: Get supporting context from meetings/emails
@@ -2292,8 +2258,7 @@ Keep it under 300 words.`;
           return res.status(200).json({
             success: true,
             draftId: draftResult.id,
-            webLink: draftResult.webLink,  // Keep for backward compatibility
-            webLinks: [draftResult.webLink], // Array format for consistency
+            webLink: draftResult.webLink,
             message: 'Draft created successfully in Outlook'
           });
           
