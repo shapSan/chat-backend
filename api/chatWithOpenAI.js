@@ -10,25 +10,24 @@ import { put } from '@vercel/blob';
 
 dotenv.config();
 
-// KV Progress helpers with runId support
-const progKey = (sessionId, runId) => runId ? `progress:${sessionId}:${runId}` : `mcp:${sessionId}`;
+// KV Progress helpers
+const progKey = (id) => `mcp:${id}`;
 
-async function progressInit(sessionId, runId) {
-  const key = progKey(sessionId, runId);
-  await kv.set(key, { steps: [], done: false, runId: runId || null, ts: Date.now() }, { ex: 900 });
+async function progressInit(id) {
+  await kv.set(progKey(id), { steps: [], done: false, ts: Date.now() }, { ex: 900 });
 }
 
-async function progressPush(sessionId, runId, step) {
-  const key = progKey(sessionId, runId);
-  const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null, ts: Date.now() };
+async function progressPush(id, step) {
+  const key = progKey(id);
+  const s = (await kv.get(key)) || { steps: [], done: false, ts: Date.now() };
   s.steps.push({ ...step, timestamp: Date.now() - s.ts });
   if (s.steps.length > 100) s.steps = s.steps.slice(-100);
   await kv.set(key, s, { ex: 900 });
 }
 
-async function progressDone(sessionId, runId) {
-  const key = progKey(sessionId, runId);
-  const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null, ts: Date.now() };
+async function progressDone(id) {
+  const key = progKey(id);
+  const s = (await kv.get(key)) || { steps: [], done: false, ts: Date.now() };
   s.done = true;
   await kv.set(key, s, { ex: 300 });
 }
@@ -1462,7 +1461,7 @@ function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, acti
   return sortedBrands.slice(0, Math.min(targetSize, sortedBrands.length));
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, runId, onStep = () => {}) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, onStep = () => {}) {
   if (!anthropicApiKey) return null;
   
   // Ensure HubSpot is ready before any searches (cold start fix)
@@ -1642,7 +1641,22 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           add(resultStep);
         }
         
-        // Optional: Get supporting context from meetings/emails BEFORE combining
+        // Combine and tag all results
+        const combineStep = { type: 'process', text: '🤝 Combining and ranking recommendations...' };
+        add(combineStep);
+        
+        // FIX: Pass synopsisBrands as activityBrands (primary list)
+        const taggedBrands = tagAndCombineBrands({
+          activityBrands: RECS_FIX_MERGE ? synopsisBrands : undefined,
+          synopsisBrands: synopsisBrands, // Also pass as backup
+          genreBrands,
+          activeBrands,
+          wildcardCategories: wildcardBrands,
+          synopsis: search_term,
+          context: supportingContext
+        });
+
+        // Optional: Get supporting context from meetings/emails
         let supportingContext = { meetings: [], emails: [] };
         if (firefliesApiKey || msftClientId) {
           const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
@@ -1682,244 +1696,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             add(foundStep);
           }
         }
-        
-        // Combine and tag all results with diversification
-        const combineStep = { type: 'process', text: '🤝 Building diverse recommendations...' };
-        add(combineStep);
-        
-        // Target size configuration
-        const TARGET_MIN = 15;
-        const TARGET_MAX = 20;
-        const QUOTAS = { hot: 4, activity: 4, dormant: 4, fit: 5, cold: 2 };
-        
-        // Build pools from our existing searches
-        const pools = {
-          hot: [], // Recent activity brands
-          activity: [], // Synopsis matches
-          dormant: [], // High potential but inactive
-          fit: [], // Genre/vibe matches
-          cold: [] // Wildcard suggestions
-        };
-        
-        // Categorize brands into pools
-        const allBrands = [];
-        
-        // Synopsis brands -> activity pool
-        if (synopsisBrands?.results) {
-          pools.activity.push(...synopsisBrands.results);
-          allBrands.push(...synopsisBrands.results);
-        }
-        
-        // Genre brands -> fit pool
-        if (genreBrands?.results) {
-          pools.fit.push(...genreBrands.results);
-          allBrands.push(...genreBrands.results);
-        }
-        
-        // Active brands -> hot pool
-        if (activeBrands?.results) {
-          pools.hot.push(...activeBrands.results);
-          allBrands.push(...activeBrands.results);
-        }
-        
-        // Detect dormant brands (inactive >90 days but high potential)
-        if (RECS_DIVERSIFY && allBrands.length > 0) {
-          const ninetyDaysAgo = new Date();
-          ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-          
-          const dormantBrands = allBrands.filter(b => {
-            const lastModified = new Date(b.properties?.hs_lastmodifieddate || 0);
-            const partnershipCount = parseInt(b.properties?.partnership_count || 0);
-            const dealsCount = parseInt(b.properties?.deals_count || 0);
-            return lastModified < ninetyDaysAgo && (partnershipCount >= 5 || dealsCount >= 3);
-          });
-          
-          pools.dormant.push(...dormantBrands);
-        }
-        
-        // Wildcard brands -> cold pool
-        if (wildcardBrands && wildcardBrands.length > 0) {
-          pools.cold = wildcardBrands.map((name, i) => ({
-            id: `wildcard_${i}`,
-            name: name,
-            isWildcard: true
-          }));
-        }
-        
-        // Daily seeded shuffle for each pool
-        const today = new Date().toISOString().split('T')[0];
-        const seedBase = `${projectId || 'default'}-${today}`;
-        
-        const seededShuffle = (array, seed) => {
-          const arr = [...array];
-          let hash = 0;
-          for (let i = 0; i < seed.length; i++) {
-            hash = ((hash << 5) - hash) + seed.charCodeAt(i);
-            hash = hash & hash;
-          }
-          for (let i = arr.length - 1; i > 0; i--) {
-            const j = Math.abs(hash) % (i + 1);
-            [arr[i], arr[j]] = [arr[j], arr[i]];
-            hash = ((hash << 5) - hash) + i;
-          }
-          return arr;
-        };
-        
-        // Shuffle each pool with daily seed
-        Object.keys(pools).forEach((poolName, idx) => {
-          pools[poolName] = seededShuffle(pools[poolName], `${seedBase}-${poolName}-${idx}`);
-        });
-        
-        // Get recent brands for cooldown (simple memory using KV)
-        let recentBrandIds = new Set();
-        try {
-          if (RECS_COOLDOWN && projectId) {
-            const recentKey = `recent:${projectId}`;
-            const recentData = await kv.get(recentKey);
-            if (recentData?.lists) {
-              // Count appearances in last 5 lists
-              const brandCounts = {};
-              recentData.lists.slice(-5).forEach(list => {
-                list.forEach(id => {
-                  brandCounts[id] = (brandCounts[id] || 0) + 1;
-                });
-              });
-              // Skip brands shown >2 times
-              Object.entries(brandCounts).forEach(([id, count]) => {
-                if (count > 2) recentBrandIds.add(id);
-              });
-            }
-          }
-        } catch (e) {
-          // Don't fail if KV unavailable
-          console.log('[DEBUG] Cooldown check failed:', e.message);
-        }
-        
-        // Build final list with quotas and deduplication
-        const picks = [];
-        const seenIds = new Set();
-        const seenCompanies = new Set();
-        
-        const addBrand = (brand, poolName) => {
-          const brandId = brand.id || brand.name;
-          const companyName = brand.properties?.parent_company || 
-                             brand.properties?.brand_name || 
-                             brand.name || '';
-          
-          // Skip if duplicate, on cooldown, or same parent company
-          if (seenIds.has(brandId)) return false;
-          if (recentBrandIds.has(brandId)) return false;
-          if (companyName && seenCompanies.has(companyName.toLowerCase())) return false;
-          
-          seenIds.add(brandId);
-          if (companyName) seenCompanies.add(companyName.toLowerCase());
-          
-          picks.push({ brand, poolName });
-          return true;
-        };
-        
-        // First pass: try to fill quotas
-        Object.entries(QUOTAS).forEach(([poolName, quota]) => {
-          const pool = pools[poolName] || [];
-          let added = 0;
-          for (const brand of pool) {
-            if (picks.length >= TARGET_MAX) break;
-            if (added >= quota) break;
-            if (addBrand(brand, poolName)) added++;
-          }
-        });
-        
-        // Backfill if under TARGET_MIN
-        if (picks.length < TARGET_MIN) {
-          const backfillOrder = ['fit', 'dormant', 'cold', 'activity', 'hot'];
-          for (const poolName of backfillOrder) {
-            const pool = pools[poolName] || [];
-            for (const brand of pool) {
-              if (picks.length >= TARGET_MIN) break;
-              addBrand(brand, poolName);
-            }
-            if (picks.length >= TARGET_MIN) break;
-          }
-        }
-        
-        // Transform to final format
-        const taggedBrands = picks.map(({ brand, poolName }) => {
-          const tags = [];
-          let reason = '';
-          
-          // Assign tags based on pool
-          switch(poolName) {
-            case 'hot':
-              tags.push('🔥 This Week', 'Active');
-              reason = `Recent activity - ${brand.properties?.deals_count || 0} active deals`;
-              break;
-            case 'activity':
-              tags.push('🎯 Genre Match', 'Synopsis Match');
-              reason = 'Strong match for production themes';
-              break;
-            case 'dormant':
-              tags.push('💤 Dormant', 'High Potential');
-              reason = `Untapped potential - ${brand.properties?.partnership_count || 0} past partnerships`;
-              break;
-            case 'fit':
-              tags.push('🎭 Creative Fit', 'Vibe Match');
-              reason = 'Excellent creative alignment';
-              break;
-            case 'cold':
-              tags.push('🚀 Cold Outreach', 'Discovery');
-              reason = 'New opportunity worth exploring';
-              break;
-          }
-          
-          // Handle both HubSpot brands and wildcards
-          if (brand.properties) {
-            return {
-              source: 'hubspot',
-              id: brand.id,
-              name: brand.properties.brand_name || '',
-              category: brand.properties.main_category || 'General',
-              subcategories: brand.properties.product_sub_category__multi_ || '',
-              clientStatus: brand.properties.client_status || '',
-              clientType: brand.properties.client_type || '',
-              partnershipCount: brand.properties.partnership_count || '0',
-              dealsCount: brand.properties.deals_count || '0',
-              lastActivity: brand.properties.hs_lastmodifieddate,
-              hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${brand.id}`,
-              tags: tags,
-              relevanceScore: 85 + (poolName === 'hot' ? 10 : poolName === 'activity' ? 5 : 0),
-              reason: reason
-            };
-          } else {
-            return {
-              source: 'suggestion',
-              id: brand.id || `wildcard_${picks.indexOf({ brand, poolName })}`,
-              name: brand.name || brand,
-              category: 'Suggested',
-              tags: tags,
-              relevanceScore: 70,
-              reason: reason,
-              isWildcard: true
-            };
-          }
-        });
-        
-        // Update recent brands list for cooldown
-        try {
-          if (RECS_COOLDOWN && projectId && taggedBrands.length > 0) {
-            const recentKey = `recent:${projectId}`;
-            const recentData = (await kv.get(recentKey)) || { lists: [] };
-            recentData.lists.push(taggedBrands.map(b => b.id));
-            if (recentData.lists.length > 5) {
-              recentData.lists = recentData.lists.slice(-5);
-            }
-            await kv.set(recentKey, recentData, { ex: 86400 * 7 }); // Keep for 7 days
-          }
-        } catch (e) {
-          console.log('[DEBUG] Failed to update recent brands:', e.message);
-        }
-        
-        console.log(`[DEBUG] Final diverse list: ${taggedBrands.length} brands (target: ${TARGET_MIN}-${TARGET_MAX})`);
-        
+
         const finalStep = { type: 'complete', text: `✨ Prepared ${taggedBrands.length} diverse recommendations` };
         add(finalStep);
         
@@ -2408,18 +2185,10 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
   
-  // GET endpoint for progress with runId support
+  // GET endpoint for progress
   if (req.method === 'GET' && req.query.progress === 'true') {
-    const { sessionId, runId } = req.query;
-    if (!sessionId) {
-      return res.status(400).json({ error: 'sessionId required' });
-    }
-    const key = progKey(sessionId, runId);
-    const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null };
-    // Only return steps if runId matches or no runId specified
-    if (runId && s.runId !== runId) {
-      return res.status(200).json({ steps: [], done: false, runId });
-    }
+    const sessionId = req.query.sessionId;
+    const s = (await kv.get(progKey(sessionId))) || { steps: [], done: false };
     return res.status(200).json(s);
   }
   
@@ -2908,7 +2677,7 @@ Keep it under 300 words.`;
         }
       }
       
-      let { userMessage, sessionId, audioData, projectId, projectName, runId } = req.body;
+      let { userMessage, sessionId, audioData, projectId, projectName } = req.body;
 
       if (userMessage && userMessage.length > 5000) {
         userMessage = userMessage.slice(0, 5000) + "…";
@@ -2921,9 +2690,9 @@ Keep it under 300 words.`;
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      // Initialize progress tracking for this session with runId
-      await progressInit(sessionId, runId);
-      await progressPush(sessionId, runId, { type: 'info', text: '🔎 Routing request...' });
+      // Initialize progress tracking for this session
+      await progressInit(sessionId);
+      await progressPush(sessionId, { type: 'info', text: '🔎 Routing request...' });
 
       const projectConfig = getProjectConfig(projectId);
       const { baseId, chatTable, knowledgeTable } = projectConfig;
@@ -3064,8 +2833,7 @@ Keep it under 300 words.`;
               conversationContext,
               lastProductionContext,
               projectName, // Pass the known name from the request body
-              runId, // Pass runId for progress tracking
-              (step) => progressPush(sessionId, runId, step)
+              (step) => progressPush(sessionId, step)
           );
 
           if (claudeResult) {
@@ -3189,7 +2957,7 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               ).catch(err => console.error('[DEBUG] Airtable update error:', err));
 
               // The final response now includes mcpSteps for the frontend
-              await progressDone(sessionId, runId); // Mark progress as done
+              await progressDone(sessionId); // Mark progress as done
               return res.json({
                   reply: aiReply,
                   structuredData: structuredData,
@@ -3205,13 +2973,13 @@ Keep the tone helpful and strategic, focusing on actionable insights.`;
               });
           } else {
               console.error('[DEBUG] No AI reply received');
-              await progressDone(sessionId, runId); // Mark progress as done even on error
+              await progressDone(sessionId); // Mark progress as done even on error
               return res.status(500).json({ error: 'No text reply received.' });
           }
         } catch (error) {
           console.error("[CRASH DETECTED IN HANDLER]:", error);
           console.error("[STACK TRACE]:", error.stack);
-          await progressDone(sessionId, runId); // Mark progress as done even on crash
+          await progressDone(sessionId); // Mark progress as done even on crash
           return res.status(500).json({ 
             error: 'Internal server error', 
             details: error.message,
