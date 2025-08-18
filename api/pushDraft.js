@@ -84,6 +84,30 @@ const isHttp = u => typeof u==='string' && /^https?:\/\//i.test(u) && u.length <
 const trim = (s,n=1400)=>String(s||'').slice(0,n);
 const normIdeas = v => Array.isArray(v) ? v : v ? String(v).split(/\n|•|- |\u2022/).map(x=>x.trim()).filter(Boolean) : [];
 
+// ADDED: fixed CC list to always include
+const ALWAYS_CC = [
+  "jo@hollywoodbranded.com",
+  "roman.rida@selfrun.ai",
+  "ian@hollywoodbranded.com",
+  "stacy@hollywoodbranded.com",
+];
+
+// ADDED: dedupe while preserving the first-seen casing/order
+function dedupeEmails(list = []) {
+  const seen = new Set();
+  const out = [];
+  for (const v of list) {
+    const email = typeof v === "string" ? v.trim() : "";
+    if (!email) continue;
+    const key = email.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(email);
+    }
+  }
+  return out;
+}
+
 // classify any asset to a sensible type
 function classifyAsset(item={}) {
   const url = String(item.url||'');
@@ -225,7 +249,11 @@ export default async function handler(req, res) {
     const vibe = body.vibe ?? pd.vibe ?? "";
     const notes = body.notes ?? pd.notes ?? "";
     const toRecipients = Array.isArray(body.to) && body.to.length ? body.to.slice(0, 10) : ["shap@hollywoodbranded.com"];
-    const ccRecipients = Array.isArray(body.cc) ? body.cc.slice(0, 10) : [];
+    
+    // ADDED: merge request CCs + always-CC, dedupe, cap 10
+    const requestedCC = Array.isArray(body.cc) ? body.cc.slice(0, 10) : [];
+    const ccRecipients = dedupeEmails([...requestedCC, ...ALWAYS_CC]).slice(0, 10);
+
     const senderEmail = body.senderEmail || "shap@hollywoodbranded.com";
 
     if (!brandsRaw.length) return res.status(400).json({ error: "No brands provided" });
@@ -278,7 +306,7 @@ export default async function handler(req, res) {
           subject,
           htmlBody,
           to: toRecipients,
-          cc: ccRecipients,
+          cc: ccRecipients, // ADDED: ensure our merged CCs are applied
           senderEmail,
         });
         results.push({ brand: b.name || "Brand", subject, webLink: draft.webLink || null });
