@@ -170,9 +170,9 @@ const o365API = {
   },
   
   // --- O365 EMAIL SEARCH with RAOP handling and precision queries ---
-  async searchEmails(terms, options = {}) {
+  async searchEmails(query, options = {}) {
     try {
-      console.log('[DEBUG o365API.searchEmails] Starting search with terms:', terms);
+      console.log('[DEBUG o365API.searchEmails] Starting search for:', query);
       console.log('[DEBUG o365API.searchEmails] Options:', options);
       
       if (!msftClientId || !msftClientSecret || !msftTenantId) {
@@ -186,27 +186,35 @@ const o365API = {
       const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
       console.log('[DEBUG o365API.searchEmails] Searching emails for user:', userEmail);
       
-      // Build precision AQS queries based on production context and terms
-      const searchQueries = this.buildPrecisionQueries(terms, options.productionContext);
-      console.log('[DEBUG o365API.searchEmails] Precision queries:', searchQueries);
+      // Simplified: just use terms, no sentences
+      let searchTerms = [];
+      if (Array.isArray(query)) {
+        searchTerms = uniqShort(query, 7);
+      } else {
+        searchTerms = uniqShort(String(query || '').split(/[,\|]/), 7);
+      }
       
-      if (searchQueries.length === 0) {
-        console.log('[DEBUG o365API.searchEmails] No valid queries could be built');
-        return { emails: [], o365Status: 'no_entities', userEmail };
+      console.log('[DEBUG o365API.searchEmails] Search terms:', searchTerms);
+      
+      // If no terms, return empty
+      if (searchTerms.length === 0) {
+        console.log('[DEBUG o365API.searchEmails] No search terms, returning empty');
+        return { emails: [], o365Status: 'ok', userEmail };
       }
       
       const results = [];
-      const top = 5; // Reduced per-query limit for precision
+      const top = 5; // Per-query limit
       
       // Execute queries in parallel with timeout
-      const queryPromises = searchQueries.map(async (searchQuery) => {
+      const queryPromises = searchTerms.map(async (term) => {
+        const searchQuery = `"${term}"`; // Simple quoted term
         const url = new URL(`${this.baseUrl}/users/${encodeURIComponent(userEmail)}/messages`);
         url.searchParams.set('$top', String(top));
         url.searchParams.set('$search', searchQuery);
         url.searchParams.set('$select', 'id,subject,from,receivedDateTime,bodyPreview,webLink');
         url.searchParams.set('$count', 'true');
         
-        console.log(`[DEBUG o365API.searchEmails] Query: "${searchQuery}"`);
+        console.log(`[DEBUG o365API.searchEmails] Query: ${searchQuery}`);
         
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
@@ -281,6 +289,7 @@ const o365API = {
       
       console.log(`[DEBUG o365API.searchEmails] Returning ${sortedEmails.length} emails`);
       
+      // success path
       return { emails: sortedEmails, o365Status: 'ok', userEmail };
       
     } catch (error) {
@@ -289,60 +298,10 @@ const o365API = {
     }
   },
   
-  // New helper method to build precision AQS queries
-  buildPrecisionQueries(terms, ctx) {
-    const queries = [];
-    const dealWords = '(brand OR sponsorship OR licensing OR placement OR integration OR co-promo OR partnership)';
-    
-    // Extract clean values from context
-    const title = ctx?.title && ctx.title.length > 2 ? `"${ctx.title}"` : null;
-    const dist = ctx?.distributor && ctx.distributor.length > 2 ? ctx.distributor : null;
-    const topTalent = (ctx?.talent || [])
-      .filter(t => t && t.length > 2)
-      .slice(0, 3)
-      .map(t => `"${t}"`);
-    
-    // Build queries in priority order
-    if (title) {
-      queries.push(title); // Query 1: Exact title
-    }
-    
-    if (title && dist) {
-      queries.push(`${title} AND ${dist}`); // Query 2: Title + Distributor
-    }
-    
-    if (dist) {
-      queries.push(`${dist} AND ${dealWords}`); // Query 3: Distributor + deal words
-    }
-    
-    if (topTalent.length > 0) {
-      if (dist) {
-        queries.push(`(${topTalent.join(' OR ')}) AND ${dist}`); // Query 4: Talent + Distributor
-      } else {
-        queries.push(`(${topTalent.join(' OR ')}) AND ${dealWords}`); // Query 4 alt: Talent + deal words
-      }
-    }
-    
-    // Fallback if no structured data but we have terms
-    if (queries.length === 0 && Array.isArray(terms) && terms.length > 0) {
-      const cleanTerms = cleanEntityTerms(terms).slice(0, 2);
-      if (cleanTerms.length > 0) {
-        const fallbackQuery = cleanTerms
-          .map(t => t.includes(' ') ? `"${t}"` : t)
-          .join(' AND ');
-        queries.push(fallbackQuery);
-      }
-    }
-    
-    // Final safety net - at least search for deal words
-    if (queries.length === 0) {
-      queries.push(dealWords);
-    }
-    
-    // Limit to 4 queries, each under 150 chars
-    return queries
-      .filter(q => q && q.length < 150)
-      .slice(0, 4);
+  // Remove the old buildPrecisionQueries method since logic is now inline
+  buildPrecisionQueries(query, options = {}) {
+    // This method is deprecated - logic moved inline to searchEmails
+    return [];
   },
   
   async createDraft(subject, body, to, options = {}) {
@@ -492,56 +451,20 @@ async function searchFireflies(query, options = {}) {
     
     console.log('[DEBUG searchFireflies] Entity search terms:', searchTerms);
     
-    // First try: Combined OR query with top 3 entities
-    if (searchTerms.length > 0) {
-      const topEntities = searchTerms.slice(0, 3);
-      const orQuery = topEntities.map(term => {
-        // Quote multi-word terms
-        if (term.includes(' ')) {
-          return `"${term}"`;
-        }
-        return term;
-      }).join(' OR ');
-      
-      console.log('[DEBUG searchFireflies] Combined OR query:', orQuery);
-      
-      const filters = {
-        keyword: orQuery,
-        limit: 10 // Increased from 3
-      };
-      
-      if (options.fromDate) {
-        filters.fromDate = options.fromDate;
-      }
-      
-      const results = await firefliesAPI.searchTranscripts(filters);
-      
-      if (results && results.length > 0) {
-        console.log(`[DEBUG searchFireflies] Found ${results.length} results from combined OR query`);
-        return {
-          transcripts: results,
-          firefliesStatus: 'ok',
-          meetingsMode: 'entity_search'
-        };
-      }
-      
-      console.log('[DEBUG searchFireflies] No results from combined query, trying individual terms');
-    }
-    
-    // Second try: Search for each term individually if combined query failed
+    // Search for each term individually (no OR query, no extra quotes)
     let allTranscripts = new Map();
     
     if (searchTerms.length > 0) {
-      for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
+      for (const term of searchTerms.slice(0, 10)) { // Limit to 10 terms
         if (!term || String(term).trim() === '') continue;
         
         try {
-          const safeTerm = String(term).trim();
-          console.log(`[DEBUG searchFireflies] Searching for individual term: "${safeTerm}"`);
+          const safeTerm = String(term).trim(); // No wrapping quotes
+          console.log(`[DEBUG searchFireflies] Searching for term: "${safeTerm}"`);
           
           const filters = {
             keyword: safeTerm,
-            limit: 10 // Increased from 3
+            limit: options.limit || 10
           };
           
           if (options.fromDate) {
@@ -563,7 +486,7 @@ async function searchFireflies(query, options = {}) {
     const individualResults = Array.from(allTranscripts.values());
     
     if (individualResults.length > 0) {
-      console.log(`[DEBUG searchFireflies] Found ${individualResults.length} total unique transcripts from individual searches`);
+      console.log(`[DEBUG searchFireflies] Found ${individualResults.length} total unique transcripts`);
       return {
         transcripts: individualResults,
         firefliesStatus: 'ok',
@@ -674,6 +597,38 @@ function withTimeout(promise, ms, defaultValue) {
     clearTimeout(timeoutId);
     return result;
   });
+}
+
+// Utility functions for search term normalization
+function normalizeTerm(t) {
+  return String(t || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+}
+
+function uniqShort(list, max) {
+  const out = [];
+  const seen = new Set();
+  for (const t of list.map(normalizeTerm)) {
+    if (!t) continue;
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/**
+ * Merges keywords with fields. No sentences. No boolean. No quotes. 7-term budget for comms.
+ */
+function buildSearchTerms({ title, distributor, talent = [], keywords = [] }) {
+  const fieldEntities = [title, distributor, ...talent.slice(0, 3)].filter(Boolean);
+  const base = Array.isArray(keywords) ? keywords : String(keywords || '').split(/[,\|]/);
+  // comms (Fireflies/Outlook) = entities first, then keywords
+  const commsTerms = uniqShort([...fieldEntities, ...base], 7);
+  // hubspot = keywords first, then title
+  const hubspotTerms = uniqShort([...base, title].filter(Boolean), 8);
+  return { commsTerms, hubspotTerms };
 }
 
 // Helper function to get conversation history for a session
@@ -2213,80 +2168,8 @@ function extractLastProduction(conversation) {
   return lastProduction;
 }
 
-// --- Category parsing helpers (DROP-IN, safe) ---
-const CATEGORY_SYNONYMS = {
-  cosmetics: ['cosmetics','beauty','makeup','skincare','fragrance'],
-  fashion: ['fashion','apparel','clothing','luxury','handbag','shoe','jewelry'],
-  sports: ['sports','athletic','fitness','sporting goods'],
-  automotive: ['auto','automotive','car','vehicle','ev'],
-  technology: ['tech','technology','electronics','gadgets','devices'],
-  beverage: ['beverage','drink','soda','coffee','energy drink','water'],
-  food: ['food','snack','quick-serve','restaurant','qsr','cpg'],
-  travel: ['travel','airline','hotel','hospitality','tourism','luggage'],
-  home_decor: ['home','home decor','furniture','bedding','appliance'],
-  finance: ['finance','bank','credit card','fintech','insurance'],
-  telecom: ['telecom','wireless','carrier','mobile','broadband'],
-  gaming: ['gaming','videogame','esports','console','pc gaming'],
-  health_wellness: ['health','wellness','supplement','vitamin'],
-  outdoors: ['outdoor','outdoors','camping','hiking']
-};
-
-// Map to your HubSpot `main_category` values (adjust if your picklist differs)
-const HUBSPOT_CATEGORY_CANONICAL = {
-  cosmetics: 'Beauty',
-  fashion: 'Fashion',
-  sports: 'Sports',
-  automotive: 'Automotive',
-  technology: 'Technology',
-  beverage: 'Beverage',
-  food: 'Food & Beverage',
-  travel: 'Travel',
-  home_decor: 'Home Decor',
-  finance: 'Financial Services',
-  telecom: 'Telecom',
-  gaming: 'Gaming',
-  health_wellness: 'Health & Wellness',
-  outdoors: 'Outdoors'
-};
-
-function parseCategoryAsk(text) {
-  if (!text) return { normalizedCats: [] };
-  const lower = String(text).toLowerCase();
-  const found = new Set();
-  for (const [canon, aliases] of Object.entries(CATEGORY_SYNONYMS)) {
-    if (aliases.some(a => lower.includes(a))) found.add(canon);
-  }
-  const normalizedCats = Array.from(found)
-    .map(c => HUBSPOT_CATEGORY_CANONICAL[c])
-    .filter(Boolean);
-  return { normalizedCats };
-}
-
-
 async function routeUserIntent(userMessage, conversationContext, lastProductionContext) {
   if (!openAIApiKey) return { tool: 'answer_general_question' };
-// quick category ask path (non-breaking)
-const catProbe = parseCategoryAsk(userMessage);
-if (catProbe.normalizedCats.length > 0) {
-  return { tool: 'find_brands', args: { mode: 'category', categories: catProbe.normalizedCats, search_term: userMessage } };
-}
-
-// pure general discovery: "find brands" (no project/context)
-if (/^\s*find\s+(general\s+)?brands\s*$/i.test(userMessage)) {
-  return { tool: 'find_brands', args: { mode: 'general' } };
-}
-
-  // Early detection of category-style requests
-  const catAsk = parseCategoryAsk(userMessage);
-  if (catAsk) {
-    return {
-      tool: 'find_brands',
-      args: { 
-        search_term: catAsk.rawCats.join(' '), 
-        project_hint: catAsk.project || null 
-      }
-    };
-  }
 
   const tools = [
     {
@@ -2802,7 +2685,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
   try {
     switch (intent.tool) {
       case 'find_brands': {
-        const { search_term: rawSearchTerm, project_hint } = intent.args;
+        const { search_term: rawSearchTerm } = intent.args;
         
         // Detect structured productions and clean operational tokens
         const hasStructuredFields = /Synopsis:|Distributor:|Talent:|Location:|Release|Date:|Shoot/i.test(userMessage);
@@ -2812,188 +2695,8 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         let search_term = rawSearchTerm || userMessage;
         search_term = search_term.replace(operationalJunk, '').trim();
         
-        // Detect category-mode (user listed categories instead of a synopsis)
-        const rawWords = search_term.split(/[\s,]+/).filter(Boolean);
-        const normalizedCats = normalizeCategories(rawWords);
-        
-        // Use project hint from router or extract from context
-        const extractedTitleOrHint = knownProjectName || project_hint || null;
-
-        // NEW: category or general discovery (safe, single call, same return shape as short query)
-if (intent.args?.mode === 'category' && Array.isArray(intent.args.categories) && intent.args.categories.length) {
-  const startStep = { type: 'start', text: `🔍 Searching categories: ${intent.args.categories.join(', ')}...` };
-  add(startStep);
-
-  const brandsData = await hubspotAPI.searchBrands({
-    limit: 15,
-    filterGroups: [{
-      filters: [{ propertyName: 'main_category', operator: 'IN', values: intent.args.categories }]
-    }],
-    sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
-  });
-
-  const completeStep = { type: 'complete', text: `✅ Found ${brandsData.results.length} brands in categories.` };
-  add(completeStep);
-
-  return {
-    organizedData: {
-      dataType: 'BRAND_SEARCH_RESULTS',
-      searchQuery: `Categories: ${intent.args.categories.join(', ')}`,
-      brandSuggestions: brandsData.results.map(b => ({
-        id: b.id,
-        name: b.properties.brand_name || '',
-        category: b.properties.main_category || 'General',
-        subcategories: b.properties.product_sub_category__multi_ || '',
-        clientStatus: b.properties.client_status || '',
-        partnershipCount: b.properties.partnership_count || '0',
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`
-      }))
-    },
-    mcpThinking,
-    usedMCP: true
-  };
-}
-
-if (intent.args?.mode === 'general') {
-  const startStep = { type: 'start', text: '🔍 General brand discovery...' };
-  add(startStep);
-
-  const brandsData = await hubspotAPI.searchBrands({
-    limit: 15,
-    sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
-  });
-
-  const completeStep = { type: 'complete', text: `✅ Found ${brandsData.results.length} brands.` };
-  add(completeStep);
-
-  return {
-    organizedData: {
-      dataType: 'BRAND_SEARCH_RESULTS',
-      searchQuery: 'General discovery',
-      brandSuggestions: brandsData.results.map(b => ({
-        id: b.id,
-        name: b.properties.brand_name || '',
-        category: b.properties.main_category || 'General',
-        subcategories: b.properties.product_sub_category__multi_ || '',
-        clientStatus: b.properties.client_status || '',
-        partnershipCount: b.properties.partnership_count || '0',
-        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`
-      }))
-    },
-    mcpThinking,
-    usedMCP: true
-  };
-}
-
-        // Route based on what we detected
-        if (search_term.length < 80 && normalizedCats.length > 0) {
-          // CATEGORY MODE: use HubSpot filters for category-based search
-          const startStep = { type: 'start', text: `🔍 Finding brands in categories: ${normalizedCats.join(', ')}` };
-          add(startStep);
-          
-          // Search by categories
-          const brandsData = await hubspotAPI.searchBrands({
-            limit: 15,
-            filterGroups: [{
-              filters: [
-                { propertyName: 'main_category', operator: 'IN', values: normalizedCats }
-              ]
-            }],
-            sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
-          });
-          
-          // Also pull some active big-budget clients
-          const activeBrands = await withTimeout(
-            hubspotAPI.searchBrands({
-              limit: 10,
-              filterGroups: [{
-                filters: [
-                  { propertyName: 'client_status', operator: 'IN', values: ['Active', 'Contract'] },
-                  { propertyName: 'deals_count', operator: 'GTE', value: '3' }
-                ]
-              }],
-              sorts: [{ propertyName: 'partnership_count', direction: 'DESCENDING' }]
-            }),
-            5000,
-            { results: [] }
-          );
-          
-          // Build search entities for communications
-          const entities = buildSearchEntities({
-            projectName: extractedTitleOrHint,
-            categories: normalizedCats,
-            distributor: null, // Could parse from message if needed
-            talent: []        // Could parse from message if needed
-          });
-          
-          let supportingContext = { meetings: [], emails: [], emailStatus: 'ok', meetingsMode: 'entity_search' };
-          
-          if (entities.length > 0 && (firefliesApiKey || msftClientId)) {
-            const contextStep = { type: 'search', text: `📧 Checking communications for: ${entities.slice(0, 3).join(' | ')}...` };
-            add(contextStep);
-            
-            const [firefliesRes, emailRes] = await Promise.allSettled([
-              firefliesApiKey ? 
-                withTimeout(searchFireflies(entities, { limit: 10 }), 5000, { transcripts: [] }) : 
-                Promise.resolve({ transcripts: [] }),
-              msftClientId ? 
-                withTimeout(o365API.searchEmails(entities, { 
-                  days: 90, 
-                  limit: 12,
-                  productionContext: { title: extractedTitleOrHint, distributor: null, talent: [] }
-                }), 5000, { emails: [], o365Status: 'timeout' }) : 
-                Promise.resolve({ emails: [], o365Status: 'disabled' })
-            ]);
-            
-            const firefliesData = firefliesRes.status === 'fulfilled' ? firefliesRes.value : { transcripts: [] };
-            const emailObj = emailRes.status === 'fulfilled' ? emailRes.value : { emails: [], o365Status: 'error' };
-            
-            supportingContext = {
-              meetings: firefliesData.transcripts || [],
-              emails: emailObj.emails || [],
-              emailStatus: emailObj.o365Status || 'ok',
-              emailMailbox: emailObj.userEmail || 'unknown',
-              meetingsMode: firefliesData.meetingsMode || 'entity_search'
-            };
-            
-            if (supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) {
-              const foundStep = { type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` };
-              add(foundStep);
-            }
-            
-            if (supportingContext.emailStatus === 'forbidden_raop') {
-              const raopStep = { type: 'info', text: `ℹ️ Email search blocked by tenant policy` };
-              add(raopStep);
-            }
-          }
-          
-          // Combine results using existing tagger
-          const combined = tagAndCombineBrands({
-            synopsisBrands: { results: brandsData.results || [] },
-            genreBrands: { results: [] },
-            activeBrands: activeBrands || { results: [] },
-            wildcardCategories: [], // No wildcards in category mode
-            synopsis: search_term,
-            context: supportingContext
-          });
-          
-          const completeStep = { type: 'complete', text: `✨ Prepared ${combined.length} category-based recommendations` };
-          add(completeStep);
-          
-          return {
-            organizedData: {
-              dataType: 'BRAND_RECOMMENDATIONS',
-              productionContext: search_term,
-              projectName: extractedTitleOrHint,
-              brandSuggestions: combined,
-              supportingContext: supportingContext,
-              searchMode: 'category' // Flag for frontend
-            },
-            mcpThinking,
-            usedMCP: true
-          };
-          
-        } else if (hasStructuredFields || search_term.includes('Synopsis:')) {
+        // Route based on structure detection, not just length
+        if (hasStructuredFields || search_term.includes('Synopsis:')) {
           // Full "Four Lists" Synopsis Search for structured productions
           const synopsisStep = { type: 'start', text: '🎬 Structured production detected. Building diverse recommendations...' };
           add(synopsisStep);
@@ -3051,11 +2754,31 @@ if (intent.args?.mode === 'general') {
             }
           };
           
+          // Build unified search terms for all systems
+          const titleForTerms = extractedTitle || knownProjectName || projectName || '';
+          let distributorForTerms = ''; // Extract if available from search_term
+          const talentForTerms = []; // Extract if available from search_term
+          
+          // Try to extract distributor from synopsis
+          if (search_term.toLowerCase().includes('netflix')) distributorForTerms = 'Netflix';
+          else if (search_term.toLowerCase().includes('universal')) distributorForTerms = 'Universal';
+          else if (search_term.toLowerCase().includes('disney')) distributorForTerms = 'Disney';
+          else if (search_term.toLowerCase().includes('warner')) distributorForTerms = 'Warner';
+          
+          const { commsTerms, hubspotTerms } = buildSearchTerms({
+            title: titleForTerms,
+            distributor: distributorForTerms,
+            talent: talentForTerms,
+            keywords: synopsisKeywords ? synopsisKeywords.split(' ') : []
+          });
+          
+          console.log('[DEBUG] Unified search terms - HubSpot:', hubspotTerms, 'Comms:', commsTerms);
+          
           const [synopsisBrands, genreBrands, activeBrands, wildcardBrands] = await Promise.all([
-            // List 1: Synopsis-matched brands using extracted keywords (15)
+            // List 1: Synopsis-matched brands using unified keywords
             withTimeout(
               searchBrandsWithRetry({
-                query: synopsisKeywords || search_term.slice(0, 100),
+                query: hubspotTerms.join(' '),
                 limit: 15
               }),
               8000,
@@ -3119,41 +2842,15 @@ if (intent.args?.mode === 'general') {
             const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
             add(contextStep);
             
-            // Parse production fields robustly (no LLM needed)
-            const productionFields = parseProductionFields(search_term, extractedTitle);
-            console.log('[DEBUG comms] Parsed production fields:', productionFields);
-            
-            // Build clean entity terms for searching
-            const contextTerms = [
-              productionFields.title,
-              productionFields.distributor,
-              ...(productionFields.talent || [])
-            ].filter(Boolean);
-            
-            const cleanTerms = cleanEntityTerms(contextTerms);
-            console.log('[DEBUG comms] Clean entity terms:', cleanTerms);
-            
-            // If no clean terms, try extracting from synopsis
-            if (cleanTerms.length === 0 && search_term.length > 20) {
-              const extractedKeywords = await extractKeywordsForContextSearch(search_term);
-              if (extractedKeywords && extractedKeywords.length > 0) {
-                cleanTerms.push(...cleanEntityTerms(extractedKeywords));
-              }
-            }
-            
-            console.log('[DEBUG comms] Final search terms:', cleanTerms);
+            console.log('[DEBUG comms] Searching for supporting context...');
+            console.log('[DEBUG comms] Using unified terms:', commsTerms);
             
             const [firefliesRes, emailRes] = await Promise.allSettled([
-              firefliesApiKey && cleanTerms.length > 0 ? 
-                withTimeout(searchFireflies(cleanTerms, { limit: 10 }), 5000, { transcripts: [] }) : 
-                Promise.resolve({ transcripts: [] }),
-              msftClientId && cleanTerms.length > 0 ? 
-                withTimeout(o365API.searchEmails(cleanTerms, { 
-                  days: 90, 
-                  limit: 12,
-                  productionContext: productionFields 
-                }), 6000, { emails: [], o365Status: 'timeout' }) : 
-                Promise.resolve({ emails: [], o365Status: cleanTerms.length === 0 ? 'no_entities' : 'no_credentials' })
+              firefliesApiKey ? withTimeout(searchFireflies(commsTerms, { limit: 10 }), 5000, { transcripts: [] }) : Promise.resolve({ transcripts: [] }),
+              msftClientId ? withTimeout(o365API.searchEmails(commsTerms, { 
+                days: 90, 
+                limit: 12
+              }), 6000, { emails: [], o365Status: 'timeout' }) : Promise.resolve({ emails: [], o365Status: 'no_credentials' })
             ]);
             
             // Handle Fireflies result
@@ -3166,6 +2863,17 @@ if (intent.args?.mode === 'general') {
             const emailResult = emailRes.status === 'fulfilled' ? emailRes.value : { emails: [], o365Status: 'error' };
             if (emailRes.status === 'rejected') {
               console.log('[DEBUG comms] O365 context search failed:', emailRes.reason);
+            }
+            
+            // Add email query count progress
+            if (emailResult.o365Status === 'ok' || emailResult.o365Status === 'forbidden_raop') {
+              const emailQueryStep = { 
+                type: 'search', 
+                text: `✉️ Email search: ${emailResult.emails?.length || 0} results`,
+                status: emailResult.o365Status,
+                runId 
+              };
+              add(emailQueryStep);
             }
             
             supportingContext = {
@@ -3188,9 +2896,6 @@ if (intent.args?.mode === 'general') {
             if (supportingContext.emailStatus === 'forbidden_raop') {
               const raopStep = { type: 'info', text: `ℹ️ Email search blocked by tenant policy for ${supportingContext.emailMailbox}` };
               add(raopStep);
-            } else if (supportingContext.emailStatus === 'no_entities') {
-              const noEntitiesStep = { type: 'info', text: `ℹ️ No searchable entities found in production` };
-              add(noEntitiesStep);
             }
           }
           
@@ -3312,20 +3017,17 @@ if (intent.args?.mode === 'general') {
           const seenCompanies = new Set();
           const poolPicks = { hot: [], activity: [], dormant: [], fit: [], cold: [], novel: [] };
           
-          const addBrand = (brand, poolName, isNovel = false, ignoreCooldown = false, allowSameCompany = false) => {
+          const addBrand = (brand, poolName, isNovel = false) => {
             const brandId = brand.id || brand.name;
             const companyName = brand.properties?.parent_company || 
                                brand.properties?.brand_name || 
                                brand.name || '';
             
-            // Skip if duplicate
+            // Skip if duplicate, on cooldown, or same parent company
             if (seenIds.has(brandId)) return false;
-            // Skip if on cooldown (unless ignoring)
-            if (!ignoreCooldown && recentBrandIds.has(brandId) && !isNovel) return false;
-            // Skip if same parent company (unless allowing)
-            if (!allowSameCompany && companyName && seenCompanies.has(companyName.toLowerCase())) return false;
+            if (recentBrandIds.has(brandId) && !isNovel) return false;
+            if (companyName && seenCompanies.has(companyName.toLowerCase())) return false;
             
-            // Record the brand
             seenIds.add(brandId);
             if (companyName) seenCompanies.add(companyName.toLowerCase());
             
@@ -3336,49 +3038,50 @@ if (intent.args?.mode === 'general') {
             return true;
           };
           
-          // Log pool sizes for debugging
-          add({
-            type: 'pool',
-            stage: 'sizes',
-            pools: {
-              hot: pools.hot.length,
-              activity: pools.activity.length,
-              fit: pools.fit.length,
-              dormant: pools.dormant.length,
-              cold: pools.cold.length
-            },
-            runId
-          });
-          
-          // First pass: try to fill quotas with constraints
+          // First pass: try to fill quotas
           Object.entries(QUOTAS).forEach(([poolName, quota]) => {
             const pool = pools[poolName] || [];
             let added = 0;
+            let skippedCooldown = 0;
             const pickedIds = [];
             
             for (const brand of pool) {
               if (picks.length >= TARGET_MAX) break;
               if (added >= quota) break;
+              
+              const brandId = brand.id || brand.name;
+              const companyName = brand.properties?.parent_company || 
+                                 brand.properties?.brand_name || 
+                                 brand.name || '';
+              
+              // Track cooldown skips
+              if (recentBrandIds.has(brandId)) {
+                skippedCooldown++;
+                continue;
+              }
+              
               if (addBrand(brand, poolName)) {
                 added++;
                 pickedIds.push(brand.id || brand.name);
               }
             }
             
-            // Log structured pool selection
+            // Log structured pool selection with skip count
             add({
               type: 'pool',
               stage: 'select',
               pool: poolName,
               pickedCount: added,
+              skippedCooldown: skippedCooldown,
               pickedIds: pickedIds,
               runId
             });
           });
           
-          // First backfill: if under TARGET_MIN with constraints
+          // Backfill if under TARGET_MIN
           if (picks.length < TARGET_MIN) {
             const backfillOrder = ['fit', 'dormant', 'cold', 'activity', 'hot'];
+            let backfillCount = 0;
             
             for (const poolName of backfillOrder) {
               const pool = pools[poolName] || [];
@@ -3387,7 +3090,7 @@ if (intent.args?.mode === 'general') {
               for (const brand of pool) {
                 if (picks.length >= TARGET_MIN) break;
                 if (addBrand(brand, poolName)) {
-                  // Successfully added
+                  backfillCount++;
                 }
               }
               
@@ -3405,34 +3108,37 @@ if (intent.args?.mode === 'general') {
             }
           }
           
-          // Second backfill: if STILL under TARGET_MIN, relax ALL constraints
+          // Force backfill phase - guarantee minimum even with cooldown
           if (picks.length < TARGET_MIN) {
-            console.log(`[DEBUG] Second backfill needed - only ${picks.length} brands, need ${TARGET_MIN}`);
-            const backfillOrder = ['fit', 'activity', 'hot', 'dormant', 'cold'];
+            const before = picks.length;
+            const order = ['hot', 'fit', 'activity', 'dormant', 'cold'];
             
-            for (const poolName of backfillOrder) {
-              const pool = pools[poolName] || [];
-              
-              for (const brand of pool) {
+            // force-add helper that ignores cooldown/company-dedupe
+            const forceAdd = (brand, poolName) => {
+              const id = brand.id || brand.name;
+              if (seenIds.has(id)) return false; // still avoid exact dupes
+              seenIds.add(id);
+              picks.push({ brand, poolName });
+              poolPicks[poolName] = poolPicks[poolName] || [];
+              poolPicks[poolName].push(brand);
+              return true;
+            };
+            
+            for (const poolName of order) {
+              for (const brand of pools[poolName] || []) {
                 if (picks.length >= TARGET_MIN) break;
-                // Try with ALL constraints relaxed
-                if (addBrand(brand, poolName, true, true, true)) {
-                  console.log(`[DEBUG] Added brand with relaxed constraints from ${poolName} pool`);
-                }
+                forceAdd(brand, poolName);
               }
-              
               if (picks.length >= TARGET_MIN) break;
             }
             
-            // Log the emergency backfill
-            if (picks.length > poolPicks.hot.length + poolPicks.activity.length + poolPicks.fit.length + poolPicks.dormant.length + poolPicks.cold.length - poolPicks.novel.length) {
-              add({
-                type: 'pool',
-                stage: 'emergency_backfill',
-                addedCount: picks.length - (poolPicks.hot.length + poolPicks.activity.length + poolPicks.fit.length + poolPicks.dormant.length + poolPicks.cold.length - poolPicks.novel.length),
-                runId
-              });
-            }
+            add({ 
+              type: 'pool', 
+              stage: 'force_backfill', 
+              added: picks.length - before, 
+              finalCount: picks.length,
+              runId 
+            });
           }
           
           // Calculate final breakdown
