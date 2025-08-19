@@ -452,8 +452,13 @@ async function searchFireflies(query, options = {}) {
     let meetingsMode = 'entity_search';
     
     if (Array.isArray(query)) {
-      // Use provided entities
-      searchTerms = query.filter(term => term && String(term).trim() !== '');
+      // Use provided entities, filter out generic terms
+      searchTerms = query.filter(term => {
+        const termLower = String(term).toLowerCase().trim();
+        // Filter out generic/demographic terms
+        const genericTerms = ['millennial', 'paris', 'luxury', 'thriller', 'drama', 'comedy', 'action', 'romance'];
+        return term && termLower !== '' && !genericTerms.includes(termLower);
+      });
     } else if (typeof query === 'string' && query.trim()) {
       // Extract entities from query
       const extractedTerms = await extractKeywordsForContextSearch(query);
@@ -462,14 +467,22 @@ async function searchFireflies(query, options = {}) {
     
     console.log('[DEBUG searchFireflies] Entity search terms:', searchTerms);
     
-    // First try: OR query with top entities
+    // First try: Combined OR query with top 3 entities
     if (searchTerms.length > 0) {
-      const orQuery = searchTerms.slice(0, 4).join(' OR ');
-      console.log('[DEBUG searchFireflies] OR query:', orQuery);
+      const topEntities = searchTerms.slice(0, 3);
+      const orQuery = topEntities.map(term => {
+        // Quote multi-word terms
+        if (term.includes(' ')) {
+          return `"${term}"`;
+        }
+        return term;
+      }).join(' OR ');
+      
+      console.log('[DEBUG searchFireflies] Combined OR query:', orQuery);
       
       const filters = {
         keyword: orQuery,
-        limit: 10
+        limit: 10 // Increased from 3
       };
       
       if (options.fromDate) {
@@ -479,29 +492,76 @@ async function searchFireflies(query, options = {}) {
       const results = await firefliesAPI.searchTranscripts(filters);
       
       if (results && results.length > 0) {
-        console.log(`[DEBUG searchFireflies] Found ${results.length} entity-based results`);
+        console.log(`[DEBUG searchFireflies] Found ${results.length} results from combined OR query`);
         return {
           transcripts: results,
           firefliesStatus: 'ok',
           meetingsMode: 'entity_search'
         };
       }
+      
+      console.log('[DEBUG searchFireflies] No results from combined query, trying individual terms');
+    }
+    
+    // Second try: Search for each term individually if combined query failed
+    let allTranscripts = new Map();
+    
+    if (searchTerms.length > 0) {
+      for (const term of searchTerms.slice(0, 5)) { // Limit to 5 terms
+        if (!term || String(term).trim() === '') continue;
+        
+        try {
+          const safeTerm = String(term).trim();
+          console.log(`[DEBUG searchFireflies] Searching for individual term: "${safeTerm}"`);
+          
+          const filters = {
+            keyword: safeTerm,
+            limit: 10 // Increased from 3
+          };
+          
+          if (options.fromDate) {
+            filters.fromDate = options.fromDate;
+          }
+          
+          const results = await firefliesAPI.searchTranscripts(filters);
+          console.log(`[DEBUG searchFireflies] Found ${results.length} results for "${safeTerm}"`);
+          
+          results.forEach(t => {
+            allTranscripts.set(t.id, t); // De-dup by id
+          });
+        } catch (error) {
+          console.error(`[DEBUG searchFireflies] Error searching for term "${term}":`, error);
+        }
+      }
+    }
+    
+    const individualResults = Array.from(allTranscripts.values());
+    
+    if (individualResults.length > 0) {
+      console.log(`[DEBUG searchFireflies] Found ${individualResults.length} total unique transcripts from individual searches`);
+      return {
+        transcripts: individualResults,
+        firefliesStatus: 'ok',
+        meetingsMode: 'entity_search'
+      };
     }
     
     // Fallback: Get recent transcripts if no entity matches
-    console.log('[DEBUG searchFireflies] No entity matches, falling back to recent transcripts');
+    console.log('[DEBUG searchFireflies] No entity matches found, falling back to recent transcripts');
     
     const recentFilters = {
       limit: 10,
-      fromDate: options.fromDate || new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString() // Last 180 days
+      fromDate: options.fromDate || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString() // Last 365 days
     };
     
     const recentResults = await firefliesAPI.searchTranscripts(recentFilters);
     
+    console.log(`[DEBUG searchFireflies] Returning ${recentResults?.length || 0} recent transcripts (fallback mode)`);
+    
     return {
       transcripts: recentResults || [],
       firefliesStatus: 'ok',
-      meetingsMode: 'recent_fallback'
+      meetingsMode: 'recent_fallback' // Let frontend know this is fallback
     };
     
   } catch (error) {
@@ -563,7 +623,7 @@ async function extractKeywordsForContextSearch(text) {
       body: JSON.stringify({
         model: MODELS.openai.chatLegacy,
         messages: [
-          { role: 'system', content: 'Extract ONLY concrete entities from text for database search. Return: 1) Project/Film Title (exact), 2) Studio/Distributor names, 3) Top 3 talent names (actors/directors), 4) Any specific brand names mentioned. Exclude generic terms like "movie", "production", "brand", "placement". Return as JSON: {"keywords": ["entity1", "entity2", ...]}. Multi-word names should be in quotes.' },
+          { role: 'system', content: 'Return up to 5 proper nouns/entities: Project title, studio/distributor, talent names, company/brand names. Do not return demographics or generic terms like "Millennial", "Paris", "luxury", "thriller". If no clear title is found, synthesize "Untitled [Genre] Project". Return as JSON: {"keywords": ["entity1", "entity2", ...]}. Multi-word names should be in quotes.' },
           { role: 'user', content: text }
         ],
         response_format: { type: "json_object" },
@@ -2821,7 +2881,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           console.log('[DEBUG comms] Production context:', productionContext);
           
           const [firefliesRes, emailRes] = await Promise.allSettled([
-            firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 3 }), 5000, { transcripts: [] }) : Promise.resolve({ transcripts: [] }),
+            firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 10 }), 5000, { transcripts: [] }) : Promise.resolve({ transcripts: [] }),
             msftClientId ? withTimeout(o365API.searchEmails(search_term, { 
               days: 90, 
               limit: 12,
