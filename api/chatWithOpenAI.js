@@ -2213,8 +2213,68 @@ function extractLastProduction(conversation) {
   return lastProduction;
 }
 
+// --- Category parsing helpers (DROP-IN, safe) ---
+const CATEGORY_SYNONYMS = {
+  cosmetics: ['cosmetics','beauty','makeup','skincare','fragrance'],
+  fashion: ['fashion','apparel','clothing','luxury','handbag','shoe','jewelry'],
+  sports: ['sports','athletic','fitness','sporting goods'],
+  automotive: ['auto','automotive','car','vehicle','ev'],
+  technology: ['tech','technology','electronics','gadgets','devices'],
+  beverage: ['beverage','drink','soda','coffee','energy drink','water'],
+  food: ['food','snack','quick-serve','restaurant','qsr','cpg'],
+  travel: ['travel','airline','hotel','hospitality','tourism','luggage'],
+  home_decor: ['home','home decor','furniture','bedding','appliance'],
+  finance: ['finance','bank','credit card','fintech','insurance'],
+  telecom: ['telecom','wireless','carrier','mobile','broadband'],
+  gaming: ['gaming','videogame','esports','console','pc gaming'],
+  health_wellness: ['health','wellness','supplement','vitamin'],
+  outdoors: ['outdoor','outdoors','camping','hiking']
+};
+
+// Map to your HubSpot `main_category` values (adjust if your picklist differs)
+const HUBSPOT_CATEGORY_CANONICAL = {
+  cosmetics: 'Beauty',
+  fashion: 'Fashion',
+  sports: 'Sports',
+  automotive: 'Automotive',
+  technology: 'Technology',
+  beverage: 'Beverage',
+  food: 'Food & Beverage',
+  travel: 'Travel',
+  home_decor: 'Home Decor',
+  finance: 'Financial Services',
+  telecom: 'Telecom',
+  gaming: 'Gaming',
+  health_wellness: 'Health & Wellness',
+  outdoors: 'Outdoors'
+};
+
+function parseCategoryAsk(text) {
+  if (!text) return { normalizedCats: [] };
+  const lower = String(text).toLowerCase();
+  const found = new Set();
+  for (const [canon, aliases] of Object.entries(CATEGORY_SYNONYMS)) {
+    if (aliases.some(a => lower.includes(a))) found.add(canon);
+  }
+  const normalizedCats = Array.from(found)
+    .map(c => HUBSPOT_CATEGORY_CANONICAL[c])
+    .filter(Boolean);
+  return { normalizedCats };
+}
+
+
 async function routeUserIntent(userMessage, conversationContext, lastProductionContext) {
   if (!openAIApiKey) return { tool: 'answer_general_question' };
+// quick category ask path (non-breaking)
+const catProbe = parseCategoryAsk(userMessage);
+if (catProbe.normalizedCats.length > 0) {
+  return { tool: 'find_brands', args: { mode: 'category', categories: catProbe.normalizedCats, search_term: userMessage } };
+}
+
+// pure general discovery: "find brands" (no project/context)
+if (/^\s*find\s+(general\s+)?brands\s*$/i.test(userMessage)) {
+  return { tool: 'find_brands', args: { mode: 'general' } };
+}
 
   // Early detection of category-style requests
   const catAsk = parseCategoryAsk(userMessage);
@@ -2758,7 +2818,73 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         
         // Use project hint from router or extract from context
         const extractedTitleOrHint = knownProjectName || project_hint || null;
-        
+
+        // NEW: category or general discovery (safe, single call, same return shape as short query)
+if (intent.args?.mode === 'category' && Array.isArray(intent.args.categories) && intent.args.categories.length) {
+  const startStep = { type: 'start', text: `🔍 Searching categories: ${intent.args.categories.join(', ')}...` };
+  add(startStep);
+
+  const brandsData = await hubspotAPI.searchBrands({
+    limit: 15,
+    filterGroups: [{
+      filters: [{ propertyName: 'main_category', operator: 'IN', values: intent.args.categories }]
+    }],
+    sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
+  });
+
+  const completeStep = { type: 'complete', text: `✅ Found ${brandsData.results.length} brands in categories.` };
+  add(completeStep);
+
+  return {
+    organizedData: {
+      dataType: 'BRAND_SEARCH_RESULTS',
+      searchQuery: `Categories: ${intent.args.categories.join(', ')}`,
+      brandSuggestions: brandsData.results.map(b => ({
+        id: b.id,
+        name: b.properties.brand_name || '',
+        category: b.properties.main_category || 'General',
+        subcategories: b.properties.product_sub_category__multi_ || '',
+        clientStatus: b.properties.client_status || '',
+        partnershipCount: b.properties.partnership_count || '0',
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`
+      }))
+    },
+    mcpThinking,
+    usedMCP: true
+  };
+}
+
+if (intent.args?.mode === 'general') {
+  const startStep = { type: 'start', text: '🔍 General brand discovery...' };
+  add(startStep);
+
+  const brandsData = await hubspotAPI.searchBrands({
+    limit: 15,
+    sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
+  });
+
+  const completeStep = { type: 'complete', text: `✅ Found ${brandsData.results.length} brands.` };
+  add(completeStep);
+
+  return {
+    organizedData: {
+      dataType: 'BRAND_SEARCH_RESULTS',
+      searchQuery: 'General discovery',
+      brandSuggestions: brandsData.results.map(b => ({
+        id: b.id,
+        name: b.properties.brand_name || '',
+        category: b.properties.main_category || 'General',
+        subcategories: b.properties.product_sub_category__multi_ || '',
+        clientStatus: b.properties.client_status || '',
+        partnershipCount: b.properties.partnership_count || '0',
+        hubspotUrl: `https://app.hubspot.com/contacts/${hubspotAPI.portalId}/company/${b.id}`
+      }))
+    },
+    mcpThinking,
+    usedMCP: true
+  };
+}
+
         // Route based on what we detected
         if (search_term.length < 80 && normalizedCats.length > 0) {
           // CATEGORY MODE: use HubSpot filters for category-based search
