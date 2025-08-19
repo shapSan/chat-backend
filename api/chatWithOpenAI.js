@@ -2755,7 +2755,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           };
           
           // Build unified search terms for all systems
-          const titleForTerms = extractedTitle || knownProjectName || projectName || '';
+          const titleForTerms = (knownProjectName || extractedTitle || '').trim();
           let distributorForTerms = ''; // Extract if available from search_term
           const talentForTerms = []; // Extract if available from search_term
           
