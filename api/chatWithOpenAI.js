@@ -170,9 +170,9 @@ const o365API = {
   },
   
   // --- O365 EMAIL SEARCH with RAOP handling and precision queries ---
-  async searchEmails(query, options = {}) {
+  async searchEmails(terms, options = {}) {
     try {
-      console.log('[DEBUG o365API.searchEmails] Starting search for:', query);
+      console.log('[DEBUG o365API.searchEmails] Starting search with terms:', terms);
       console.log('[DEBUG o365API.searchEmails] Options:', options);
       
       if (!msftClientId || !msftClientSecret || !msftTenantId) {
@@ -186,9 +186,14 @@ const o365API = {
       const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
       console.log('[DEBUG o365API.searchEmails] Searching emails for user:', userEmail);
       
-      // Build precision AQS queries based on production context
-      const searchQueries = this.buildPrecisionQueries(query, options);
+      // Build precision AQS queries based on production context and terms
+      const searchQueries = this.buildPrecisionQueries(terms, options.productionContext);
       console.log('[DEBUG o365API.searchEmails] Precision queries:', searchQueries);
+      
+      if (searchQueries.length === 0) {
+        console.log('[DEBUG o365API.searchEmails] No valid queries could be built');
+        return { emails: [], o365Status: 'no_entities', userEmail };
+      }
       
       const results = [];
       const top = 5; // Reduced per-query limit for precision
@@ -285,43 +290,56 @@ const o365API = {
   },
   
   // New helper method to build precision AQS queries
-  buildPrecisionQueries(query, options = {}) {
+  buildPrecisionQueries(terms, ctx) {
     const queries = [];
     const dealWords = '(brand OR sponsorship OR licensing OR placement OR integration OR co-promo OR partnership)';
     
-    // If we have production context
-    if (options.productionContext) {
-      const { title, distributor, talent } = options.productionContext;
-      
-      if (title) {
-        // Query 1: Exact title
-        queries.push(`"${title}"`);
-        
-        // Query 2: Title + distributor
-        if (distributor) {
-          queries.push(`"${title}" AND ${distributor}`);
-        }
-        
-        // Query 3: Title + deal words
-        queries.push(`"${title}" AND ${dealWords}`);
-      }
-      
-      // Query 4: Top talent + distributor or deal words
-      if (talent && talent.length > 0) {
-        const topTalent = talent.slice(0, 2).map(t => `"${t}"`).join(' OR ');
-        if (distributor) {
-          queries.push(`(${topTalent}) AND ${distributor}`);
-        } else {
-          queries.push(`(${topTalent}) AND ${dealWords}`);
-        }
-      }
-    } else if (typeof query === 'string') {
-      // Fallback to simple query with deal words
-      queries.push(`"${query}"`);
-      queries.push(`"${query}" AND ${dealWords}`);
+    // Extract clean values from context
+    const title = ctx?.title && ctx.title.length > 2 ? `"${ctx.title}"` : null;
+    const dist = ctx?.distributor && ctx.distributor.length > 2 ? ctx.distributor : null;
+    const topTalent = (ctx?.talent || [])
+      .filter(t => t && t.length > 2)
+      .slice(0, 3)
+      .map(t => `"${t}"`);
+    
+    // Build queries in priority order
+    if (title) {
+      queries.push(title); // Query 1: Exact title
     }
     
-    // Limit to 4 queries max, each under 150 chars
+    if (title && dist) {
+      queries.push(`${title} AND ${dist}`); // Query 2: Title + Distributor
+    }
+    
+    if (dist) {
+      queries.push(`${dist} AND ${dealWords}`); // Query 3: Distributor + deal words
+    }
+    
+    if (topTalent.length > 0) {
+      if (dist) {
+        queries.push(`(${topTalent.join(' OR ')}) AND ${dist}`); // Query 4: Talent + Distributor
+      } else {
+        queries.push(`(${topTalent.join(' OR ')}) AND ${dealWords}`); // Query 4 alt: Talent + deal words
+      }
+    }
+    
+    // Fallback if no structured data but we have terms
+    if (queries.length === 0 && Array.isArray(terms) && terms.length > 0) {
+      const cleanTerms = cleanEntityTerms(terms).slice(0, 2);
+      if (cleanTerms.length > 0) {
+        const fallbackQuery = cleanTerms
+          .map(t => t.includes(' ') ? `"${t}"` : t)
+          .join(' AND ');
+        queries.push(fallbackQuery);
+      }
+    }
+    
+    // Final safety net - at least search for deal words
+    if (queries.length === 0) {
+      queries.push(dealWords);
+    }
+    
+    // Limit to 4 queries, each under 150 chars
     return queries
       .filter(q => q && q.length < 150)
       .slice(0, 4);
@@ -2198,6 +2216,18 @@ function extractLastProduction(conversation) {
 async function routeUserIntent(userMessage, conversationContext, lastProductionContext) {
   if (!openAIApiKey) return { tool: 'answer_general_question' };
 
+  // Early detection of category-style requests
+  const catAsk = parseCategoryAsk(userMessage);
+  if (catAsk) {
+    return {
+      tool: 'find_brands',
+      args: { 
+        search_term: catAsk.rawCats.join(' '), 
+        project_hint: catAsk.project || null 
+      }
+    };
+  }
+
   const tools = [
     {
       type: 'function',
@@ -2712,7 +2742,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
   try {
     switch (intent.tool) {
       case 'find_brands': {
-        const { search_term: rawSearchTerm } = intent.args;
+        const { search_term: rawSearchTerm, project_hint } = intent.args;
         
         // Detect structured productions and clean operational tokens
         const hasStructuredFields = /Synopsis:|Distributor:|Talent:|Location:|Release|Date:|Shoot/i.test(userMessage);
@@ -2722,8 +2752,122 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         let search_term = rawSearchTerm || userMessage;
         search_term = search_term.replace(operationalJunk, '').trim();
         
-        // Route based on structure detection, not just length
-        if (hasStructuredFields || search_term.includes('Synopsis:')) {
+        // Detect category-mode (user listed categories instead of a synopsis)
+        const rawWords = search_term.split(/[\s,]+/).filter(Boolean);
+        const normalizedCats = normalizeCategories(rawWords);
+        
+        // Use project hint from router or extract from context
+        const extractedTitleOrHint = knownProjectName || project_hint || null;
+        
+        // Route based on what we detected
+        if (search_term.length < 80 && normalizedCats.length > 0) {
+          // CATEGORY MODE: use HubSpot filters for category-based search
+          const startStep = { type: 'start', text: `🔍 Finding brands in categories: ${normalizedCats.join(', ')}` };
+          add(startStep);
+          
+          // Search by categories
+          const brandsData = await hubspotAPI.searchBrands({
+            limit: 15,
+            filterGroups: [{
+              filters: [
+                { propertyName: 'main_category', operator: 'IN', values: normalizedCats }
+              ]
+            }],
+            sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
+          });
+          
+          // Also pull some active big-budget clients
+          const activeBrands = await withTimeout(
+            hubspotAPI.searchBrands({
+              limit: 10,
+              filterGroups: [{
+                filters: [
+                  { propertyName: 'client_status', operator: 'IN', values: ['Active', 'Contract'] },
+                  { propertyName: 'deals_count', operator: 'GTE', value: '3' }
+                ]
+              }],
+              sorts: [{ propertyName: 'partnership_count', direction: 'DESCENDING' }]
+            }),
+            5000,
+            { results: [] }
+          );
+          
+          // Build search entities for communications
+          const entities = buildSearchEntities({
+            projectName: extractedTitleOrHint,
+            categories: normalizedCats,
+            distributor: null, // Could parse from message if needed
+            talent: []        // Could parse from message if needed
+          });
+          
+          let supportingContext = { meetings: [], emails: [], emailStatus: 'ok', meetingsMode: 'entity_search' };
+          
+          if (entities.length > 0 && (firefliesApiKey || msftClientId)) {
+            const contextStep = { type: 'search', text: `📧 Checking communications for: ${entities.slice(0, 3).join(' | ')}...` };
+            add(contextStep);
+            
+            const [firefliesRes, emailRes] = await Promise.allSettled([
+              firefliesApiKey ? 
+                withTimeout(searchFireflies(entities, { limit: 10 }), 5000, { transcripts: [] }) : 
+                Promise.resolve({ transcripts: [] }),
+              msftClientId ? 
+                withTimeout(o365API.searchEmails(entities, { 
+                  days: 90, 
+                  limit: 12,
+                  productionContext: { title: extractedTitleOrHint, distributor: null, talent: [] }
+                }), 5000, { emails: [], o365Status: 'timeout' }) : 
+                Promise.resolve({ emails: [], o365Status: 'disabled' })
+            ]);
+            
+            const firefliesData = firefliesRes.status === 'fulfilled' ? firefliesRes.value : { transcripts: [] };
+            const emailObj = emailRes.status === 'fulfilled' ? emailRes.value : { emails: [], o365Status: 'error' };
+            
+            supportingContext = {
+              meetings: firefliesData.transcripts || [],
+              emails: emailObj.emails || [],
+              emailStatus: emailObj.o365Status || 'ok',
+              emailMailbox: emailObj.userEmail || 'unknown',
+              meetingsMode: firefliesData.meetingsMode || 'entity_search'
+            };
+            
+            if (supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) {
+              const foundStep = { type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` };
+              add(foundStep);
+            }
+            
+            if (supportingContext.emailStatus === 'forbidden_raop') {
+              const raopStep = { type: 'info', text: `ℹ️ Email search blocked by tenant policy` };
+              add(raopStep);
+            }
+          }
+          
+          // Combine results using existing tagger
+          const combined = tagAndCombineBrands({
+            synopsisBrands: { results: brandsData.results || [] },
+            genreBrands: { results: [] },
+            activeBrands: activeBrands || { results: [] },
+            wildcardCategories: [], // No wildcards in category mode
+            synopsis: search_term,
+            context: supportingContext
+          });
+          
+          const completeStep = { type: 'complete', text: `✨ Prepared ${combined.length} category-based recommendations` };
+          add(completeStep);
+          
+          return {
+            organizedData: {
+              dataType: 'BRAND_RECOMMENDATIONS',
+              productionContext: search_term,
+              projectName: extractedTitleOrHint,
+              brandSuggestions: combined,
+              supportingContext: supportingContext,
+              searchMode: 'category' // Flag for frontend
+            },
+            mcpThinking,
+            usedMCP: true
+          };
+          
+        } else if (hasStructuredFields || search_term.includes('Synopsis:')) {
           // Full "Four Lists" Synopsis Search for structured productions
           const synopsisStep = { type: 'start', text: '🎬 Structured production detected. Building diverse recommendations...' };
           add(synopsisStep);
@@ -2849,32 +2993,41 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
             add(contextStep);
             
-            // Extract production context for precision email search
-            const productionContext = {
-              title: extractedTitle || search_term.match(/["']([^"']+)["']/)?.[1] || null,
-              distributor: null,
-              talent: []
-            };
+            // Parse production fields robustly (no LLM needed)
+            const productionFields = parseProductionFields(search_term, extractedTitle);
+            console.log('[DEBUG comms] Parsed production fields:', productionFields);
             
-            // Try to extract distributor and talent from synopsis
-            if (search_term.toLowerCase().includes('netflix')) productionContext.distributor = 'Netflix';
-            else if (search_term.toLowerCase().includes('universal')) productionContext.distributor = 'Universal';
-            else if (search_term.toLowerCase().includes('disney')) productionContext.distributor = 'Disney';
-            else if (search_term.toLowerCase().includes('warner')) productionContext.distributor = 'Warner';
+            // Build clean entity terms for searching
+            const contextTerms = [
+              productionFields.title,
+              productionFields.distributor,
+              ...(productionFields.talent || [])
+            ].filter(Boolean);
             
-            const contextKeywords = await extractKeywordsForContextSearch(search_term);
+            const cleanTerms = cleanEntityTerms(contextTerms);
+            console.log('[DEBUG comms] Clean entity terms:', cleanTerms);
             
-            console.log('[DEBUG comms] Searching for supporting context...');
-            console.log('[DEBUG comms] Keywords:', contextKeywords);
-            console.log('[DEBUG comms] Production context:', productionContext);
+            // If no clean terms, try extracting from synopsis
+            if (cleanTerms.length === 0 && search_term.length > 20) {
+              const extractedKeywords = await extractKeywordsForContextSearch(search_term);
+              if (extractedKeywords && extractedKeywords.length > 0) {
+                cleanTerms.push(...cleanEntityTerms(extractedKeywords));
+              }
+            }
+            
+            console.log('[DEBUG comms] Final search terms:', cleanTerms);
             
             const [firefliesRes, emailRes] = await Promise.allSettled([
-              firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 10 }), 5000, { transcripts: [] }) : Promise.resolve({ transcripts: [] }),
-              msftClientId ? withTimeout(o365API.searchEmails(search_term, { 
-                days: 90, 
-                limit: 12,
-                productionContext: productionContext 
-              }), 6000, { emails: [], o365Status: 'timeout' }) : Promise.resolve({ emails: [], o365Status: 'no_credentials' })
+              firefliesApiKey && cleanTerms.length > 0 ? 
+                withTimeout(searchFireflies(cleanTerms, { limit: 10 }), 5000, { transcripts: [] }) : 
+                Promise.resolve({ transcripts: [] }),
+              msftClientId && cleanTerms.length > 0 ? 
+                withTimeout(o365API.searchEmails(cleanTerms, { 
+                  days: 90, 
+                  limit: 12,
+                  productionContext: productionFields 
+                }), 6000, { emails: [], o365Status: 'timeout' }) : 
+                Promise.resolve({ emails: [], o365Status: cleanTerms.length === 0 ? 'no_entities' : 'no_credentials' })
             ]);
             
             // Handle Fireflies result
@@ -2909,6 +3062,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             if (supportingContext.emailStatus === 'forbidden_raop') {
               const raopStep = { type: 'info', text: `ℹ️ Email search blocked by tenant policy for ${supportingContext.emailMailbox}` };
               add(raopStep);
+            } else if (supportingContext.emailStatus === 'no_entities') {
+              const noEntitiesStep = { type: 'info', text: `ℹ️ No searchable entities found in production` };
+              add(noEntitiesStep);
             }
           }
           
@@ -3030,17 +3186,20 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           const seenCompanies = new Set();
           const poolPicks = { hot: [], activity: [], dormant: [], fit: [], cold: [], novel: [] };
           
-          const addBrand = (brand, poolName, isNovel = false) => {
+          const addBrand = (brand, poolName, isNovel = false, ignoreCooldown = false, allowSameCompany = false) => {
             const brandId = brand.id || brand.name;
             const companyName = brand.properties?.parent_company || 
                                brand.properties?.brand_name || 
                                brand.name || '';
             
-            // Skip if duplicate, on cooldown, or same parent company
+            // Skip if duplicate
             if (seenIds.has(brandId)) return false;
-            if (recentBrandIds.has(brandId) && !isNovel) return false;
-            if (companyName && seenCompanies.has(companyName.toLowerCase())) return false;
+            // Skip if on cooldown (unless ignoring)
+            if (!ignoreCooldown && recentBrandIds.has(brandId) && !isNovel) return false;
+            // Skip if same parent company (unless allowing)
+            if (!allowSameCompany && companyName && seenCompanies.has(companyName.toLowerCase())) return false;
             
+            // Record the brand
             seenIds.add(brandId);
             if (companyName) seenCompanies.add(companyName.toLowerCase());
             
@@ -3051,7 +3210,21 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             return true;
           };
           
-          // First pass: try to fill quotas
+          // Log pool sizes for debugging
+          add({
+            type: 'pool',
+            stage: 'sizes',
+            pools: {
+              hot: pools.hot.length,
+              activity: pools.activity.length,
+              fit: pools.fit.length,
+              dormant: pools.dormant.length,
+              cold: pools.cold.length
+            },
+            runId
+          });
+          
+          // First pass: try to fill quotas with constraints
           Object.entries(QUOTAS).forEach(([poolName, quota]) => {
             const pool = pools[poolName] || [];
             let added = 0;
@@ -3077,10 +3250,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             });
           });
           
-          // Backfill if under TARGET_MIN
+          // First backfill: if under TARGET_MIN with constraints
           if (picks.length < TARGET_MIN) {
             const backfillOrder = ['fit', 'dormant', 'cold', 'activity', 'hot'];
-            let backfillCount = 0;
             
             for (const poolName of backfillOrder) {
               const pool = pools[poolName] || [];
@@ -3089,7 +3261,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
               for (const brand of pool) {
                 if (picks.length >= TARGET_MIN) break;
                 if (addBrand(brand, poolName)) {
-                  backfillCount++;
+                  // Successfully added
                 }
               }
               
@@ -3104,6 +3276,36 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
               }
               
               if (picks.length >= TARGET_MIN) break;
+            }
+          }
+          
+          // Second backfill: if STILL under TARGET_MIN, relax ALL constraints
+          if (picks.length < TARGET_MIN) {
+            console.log(`[DEBUG] Second backfill needed - only ${picks.length} brands, need ${TARGET_MIN}`);
+            const backfillOrder = ['fit', 'activity', 'hot', 'dormant', 'cold'];
+            
+            for (const poolName of backfillOrder) {
+              const pool = pools[poolName] || [];
+              
+              for (const brand of pool) {
+                if (picks.length >= TARGET_MIN) break;
+                // Try with ALL constraints relaxed
+                if (addBrand(brand, poolName, true, true, true)) {
+                  console.log(`[DEBUG] Added brand with relaxed constraints from ${poolName} pool`);
+                }
+              }
+              
+              if (picks.length >= TARGET_MIN) break;
+            }
+            
+            // Log the emergency backfill
+            if (picks.length > poolPicks.hot.length + poolPicks.activity.length + poolPicks.fit.length + poolPicks.dormant.length + poolPicks.cold.length - poolPicks.novel.length) {
+              add({
+                type: 'pool',
+                stage: 'emergency_backfill',
+                addedCount: picks.length - (poolPicks.hot.length + poolPicks.activity.length + poolPicks.fit.length + poolPicks.dormant.length + poolPicks.cold.length - poolPicks.novel.length),
+                runId
+              });
             }
           }
           
