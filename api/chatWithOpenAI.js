@@ -906,14 +906,14 @@ export default async function handler(req, res) {
         
         try {
           console.log('[DEBUG pushDraft] Starting push draft creation...');
-          console.log('[DEBUG pushDraft] Production:', productionData.projectName);
+          console.log('[DEBUG pushDraft] Production:', productionData.knownProjectName);
           console.log('[DEBUG pushDraft] Brand count:', brands.length);
           
           // Step 1: Generate email content using OpenAI
           const emailPrompt = `You are Shap, a brand partnership executive at Hollywood Branded. Write a PERSONAL, conversational email to yourself (as a draft) summarizing brand recommendations for a production.
 
 Production Details:
-- Title: ${productionData.projectName || 'Untitled Production'}
+- Title: ${productionData.knownProjectName || 'Untitled Production'}
 - Vibe/Genre: ${productionData.vibe || 'Not specified'}
 - Cast: ${productionData.cast || 'TBD'}
 - Location: ${productionData.location || 'TBD'}
@@ -966,7 +966,7 @@ Keep it under 300 words.`;
           console.log('[DEBUG pushDraft] Email content generated');
           
           // Step 2: Create draft in Outlook
-          const emailSubject = `Brand Recs: ${productionData.projectName || 'Untitled Production'} (${brands.length} brands)`;
+          const emailSubject = `Brand Recs: ${productionData.knownProjectName || 'Untitled Production'} (${brands.length} brands)`;
           
           const draftResult = await o365API.createDraft(
             emailSubject,
@@ -1369,7 +1369,7 @@ Keep it under 300 words.`;
         }
       }
       
-      let { userMessage, sessionId, audioData, projectId, projectName, runId: clientRunId } = req.body;
+      let { userMessage, sessionId, audioData, projectId, knownProjectName, runId: clientRunId } = req.body;
 
       // Generate runId if not provided by client
       const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
@@ -1529,7 +1529,7 @@ Keep it under 300 words.`;
               projectId,
               conversationContext,
               lastProductionContext,
-              projectName, // Pass the known name from the request body
+              knownProjectName, // Pass the known name from the request body
               runId, // Pass runId for progress tracking
               (step) => progressPush(sessionId, runId, step)
           );
@@ -2655,7 +2655,7 @@ function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, acti
   return sortedBrands.slice(0, Math.min(targetSize, sortedBrands.length));
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, runId, onStep = () => {}) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownknownProjectName, runId, onStep = () => {}) {
   if (!anthropicApiKey) return null;
   
   // Ensure HubSpot is ready before any searches (cold start fix)
@@ -2703,9 +2703,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           
           // Extract title if not provided by frontend
           let extractedTitle;
-          if (knownProjectName) {
+          if (knownknownProjectName) {
               // If the frontend provided a title, trust it completely
-              extractedTitle = knownProjectName;
+              extractedTitle = knownknownProjectName;
               const projectStep = { type: 'process', text: `📌 Using known project: "${extractedTitle}"` };
               add(projectStep);
           } else {
@@ -2755,7 +2755,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           };
           
           // Build unified search terms for all systems
-          const titleForTerms = (knownProjectName || extractedTitle || '').trim();
+          const titleForTerms = (knownknownProjectName || extractedTitle || '').trim();
           let distributorForTerms = ''; // Extract if available from search_term
           const talentForTerms = []; // Extract if available from search_term
           
@@ -3255,7 +3255,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             organizedData: {
               dataType: 'BRAND_RECOMMENDATIONS',
               productionContext: search_term,
-              projectName: extractedTitle, // Use the definitive title
+              knownProjectName: extractedTitle, // Use the definitive title
               brandSuggestions: taggedBrands,
               supportingContext: supportingContext,
               breakdown: breakdown // Include breakdown in response
@@ -3322,8 +3322,8 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           
           // Extract title if not provided by frontend
           let extractedTitle;
-          if (knownProjectName) {
-              extractedTitle = knownProjectName;
+          if (knownknownProjectName) {
+              extractedTitle = knownknownProjectName;
               const projectStep = { type: 'process', text: `📌 Using known project: "${extractedTitle}"` };
               add(projectStep);
           } else {
@@ -3344,7 +3344,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             organizedData: {
               dataType: 'BRAND_RECOMMENDATIONS',
               productionContext: search_term,
-              projectName: extractedTitle,
+              knownProjectName: extractedTitle,
               brandSuggestions: [],
               supportingContext: { meetings: [], emails: [] }
             },
