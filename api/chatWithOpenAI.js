@@ -640,6 +640,1167 @@ function extractJson(text) {
   }
 }
 
+async function generateRunwayVideo({ 
+  promptText, 
+  promptImage, 
+  model = MODELS.runway.default,
+  ratio = '1104:832',
+  duration = 5
+}) {
+  if (!runwayApiKey) {
+    throw new Error('RUNWAY_API_KEY not configured');
+  }
+
+  try {
+    const client = new RunwayML({
+      apiKey: runwayApiKey
+    });
+
+    let imageToUse = promptImage;
+    
+    if (!imageToUse || imageToUse.includes('dummyimage.com')) {
+      imageToUse = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1280&h=720&fit=crop&q=80';
+    }
+
+    const videoTask = await client.imageToVideo.create({
+      model: model,
+      promptImage: imageToUse,
+      promptText: promptText,
+      ratio: ratio,
+      duration: duration
+    });
+
+    let task = videoTask;
+    let attempts = 0;
+    const maxAttempts = 60;
+
+    while (attempts < maxAttempts) {
+      task = await client.tasks.retrieve(task.id);
+
+      if (task.status === 'SUCCEEDED') {
+        const videoUrl = task.output?.[0];
+        if (!videoUrl) {
+          throw new Error('No video URL in output');
+        }
+
+        return {
+          url: videoUrl,
+          taskId: task.id
+        };
+      }
+
+      if (task.status === 'FAILED') {
+        throw new Error(`Generation failed: ${task.failure || task.error || 'Unknown error'}`);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      attempts++;
+    }
+
+    throw new Error('Video generation timed out');
+
+  } catch (error) {
+    if (error.message?.includes('401')) {
+      throw new Error('Invalid API key. Check RUNWAY_API_KEY in Vercel settings.');
+    }
+    
+    if (error.message?.includes('429')) {
+      throw new Error('Rate limit exceeded. Try again later.');
+    }
+    
+    if (error.message?.includes('insufficient_credits') || error.status === 402) {
+      throw new Error('Runway credits exhausted. Please upgrade your plan or wait for credits to reset.');
+    }
+    
+    if (error.status === 504 || error.message?.includes('timeout')) {
+      throw new Error('Video generation timed out. This usually means the server is busy. Please try again.');
+    }
+    
+    throw error;
+  }
+}
+
+async function generateVeo3Video({
+  promptText,
+  aspectRatio = '16:9',
+  duration = 5
+}) {
+  if (!googleGeminiApiKey) {
+    throw new Error('GOOGLE_GEMINI_API_KEY not configured');
+  }
+
+  try {
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:generateVideo?key=${googleGeminiApiKey}`;
+    
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt: promptText,
+        config: {
+          personGeneration: "allow_all",
+          aspectRatio: aspectRatio,
+          duration: `${duration}s`
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      
+      if (response.status === 401) {
+        throw new Error('Invalid API key. Check GOOGLE_GEMINI_API_KEY in environment variables.');
+      }
+      if (response.status === 404) {
+        throw new Error('Veo3 API endpoint not found. The API may not be available in your region or your API key may not have access.');
+      }
+      if (response.status === 429) {
+        throw new Error('Rate limit exceeded. Try again later.');
+      }
+      
+      throw new Error(`Veo3 API error: ${response.status} - ${errorText}`);
+    }
+
+    const operation = await response.json();
+
+    if (operation.name) {
+      let attempts = 0;
+      const maxAttempts = 60;
+      
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        
+        const statusUrl = `https://generativelanguage.googleapis.com/v1beta/${operation.name}?key=${googleGeminiApiKey}`;
+        const statusResponse = await fetch(statusUrl);
+        
+        if (!statusResponse.ok) {
+          throw new Error('Failed to check video generation status');
+        }
+        
+        const statusData = await statusResponse.json();
+        
+        if (statusData.done) {
+          if (statusData.error) {
+            throw new Error(`Video generation failed: ${statusData.error.message}`);
+          }
+          
+          const videoUrl = statusData.response?.video?.uri || statusData.response?.videoUrl;
+          if (!videoUrl) {
+            throw new Error('No video URL in response');
+          }
+          
+          return {
+            url: videoUrl,
+            taskId: operation.name,
+            metadata: statusData.response
+          };
+        }
+        
+        attempts++;
+      }
+      
+      throw new Error('Video generation timed out');
+    } else {
+      const videoUrl = operation.video?.uri || operation.videoUrl;
+      if (!videoUrl) {
+        throw new Error('No video URL in response');
+      }
+      
+      return {
+        url: videoUrl,
+        taskId: 'direct-response',
+        metadata: operation
+      };
+    }
+
+  } catch (error) {
+    throw new Error(`Veo3 is currently in preview and may not be available. ${error.message}`);
+  }
+}
+
+export default async function handler(req, res) {
+  // CORS headers with proper origin handling
+  const origin = req.headers.origin || "*";
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  
+  // GET endpoint for progress with runId support
+  if (req.method === 'GET' && req.query.progress === 'true') {
+    const { sessionId, runId } = req.query;
+    
+    // Set no-cache headers
+    res.setHeader("Cache-Control", "no-store");
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId required' });
+    }
+    const key = progKey(sessionId, runId);
+    const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null };
+    // Only return steps if runId matches or no runId specified
+    if (runId && s.runId !== runId) {
+      return res.status(200).json({ steps: [], done: false, runId });
+    }
+    return res.status(200).json(s);
+  }
+  
+  if (req.method === 'POST') {
+    try {
+      // Handle Push Draft endpoint
+      if (req.body.pushDraft === true) {
+        const { productionData, brands, sessionId } = req.body;
+        
+        if (!productionData || !brands || brands.length === 0) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'productionData and brands array are required'
+          });
+        }
+        
+        if (!openAIApiKey || !msftClientId || !msftClientSecret) {
+          return res.status(500).json({ 
+            error: 'Push feature not configured',
+            details: 'Missing OpenAI or Microsoft Graph credentials'
+          });
+        }
+        
+        try {
+          console.log('[DEBUG pushDraft] Starting push draft creation...');
+          console.log('[DEBUG pushDraft] Production:', productionData.projectName);
+          console.log('[DEBUG pushDraft] Brand count:', brands.length);
+          
+          // Step 1: Generate email content using OpenAI
+          const emailPrompt = `You are Shap, a brand partnership executive at Hollywood Branded. Write a PERSONAL, conversational email to yourself (as a draft) summarizing brand recommendations for a production.
+
+Production Details:
+- Title: ${productionData.projectName || 'Untitled Production'}
+- Vibe/Genre: ${productionData.vibe || 'Not specified'}
+- Cast: ${productionData.cast || 'TBD'}
+- Location: ${productionData.location || 'TBD'}
+- Notes: ${productionData.notes || 'None'}
+
+Selected Brands for Consideration (${brands.length} total):
+${brands.map((brand, i) => `
+${i + 1}. ${brand.name}
+   - Category: ${brand.category || 'General'}
+   - Why it works: ${brand.reason || brand.pitch || 'Good fit for production'}
+   - Status: ${brand.clientStatus || 'Prospect'}
+   ${brand.tags ? `- Tags: ${Array.isArray(brand.tags) ? brand.tags.join(', ') : brand.tags}` : ''}
+`).join('\n')}
+
+Write a draft email to yourself that:
+1. Opens with a brief, personal reminder about this production (1-2 sentences)
+2. Lists the brands with quick notes on why each could work
+3. Includes any action items or next steps
+4. Keeps a casual, note-to-self tone (this is YOUR draft folder)
+5. Signs off as "- Shap" or similar
+
+Format as HTML with simple formatting (use <br> for line breaks, <b> for emphasis, <ul>/<li> for lists).
+Keep it under 300 words.`;
+
+          const openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${openAIApiKey}`
+            },
+            body: JSON.stringify({
+              model: MODELS.openai.chatMini,
+              messages: [
+                { role: 'system', content: 'You are Shap, writing a draft email to yourself about brand partnerships. Keep it personal and conversational.' },
+                { role: 'user', content: emailPrompt }
+              ],
+              temperature: 0.7,
+              max_tokens: 800
+            })
+          });
+          
+          if (!openAIResponse.ok) {
+            console.error('[DEBUG pushDraft] OpenAI failed:', openAIResponse.status);
+            throw new Error('Failed to generate email content');
+          }
+          
+          const aiData = await openAIResponse.json();
+          const emailBody = aiData.choices[0].message.content;
+          
+          console.log('[DEBUG pushDraft] Email content generated');
+          
+          // Step 2: Create draft in Outlook
+          const emailSubject = `Brand Recs: ${productionData.projectName || 'Untitled Production'} (${brands.length} brands)`;
+          
+          const draftResult = await o365API.createDraft(
+            emailSubject,
+            emailBody,
+            'shap@hollywoodbranded.com', // To self
+            { 
+              senderEmail: 'shap@hollywoodbranded.com',
+              isHtml: true 
+            }
+          );
+          
+          console.log('[DEBUG pushDraft] Draft created:', draftResult.id);
+          console.log('[DEBUG pushDraft] WebLink:', draftResult.webLink);
+          
+          return res.status(200).json({
+            success: true,
+            draftId: draftResult.id,
+            webLink: draftResult.webLink,  // Keep for backward compatibility
+            webLinks: [draftResult.webLink], // Array format for consistency
+            message: 'Draft created successfully in Outlook'
+          });
+          
+        } catch (error) {
+          console.error('[DEBUG pushDraft] Error:', error);
+          return res.status(500).json({ 
+            error: 'Failed to create draft',
+            details: error.message 
+          });
+        }
+      }
+      
+      if (req.body.generateAudio === true) {
+        const { prompt, projectId, sessionId } = req.body;
+        if (!prompt) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'prompt is required'
+          });
+        }
+        if (!elevenLabsApiKey) {
+          return res.status(500).json({ 
+            error: 'Audio generation service not configured',
+            details: 'Please configure ELEVENLABS_API_KEY'
+          });
+        }
+        const projectConfig = getProjectConfig(projectId);
+        const { voiceId, voiceSettings } = projectConfig;
+        try {
+            const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+            
+            const elevenLabsResponse = await fetch(elevenLabsUrl, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'audio/mpeg',
+                    'Content-Type': 'application/json',
+                    'xi-api-key': elevenLabsApiKey
+                },
+                body: JSON.stringify({
+                    text: prompt,
+                    model_id: MODELS.elevenlabs.voice,
+                    voice_settings: voiceSettings
+                })
+            });
+            if (!elevenLabsResponse.ok) {
+                const errorText = await elevenLabsResponse.text();
+                return res.status(elevenLabsResponse.status).json({ 
+                    error: 'Failed to generate audio',
+                    details: errorText
+                });
+            }
+            
+            // Get the audio as a buffer
+            const audioBuffer = await elevenLabsResponse.buffer();
+            
+            // Upload to Vercel Blob Storage
+            const timestamp = Date.now();
+            const filename = `${sessionId || 'unknown-session'}/audio-narration-${timestamp}.mp3`;
+            
+            console.log('[DEBUG generateAudio] Uploading to blob storage:', filename);
+            
+            const { url: permanentUrl } = await put(
+                filename,
+                audioBuffer,
+                { 
+                    access: 'public',
+                    contentType: 'audio/mpeg'
+                }
+            );
+            
+            console.log('[DEBUG generateAudio] Audio uploaded to:', permanentUrl);
+            
+            return res.status(200).json({
+                success: true,
+                audioUrl: permanentUrl,
+                voiceUsed: voiceId,
+                storage: 'blob'
+            });
+            
+        } catch (error) {
+            console.error('[DEBUG generateAudio] Error:', error);
+            return res.status(500).json({ 
+                error: 'Failed to generate audio',
+                details: error.message 
+            });
+        }
+      }
+
+      if (req.body.generateVideo === true) {
+        const { promptText, promptImage, projectId, sessionId, model, ratio, duration, videoModel } = req.body;
+
+        if (!promptText) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'promptText is required'
+          });
+        }
+
+        try {
+          // Check if we should enhance the prompt with production context
+          let enhancedPromptText = promptText;
+          if (sessionId) {
+            // Try to get conversation history to find production context
+            const projectConfig = getProjectConfig(projectId);
+            const { baseId, chatTable } = projectConfig;
+            const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
+            const headersAirtable = { 
+              'Content-Type': 'application/json', 
+              Authorization: `Bearer ${airtableApiKey}` 
+            };
+            
+            const conversationContext = await getConversationHistory(sessionId, projectId, chatUrl, headersAirtable);
+            const lastProductionContext = extractLastProduction(conversationContext);
+            
+            if (lastProductionContext) {
+              // Enhance the prompt with production context
+              enhancedPromptText = `Continue working on this production: ${lastProductionContext}\n\n${promptText}`;
+              console.log('Enhanced video prompt with production context');
+            }
+          }
+          
+          let result;
+          
+          if (videoModel === 'veo3') {
+            if (!googleGeminiApiKey) {
+              return res.status(500).json({ 
+                error: 'Veo3 video generation service not configured',
+                details: 'Please configure GOOGLE_GEMINI_API_KEY in environment variables'
+              });
+            }
+            
+            let veo3AspectRatio = '16:9';
+            if (ratio === '1104:832') veo3AspectRatio = '4:3';
+            else if (ratio === '832:1104') veo3AspectRatio = '9:16';
+            else if (ratio === '1920:1080') veo3AspectRatio = '16:9';
+            
+            result = await generateVeo3Video({
+              promptText: enhancedPromptText,
+              aspectRatio: veo3AspectRatio,
+              duration
+            });
+            
+          } else {
+            if (!runwayApiKey) {
+              return res.status(500).json({ 
+                error: 'Runway video generation service not configured',
+                details: 'Please configure RUNWAY_API_KEY in environment variables'
+              });
+            }
+            
+            if (promptImage && !promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
+              return res.status(400).json({
+                error: 'Invalid image format',
+                details: 'promptImage must be a valid URL or base64 data URL'
+              });
+            }
+            
+            let imageToUse = promptImage;
+            if (!promptImage || promptImage.includes('dummyimage.com')) {
+              imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
+            }
+            
+            result = await generateRunwayVideo({
+              promptText: enhancedPromptText,
+              promptImage: imageToUse,
+              model: model || MODELS.runway.turbo,
+              ratio: ratio || '1104:832',
+              duration: duration || 5
+            });
+          }
+
+          // Fetch the video from the temporary URL and upload to blob storage
+          console.log('[DEBUG generateVideo] Fetching video from temporary URL...');
+          const videoResponse = await fetch(result.url);
+          
+          if (!videoResponse.ok) {
+            throw new Error(`Failed to fetch video from temporary URL: ${videoResponse.status}`);
+          }
+          
+          const videoBuffer = await videoResponse.buffer();
+          
+          // Upload to Vercel Blob Storage
+          const timestamp = Date.now();
+          const filename = `${sessionId || 'unknown-session'}/video-generated-${timestamp}.mp4`;
+          
+          console.log('[DEBUG generateVideo] Uploading to blob storage:', filename);
+          
+          const { url: permanentUrl } = await put(
+            filename,
+            videoBuffer,
+            { 
+              access: 'public',
+              contentType: 'video/mp4'
+            }
+          );
+          
+          console.log('[DEBUG generateVideo] Video uploaded to:', permanentUrl);
+
+          return res.status(200).json({
+            success: true,
+            videoUrl: permanentUrl,
+            taskId: result.taskId,
+            model: videoModel || 'runway',
+            metadata: result.metadata,
+            storage: 'blob'
+          });
+
+        } catch (error) {
+          console.error('[DEBUG generateVideo] Error:', error);
+          return res.status(500).json({ 
+            error: 'Failed to generate video',
+            details: error.message 
+          });
+        }
+      }
+
+      if (req.body.generateImage === true) {
+        const { prompt, projectId, sessionId, imageModel, dimensions } = req.body;
+
+        if (!prompt) {
+          return res.status(400).json({ 
+            error: 'Missing required fields',
+            details: 'prompt is required'
+          });
+        }
+
+        if (!openAIApiKey) {
+          return res.status(500).json({ 
+            error: 'Image generation service not configured',
+            details: 'Please configure OPENAI_API_KEY'
+          });
+        }
+
+        try {
+          // Check if we should enhance the prompt with production context
+          let enhancedPrompt = prompt;
+          if (sessionId) {
+            // Try to get conversation history to find production context
+            const projectConfig = getProjectConfig(projectId);
+            const { baseId, chatTable } = projectConfig;
+            const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
+            const headersAirtable = { 
+              'Content-Type': 'application/json', 
+              Authorization: `Bearer ${airtableApiKey}` 
+            };
+            
+            const conversationContext = await getConversationHistory(sessionId, projectId, chatUrl, headersAirtable);
+            const lastProductionContext = extractLastProduction(conversationContext);
+            
+            if (lastProductionContext) {
+              // Enhance the prompt with production context
+              enhancedPrompt = `Continue working on this production: ${lastProductionContext}\n\n${prompt}`;
+              console.log('Enhanced image prompt with production context');
+            }
+          }
+          
+          const model = MODELS.openai.image;
+          
+          const requestBody = {
+            model: model,
+            prompt: enhancedPrompt,
+            n: 1
+          };
+          
+          if (dimensions) {
+            requestBody.size = dimensions;
+          } else {
+            requestBody.size = '1536x1024';
+          }
+          
+          const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${openAIApiKey}`
+            },
+            body: JSON.stringify(requestBody)
+          });
+
+          if (!imageResponse.ok) {
+            const errorData = await imageResponse.text();
+            
+            if (imageResponse.status === 401) {
+              return res.status(401).json({ 
+                error: 'Invalid API key',
+                details: 'Check your OpenAI API key configuration'
+              });
+            }
+            
+            if (imageResponse.status === 429) {
+              return res.status(429).json({ 
+                error: 'Rate limit exceeded',
+                details: 'Too many requests. Please try again later.'
+              });
+            }
+            
+            if (imageResponse.status === 400) {
+              let errorDetails = errorData;
+              try {
+                const errorJson = JSON.parse(errorData);
+                errorDetails = errorJson.error?.message || errorData;
+              } catch (e) {
+              }
+              return res.status(400).json({ 
+                error: 'Invalid request',
+                details: errorDetails
+              });
+            }
+            
+            return res.status(imageResponse.status).json({ 
+              error: 'Failed to generate image',
+              details: errorData
+            });
+          }
+
+          const data = await imageResponse.json();
+
+          // Handle BOTH URL and base64 responses from OpenAI
+          let imageBuffer = null;
+          let permanentUrl = null;
+          
+          if (data.data && data.data.length > 0) {
+            if (data.data[0].url) {
+              // URL response - fetch the image
+              const temporaryImageUrl = data.data[0].url;
+              const imageDataResponse = await fetch(temporaryImageUrl);
+              
+              if (!imageDataResponse.ok) {
+                throw new Error(`Failed to fetch image from OpenAI URL: ${imageDataResponse.status}`);
+              }
+              
+              imageBuffer = await imageDataResponse.buffer();
+              
+            } else if (data.data[0].b64_json) {
+              // Base64 response - decode it
+              const base64Image = data.data[0].b64_json;
+              imageBuffer = Buffer.from(base64Image, 'base64');
+            }
+          } else if (data.url) {
+            // Direct URL in response
+            const imageDataResponse = await fetch(data.url);
+            if (!imageDataResponse.ok) {
+              throw new Error(`Failed to fetch image: ${imageDataResponse.status}`);
+            }
+            imageBuffer = await imageDataResponse.buffer();
+          }
+          
+          if (!imageBuffer) {
+            throw new Error('No image data received from OpenAI');
+          }
+          
+          // Upload to Vercel Blob Storage
+          const timestamp = Date.now();
+          const filename = `${sessionId || 'unknown-session'}/poster-image-${timestamp}.png`;
+          
+          const { url } = await put(
+            filename,
+            imageBuffer,
+            { 
+              access: 'public',
+              contentType: 'image/png'
+            }
+          );
+          
+          permanentUrl = url;
+          
+          return res.status(200).json({
+            success: true,
+            imageUrl: permanentUrl,
+            revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
+            model: model,
+            storage: 'blob'
+          });
+          
+        } catch (error) {
+          console.error('[DEBUG generateImage] Error:', error);
+          return res.status(500).json({ 
+            error: 'Failed to generate image',
+            details: error.message 
+          });
+        }
+      }
+      
+      let { userMessage, sessionId, audioData, projectId, projectName, runId: clientRunId } = req.body;
+
+      // Generate runId if not provided by client
+      const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+      res.setHeader("x-run-id", runId);
+      res.setHeader("Cache-Control", "no-store");
+
+      if (userMessage && userMessage.length > 5000) {
+        userMessage = userMessage.slice(0, 5000) + "…";
+      }
+
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Missing sessionId' });
+      }
+      if (!userMessage && !audioData) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      // Initialize progress tracking for this session with runId
+      await progressInit(sessionId, runId);
+      await progressPush(sessionId, runId, { type: 'info', text: '🔎 Routing request...', runId });
+
+      const projectConfig = getProjectConfig(projectId);
+      const { baseId, chatTable, knowledgeTable } = projectConfig;
+
+      const knowledgeBaseUrl = `https://api.airtable.com/v0/${baseId}/${knowledgeTable}`;
+      const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
+      const headersAirtable = { 
+        'Content-Type': 'application/json', 
+        Authorization: `Bearer ${airtableApiKey}` 
+      };
+
+      let conversationContext = '';
+      let existingRecordId = null;
+
+      let knowledgeBaseInstructions = '';
+      try {
+        const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
+        if (kbResponse.ok) {
+          const knowledgeBaseData = await kbResponse.json();
+          const knowledgeEntries = knowledgeBaseData.records
+            .map(record => record.fields?.Summary)
+            .filter(Boolean)
+            .join('\n\n');
+          knowledgeBaseInstructions = knowledgeEntries;
+        } else {
+        }
+      } catch (error) {
+      }
+
+      try {
+        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
+        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
+        if (historyResponse.ok) {
+          const result = await historyResponse.json();
+          if (result.records.length > 0) {
+            conversationContext = result.records[0].fields.Conversation || '';
+            existingRecordId = result.records[0].id;
+
+            if (conversationContext.length > 3000) {
+              conversationContext = conversationContext.slice(-3000);
+            }
+          }
+        }
+      } catch (error) {
+      }
+
+      const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
+      
+      if (audioData) {
+        try {
+          const audioBuffer = Buffer.from(audioData, 'base64');
+          const openaiWsUrl = `wss://api.openai.com/v1/realtime?model=${MODELS.openai.realtime}`;
+
+          const openaiWs = new WebSocket(openaiWsUrl, {
+            headers: {
+              Authorization: `Bearer ${openAIApiKey}`,
+              'OpenAI-Beta': 'realtime=v1',
+            },
+          });
+
+          let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
+          if (conversationContext) {
+            systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+          }
+          systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
+          if (projectId && projectId !== 'default') {
+            systemMessageContent += ` You are assisting with the ${projectId} project.`;
+          }
+
+          openaiWs.on('open', () => {
+            openaiWs.send(JSON.stringify({
+              type: 'session.update',
+              session: { instructions: systemMessageContent },
+            }));
+            openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioBuffer.toString('base64') }));
+            openaiWs.send(JSON.stringify({
+              type: 'response.create',
+              response: { modalities: ['text'], instructions: 'Please respond to the user.' },
+            }));
+          });
+
+          openaiWs.on('message', async (message) => {
+            const event = JSON.parse(message);
+            if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
+              const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
+              if (aiReply) {
+                updateAirtableConversation(
+                  sessionId, 
+                  projectId, 
+                  chatUrl, 
+                  headersAirtable, 
+                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
+                  existingRecordId
+                ).catch(err => console.error('Airtable update error:', err));
+                
+                res.json({ 
+                  reply: aiReply,
+                  mcpThinking: null,
+                  usedMCP: false
+                });
+              } else {
+                res.status(500).json({ error: 'No valid reply received from OpenAI.' });
+              }
+              openaiWs.close();
+            }
+          });
+
+          openaiWs.on('error', (error) => {
+            console.error('WebSocket error:', error);
+            res.status(500).json({ error: 'Failed to communicate with OpenAI' });
+          });
+          
+          openaiWs.on('close', (code, reason) => {
+            console.log(`WebSocket closed with code ${code}: ${reason}`);
+            progressDone(sessionId); // Mark done when websocket closes
+          });
+          
+        } catch (error) {
+          res.status(500).json({ error: 'Error processing audio data.', details: error.message });
+        }
+      // This is the complete and final code to paste inside the 'else if (userMessage) { ... }' block
+} else if (userMessage) {
+        try {
+          // Timer and MCP steps are initialized at the very start of processing.
+          const mcpStartTime = Date.now();
+          let mcpSteps = []; 
+          
+          let aiReply = '';
+          let usedMCP = false;
+          let structuredData = null;
+          
+          // Extract the last production context for follow-up questions
+          const lastProductionContext = extractLastProduction(conversationContext);
+          
+          const claudeResult = await handleClaudeSearch(
+              userMessage,
+              projectId,
+              conversationContext,
+              lastProductionContext,
+              projectName, // Pass the known name from the request body
+              runId, // Pass runId for progress tracking
+              (step) => progressPush(sessionId, runId, step)
+          );
+
+          if (claudeResult) {
+              // A tool was successfully used!
+              usedMCP = true;
+              mcpSteps = claudeResult.mcpThinking.map(step => ({
+                    ...step,
+                    timestamp: Date.now() - mcpStartTime // Recalculate timestamp relative to the handler start
+                })) || [];
+              structuredData = claudeResult.organizedData;
+              let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
+              
+              // Special formatting for BRAND_ACTIVITY responses
+              if (structuredData.dataType === 'BRAND_ACTIVITY') {
+                // Count the actual items in the data
+                const totalCommunications = structuredData.communications?.length || 0;
+                const actualMeetings = structuredData.communications?.filter(c => c.type === 'meeting').length || 0;
+                const actualEmails = structuredData.communications?.filter(c => c.type === 'email').length || 0;
+                
+                systemMessageContent += `\n\nYou have retrieved activity data for a brand. Format your response EXACTLY as follows:
+
+**ABSOLUTE REQUIREMENT: Display ALL ${totalCommunications} items from the communications array**
+
+The data contains:
+- ${actualMeetings} meetings
+- ${actualEmails} emails
+- Total: ${totalCommunications} items
+
+YOU MUST DISPLAY ALL ${totalCommunications} ITEMS. If you skip ANY items, the system will fail.
+
+**FORMATTING RULES:**
+1. Start with "Based on the search results, here's the activity summary for [Brand Name]:"
+2. List ALL ${totalCommunications} items in the EXACT order from the communications array
+3. Number them 1 through ${totalCommunications}
+4. Format each item:
+   - Meetings: "[MEETING url='url_if_exists'] Title - Date" or "[MEETING] Title - Date"
+   - Emails: "[EMAIL] Subject - Date"
+5. Include bullet points with details for each item
+
+**VERIFICATION CHECKLIST:**
+☐ Did you display item 1? ${structuredData.communications?.[0]?.title || 'N/A'}
+☐ Did you display item 2? ${structuredData.communications?.[1]?.title || 'N/A'}
+☐ Did you display item 3? ${structuredData.communications?.[2]?.title || 'N/A'}
+[Continue for all ${totalCommunications} items...]
+
+**EXAMPLE (if there were 21 items):**
+Based on the search results, here's the activity summary for [Brand Name]:
+
+1. [EMAIL] Re: Additional Order - PEAK Daytona Helmet - 8/15/2024
+   • From: Sarah Kistler
+   • Follow-up on PEAK helmets timing
+
+2. [MEETING url="https://fireflies.ai/xxx"] Peak Warner Meeting - 8/10/2024
+   • Discussion of marketing efforts
+   • Duration: 45 minutes
+
+[... MUST CONTINUE THROUGH ALL 21 ITEMS ...]
+
+21. [EMAIL] Initial Contact - 1/5/2024
+   • First outreach email
+   • From: Marketing Team
+
+Key Contacts:
+- [List any contacts]
+
+**CRITICAL**: The MCP system found ${actualMeetings} meetings and ${actualEmails} emails.
+You MUST display ALL of them or the numbers won't match and user trust will be lost.
+Count your items before submitting - there should be EXACTLY ${totalCommunications} numbered items.`;
+              } else {
+                systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
+
+**CRITICAL RULE: If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT, under any circumstances, invent or hallucinate information, brands, or meeting details.**
+
+For brand recommendations, organize your response clearly:
+- Start with a brief overview of what was found
+- Group brands by their tags (Active Clients, New Opportunities, Genre Matches, Creative Suggestions)
+- For each brand, mention key details like status, category, and why it's relevant
+- If there are wildcard suggestions, explain these are creative ideas to explore
+
+Keep the tone helpful and strategic, focusing on actionable insights.`;
+              }
+
+              systemMessageContent += '\n\n```json\n';
+              systemMessageContent += JSON.stringify(structuredData, null, 2);
+              systemMessageContent += '\n```';
+              
+              // Add verification instruction for BRAND_ACTIVITY
+              if (structuredData.dataType === 'BRAND_ACTIVITY') {
+                const totalItems = structuredData.communications?.length || 0;
+                const meetingCount = structuredData.communications?.filter(c => c.type === 'meeting').length || 0;
+                const emailCount = structuredData.communications?.filter(c => c.type === 'email').length || 0;
+                
+                systemMessageContent += `\n\n**FINAL VERIFICATION BEFORE YOU RESPOND**: 
+                - The communications array has ${totalItems} items total
+                - Specifically: ${meetingCount} meetings and ${emailCount} emails
+                - You MUST display ALL ${totalItems} items numbered 1 through ${totalItems}
+                - Each email MUST start with [EMAIL]
+                - Each meeting MUST start with [MEETING] or [MEETING url="..."]
+                - Count your response: it should have EXACTLY ${totalItems} numbered items
+                - DO NOT skip items even if they seem similar
+                - The user sees "${meetingCount} meetings and ${emailCount} emails" in the status, so you MUST show all of them`;
+              }
+
+              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
+
+          } else {
+              // No tool was used, so it's a general conversation.
+              usedMCP = false;
+              let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in brand integration into Hollywood entertainment.";
+              if (conversationContext) {
+                  systemMessageContent += `\n\nConversation history: ${conversationContext}`;
+              }
+              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
+          }
+
+          if (aiReply) {
+              updateAirtableConversation(
+                  sessionId, projectId, chatUrl, headersAirtable,
+                  `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
+                  existingRecordId
+              ).catch(err => console.error('[DEBUG] Airtable update error:', err));
+
+              // The final response now includes mcpSteps for the frontend
+              await progressDone(sessionId, runId); // Mark progress as done
+              return res.json({
+                  runId: runId, // Include runId in response
+                  reply: aiReply,
+                  structuredData: structuredData,
+                  mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
+                  usedMCP: usedMCP,
+                  breakdown: claudeResult?.breakdown, // Include breakdown if available
+                  // Add metadata for frontend parsing (only for BRAND_ACTIVITY)
+                  activityMetadata: structuredData?.dataType === 'BRAND_ACTIVITY' ? {
+                    totalCommunications: structuredData.communications?.length || 0,
+                    meetingCount: structuredData.communications?.filter(c => c.type === 'meeting').length || 0,
+                    emailCount: structuredData.communications?.filter(c => c.type === 'email').length || 0,
+                    communications: structuredData.communications // Raw data with type field
+                  } : null
+              });
+          } else {
+              console.error('[DEBUG] No AI reply received');
+              await progressDone(sessionId, runId); // Mark progress as done even on error
+              return res.status(500).json({ error: 'No text reply received.' });
+          }
+        } catch (error) {
+          console.error("[CRASH DETECTED IN HANDLER]:", error);
+          console.error("[STACK TRACE]:", error.stack);
+          await progressDone(sessionId, runId); // Mark progress as done even on crash
+          return res.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+          });
+        }
+      }
+    } catch (error) {
+      return res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+  } else {
+    res.setHeader("Allow", ["POST", "OPTIONS"]);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+}
+
+async function shouldUseSearch(userMessage, conversationContext) {
+  // Simple keyword-based check for now
+  const searchKeywords = ['brand', 'production', 'show', 'movie', 'series', 'find', 'search', 'recommend', 'suggestion', 'partner'];
+  const messageLower = userMessage.toLowerCase();
+  return searchKeywords.some(keyword => messageLower.includes(keyword));
+}
+
+async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
+  try {
+    const messages = [
+      { role: 'system', content: systemMessageContent },
+      { role: 'user', content: userMessage }
+    ];
+    
+    const totalLength = systemMessageContent.length + userMessage.length;
+    
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAIApiKey}`,
+      },
+      body: JSON.stringify({
+        model: MODELS.openai.chat,
+        messages: messages,
+        max_tokens: 1000,
+        temperature: 0.7
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    if (data.choices && data.choices.length > 0) {
+      return data.choices[0].message.content;
+    } else {
+      return null;
+    }
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function getTextResponseFromClaude(userMessage, sessionId, systemMessageContent) {
+  try {
+    // Special handling for BRAND_ACTIVITY to ensure all items are displayed
+    let claudeSystemPrompt = `<role>You are an expert brand partnership analyst for Hollywood entertainment. You provide honest, nuanced analysis while being helpful and conversational.</role>
+
+${systemMessageContent}`;
+    
+    // Check if this is a BRAND_ACTIVITY response
+    if (systemMessageContent.includes('BRAND_ACTIVITY') && systemMessageContent.includes('**ABSOLUTE REQUIREMENT')) {
+      claudeSystemPrompt += `\n\n<critical_instruction>
+YOU MUST DISPLAY EVERY SINGLE ITEM IN THE COMMUNICATIONS ARRAY. 
+Do not summarize, skip, or combine items.
+The user's trust depends on seeing ALL items that were found.
+Before responding, count your numbered items - it must match the total specified.
+</critical_instruction>`;
+    }
+    
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: MODELS.anthropic.claude,
+        max_tokens: 4000, // Increased to ensure we don't cut off long lists
+        temperature: 0.3, // Lower temperature for more consistent following of instructions
+        messages: [
+          {
+            role: 'user',
+            content: `${claudeSystemPrompt}\n\nUser's request: ${userMessage}`
+          }
+        ]
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('Claude API response:', response.status, errorData);
+      throw new Error(`Claude API error: ${response.status} - ${errorData}`);
+    }
+    
+    const data = await response.json();
+    if (data.content && data.content.length > 0) {
+      return data.content[0].text;
+    } else {
+      return null;
+    }
+  } catch (error) {
+    // Fallback to OpenAI if Claude fails
+    console.error('Claude failed, falling back to OpenAI:', error);
+    if (openAIApiKey) {
+      return getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
+    }
+    throw error;
+  }
+}
+
+async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
+  try {
+    let conversationToSave = updatedConversation;
+    if (conversationToSave.length > 10000) {
+      conversationToSave = '...' + conversationToSave.slice(-10000);
+    }
+    
+    const recordData = {
+      fields: {
+        SessionID: sessionId,
+        ProjectID: projectId || 'default',
+        Conversation: conversationToSave
+      }
+    };
+
+    if (existingRecordId) {
+      await fetch(`${chatUrl}/${existingRecordId}`, {
+        method: 'PATCH',
+        headers: headersAirtable,
+        body: JSON.stringify({ fields: recordData.fields }),
+      });
+    } else {
+      await fetch(chatUrl, {
+        method: 'POST',
+        headers: headersAirtable,
+        body: JSON.stringify(recordData),
+      });
+    }
+  } catch (error) {
+  }
+}
+
 // REPLACE your old narrowWithIntelligentTags function with this
 async function narrowWithIntelligentTagsOpenAI(hubspotBrands, firefliesTranscripts, emails, userMessage) {
   console.log('[DEBUG narrowWithIntelligentTagsOpenAI] Fallback function called with', hubspotBrands?.length || 0, 'brands');
@@ -2279,1166 +3440,5 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
     const errorStep = { type: 'error', text: `❌ Error: ${error.message}` };
     add(errorStep);
     return null;
-  }
-}
-
-async function generateRunwayVideo({ 
-  promptText, 
-  promptImage, 
-  model = MODELS.runway.default,
-  ratio = '1104:832',
-  duration = 5
-}) {
-  if (!runwayApiKey) {
-    throw new Error('RUNWAY_API_KEY not configured');
-  }
-
-  try {
-    const client = new RunwayML({
-      apiKey: runwayApiKey
-    });
-
-    let imageToUse = promptImage;
-    
-    if (!imageToUse || imageToUse.includes('dummyimage.com')) {
-      imageToUse = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1280&h=720&fit=crop&q=80';
-    }
-
-    const videoTask = await client.imageToVideo.create({
-      model: model,
-      promptImage: imageToUse,
-      promptText: promptText,
-      ratio: ratio,
-      duration: duration
-    });
-
-    let task = videoTask;
-    let attempts = 0;
-    const maxAttempts = 60;
-
-    while (attempts < maxAttempts) {
-      task = await client.tasks.retrieve(task.id);
-
-      if (task.status === 'SUCCEEDED') {
-        const videoUrl = task.output?.[0];
-        if (!videoUrl) {
-          throw new Error('No video URL in output');
-        }
-
-        return {
-          url: videoUrl,
-          taskId: task.id
-        };
-      }
-
-      if (task.status === 'FAILED') {
-        throw new Error(`Generation failed: ${task.failure || task.error || 'Unknown error'}`);
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      attempts++;
-    }
-
-    throw new Error('Video generation timed out');
-
-  } catch (error) {
-    if (error.message?.includes('401')) {
-      throw new Error('Invalid API key. Check RUNWAY_API_KEY in Vercel settings.');
-    }
-    
-    if (error.message?.includes('429')) {
-      throw new Error('Rate limit exceeded. Try again later.');
-    }
-    
-    if (error.message?.includes('insufficient_credits') || error.status === 402) {
-      throw new Error('Runway credits exhausted. Please upgrade your plan or wait for credits to reset.');
-    }
-    
-    if (error.status === 504 || error.message?.includes('timeout')) {
-      throw new Error('Video generation timed out. This usually means the server is busy. Please try again.');
-    }
-    
-    throw error;
-  }
-}
-
-async function generateVeo3Video({
-  promptText,
-  aspectRatio = '16:9',
-  duration = 5
-}) {
-  if (!googleGeminiApiKey) {
-    throw new Error('GOOGLE_GEMINI_API_KEY not configured');
-  }
-
-  try {
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:generateVideo?key=${googleGeminiApiKey}`;
-    
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        prompt: promptText,
-        config: {
-          personGeneration: "allow_all",
-          aspectRatio: aspectRatio,
-          duration: `${duration}s`
-        }
-      })
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      
-      if (response.status === 401) {
-        throw new Error('Invalid API key. Check GOOGLE_GEMINI_API_KEY in environment variables.');
-      }
-      if (response.status === 404) {
-        throw new Error('Veo3 API endpoint not found. The API may not be available in your region or your API key may not have access.');
-      }
-      if (response.status === 429) {
-        throw new Error('Rate limit exceeded. Try again later.');
-      }
-      
-      throw new Error(`Veo3 API error: ${response.status} - ${errorText}`);
-    }
-
-    const operation = await response.json();
-
-    if (operation.name) {
-      let attempts = 0;
-      const maxAttempts = 60;
-      
-      while (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        
-        const statusUrl = `https://generativelanguage.googleapis.com/v1beta/${operation.name}?key=${googleGeminiApiKey}`;
-        const statusResponse = await fetch(statusUrl);
-        
-        if (!statusResponse.ok) {
-          throw new Error('Failed to check video generation status');
-        }
-        
-        const statusData = await statusResponse.json();
-        
-        if (statusData.done) {
-          if (statusData.error) {
-            throw new Error(`Video generation failed: ${statusData.error.message}`);
-          }
-          
-          const videoUrl = statusData.response?.video?.uri || statusData.response?.videoUrl;
-          if (!videoUrl) {
-            throw new Error('No video URL in response');
-          }
-          
-          return {
-            url: videoUrl,
-            taskId: operation.name,
-            metadata: statusData.response
-          };
-        }
-        
-        attempts++;
-      }
-      
-      throw new Error('Video generation timed out');
-    } else {
-      const videoUrl = operation.video?.uri || operation.videoUrl;
-      if (!videoUrl) {
-        throw new Error('No video URL in response');
-      }
-      
-      return {
-        url: videoUrl,
-        taskId: 'direct-response',
-        metadata: operation
-      };
-    }
-
-  } catch (error) {
-    throw new Error(`Veo3 is currently in preview and may not be available. ${error.message}`);
-  }
-}
-
-export default async function handler(req, res) {
-  // CORS headers with proper origin handling
-  const origin = req.headers.origin || "*";
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Access-Control-Max-Age", "86400");
-  
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-  
-  // GET endpoint for progress with runId support
-  if (req.method === 'GET' && req.query.progress === 'true') {
-    const { sessionId, runId } = req.query;
-    
-    // Set no-cache headers
-    res.setHeader("Cache-Control", "no-store");
-    
-    if (!sessionId) {
-      return res.status(400).json({ error: 'sessionId required' });
-    }
-    const key = progKey(sessionId, runId);
-    const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null };
-    // Only return steps if runId matches or no runId specified
-    if (runId && s.runId !== runId) {
-      return res.status(200).json({ steps: [], done: false, runId });
-    }
-    return res.status(200).json(s);
-  }
-  
-  if (req.method === 'POST') {
-    try {
-      // Handle Push Draft endpoint
-      if (req.body.pushDraft === true) {
-        const { productionData, brands, sessionId } = req.body;
-        
-        if (!productionData || !brands || brands.length === 0) {
-          return res.status(400).json({ 
-            error: 'Missing required fields',
-            details: 'productionData and brands array are required'
-          });
-        }
-        
-        if (!openAIApiKey || !msftClientId || !msftClientSecret) {
-          return res.status(500).json({ 
-            error: 'Push feature not configured',
-            details: 'Missing OpenAI or Microsoft Graph credentials'
-          });
-        }
-        
-        try {
-          console.log('[DEBUG pushDraft] Starting push draft creation...');
-          console.log('[DEBUG pushDraft] Production:', productionData.projectName);
-          console.log('[DEBUG pushDraft] Brand count:', brands.length);
-          
-          // Step 1: Generate email content using OpenAI
-          const emailPrompt = `You are Shap, a brand partnership executive at Hollywood Branded. Write a PERSONAL, conversational email to yourself (as a draft) summarizing brand recommendations for a production.
-
-Production Details:
-- Title: ${productionData.projectName || 'Untitled Production'}
-- Vibe/Genre: ${productionData.vibe || 'Not specified'}
-- Cast: ${productionData.cast || 'TBD'}
-- Location: ${productionData.location || 'TBD'}
-- Notes: ${productionData.notes || 'None'}
-
-Selected Brands for Consideration (${brands.length} total):
-${brands.map((brand, i) => `
-${i + 1}. ${brand.name}
-   - Category: ${brand.category || 'General'}
-   - Why it works: ${brand.reason || brand.pitch || 'Good fit for production'}
-   - Status: ${brand.clientStatus || 'Prospect'}
-   ${brand.tags ? `- Tags: ${Array.isArray(brand.tags) ? brand.tags.join(', ') : brand.tags}` : ''}
-`).join('\n')}
-
-Write a draft email to yourself that:
-1. Opens with a brief, personal reminder about this production (1-2 sentences)
-2. Lists the brands with quick notes on why each could work
-3. Includes any action items or next steps
-4. Keeps a casual, note-to-self tone (this is YOUR draft folder)
-5. Signs off as "- Shap" or similar
-
-Format as HTML with simple formatting (use <br> for line breaks, <b> for emphasis, <ul>/<li> for lists).
-Keep it under 300 words.`;
-
-          const openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${openAIApiKey}`
-            },
-            body: JSON.stringify({
-              model: MODELS.openai.chatMini,
-              messages: [
-                { role: 'system', content: 'You are Shap, writing a draft email to yourself about brand partnerships. Keep it personal and conversational.' },
-                { role: 'user', content: emailPrompt }
-              ],
-              temperature: 0.7,
-              max_tokens: 800
-            })
-          });
-          
-          if (!openAIResponse.ok) {
-            console.error('[DEBUG pushDraft] OpenAI failed:', openAIResponse.status);
-            throw new Error('Failed to generate email content');
-          }
-          
-          const aiData = await openAIResponse.json();
-          const emailBody = aiData.choices[0].message.content;
-          
-          console.log('[DEBUG pushDraft] Email content generated');
-          
-          // Step 2: Create draft in Outlook
-          const emailSubject = `Brand Recs: ${productionData.projectName || 'Untitled Production'} (${brands.length} brands)`;
-          
-          const draftResult = await o365API.createDraft(
-            emailSubject,
-            emailBody,
-            'shap@hollywoodbranded.com', // To self
-            { 
-              senderEmail: 'shap@hollywoodbranded.com',
-              isHtml: true 
-            }
-          );
-          
-          console.log('[DEBUG pushDraft] Draft created:', draftResult.id);
-          console.log('[DEBUG pushDraft] WebLink:', draftResult.webLink);
-          
-          return res.status(200).json({
-            success: true,
-            draftId: draftResult.id,
-            webLink: draftResult.webLink,  // Keep for backward compatibility
-            webLinks: [draftResult.webLink], // Array format for consistency
-            message: 'Draft created successfully in Outlook'
-          });
-          
-        } catch (error) {
-          console.error('[DEBUG pushDraft] Error:', error);
-          return res.status(500).json({ 
-            error: 'Failed to create draft',
-            details: error.message 
-          });
-        }
-      }
-      
-      if (req.body.generateAudio === true) {
-        const { prompt, projectId, sessionId } = req.body;
-        if (!prompt) {
-          return res.status(400).json({ 
-            error: 'Missing required fields',
-            details: 'prompt is required'
-          });
-        }
-        if (!elevenLabsApiKey) {
-          return res.status(500).json({ 
-            error: 'Audio generation service not configured',
-            details: 'Please configure ELEVENLABS_API_KEY'
-          });
-        }
-        const projectConfig = getProjectConfig(projectId);
-        const { voiceId, voiceSettings } = projectConfig;
-        try {
-            const elevenLabsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
-            
-            const elevenLabsResponse = await fetch(elevenLabsUrl, {
-                method: 'POST',
-                headers: {
-                    'Accept': 'audio/mpeg',
-                    'Content-Type': 'application/json',
-                    'xi-api-key': elevenLabsApiKey
-                },
-                body: JSON.stringify({
-                    text: prompt,
-                    model_id: MODELS.elevenlabs.voice,
-                    voice_settings: voiceSettings
-                })
-            });
-            if (!elevenLabsResponse.ok) {
-                const errorText = await elevenLabsResponse.text();
-                return res.status(elevenLabsResponse.status).json({ 
-                    error: 'Failed to generate audio',
-                    details: errorText
-                });
-            }
-            
-            // Get the audio as a buffer
-            const audioBuffer = await elevenLabsResponse.buffer();
-            
-            // Upload to Vercel Blob Storage
-            const timestamp = Date.now();
-            const filename = `${sessionId || 'unknown-session'}/audio-narration-${timestamp}.mp3`;
-            
-            console.log('[DEBUG generateAudio] Uploading to blob storage:', filename);
-            
-            const { url: permanentUrl } = await put(
-                filename,
-                audioBuffer,
-                { 
-                    access: 'public',
-                    contentType: 'audio/mpeg'
-                }
-            );
-            
-            console.log('[DEBUG generateAudio] Audio uploaded to:', permanentUrl);
-            
-            return res.status(200).json({
-                success: true,
-                audioUrl: permanentUrl,
-                voiceUsed: voiceId,
-                storage: 'blob'
-            });
-            
-        } catch (error) {
-            console.error('[DEBUG generateAudio] Error:', error);
-            return res.status(500).json({ 
-                error: 'Failed to generate audio',
-                details: error.message 
-            });
-        }
-      }
-
-      if (req.body.generateVideo === true) {
-        const { promptText, promptImage, projectId, sessionId, model, ratio, duration, videoModel } = req.body;
-
-        if (!promptText) {
-          return res.status(400).json({ 
-            error: 'Missing required fields',
-            details: 'promptText is required'
-          });
-        }
-
-        try {
-          // Check if we should enhance the prompt with production context
-          let enhancedPromptText = promptText;
-          if (sessionId) {
-            // Try to get conversation history to find production context
-            const projectConfig = getProjectConfig(projectId);
-            const { baseId, chatTable } = projectConfig;
-            const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
-            const headersAirtable = { 
-              'Content-Type': 'application/json', 
-              Authorization: `Bearer ${airtableApiKey}` 
-            };
-            
-            const conversationContext = await getConversationHistory(sessionId, projectId, chatUrl, headersAirtable);
-            const lastProductionContext = extractLastProduction(conversationContext);
-            
-            if (lastProductionContext) {
-              // Enhance the prompt with production context
-              enhancedPromptText = `Continue working on this production: ${lastProductionContext}\n\n${promptText}`;
-              console.log('Enhanced video prompt with production context');
-            }
-          }
-          
-          let result;
-          
-          if (videoModel === 'veo3') {
-            if (!googleGeminiApiKey) {
-              return res.status(500).json({ 
-                error: 'Veo3 video generation service not configured',
-                details: 'Please configure GOOGLE_GEMINI_API_KEY in environment variables'
-              });
-            }
-            
-            let veo3AspectRatio = '16:9';
-            if (ratio === '1104:832') veo3AspectRatio = '4:3';
-            else if (ratio === '832:1104') veo3AspectRatio = '9:16';
-            else if (ratio === '1920:1080') veo3AspectRatio = '16:9';
-            
-            result = await generateVeo3Video({
-              promptText: enhancedPromptText,
-              aspectRatio: veo3AspectRatio,
-              duration
-            });
-            
-          } else {
-            if (!runwayApiKey) {
-              return res.status(500).json({ 
-                error: 'Runway video generation service not configured',
-                details: 'Please configure RUNWAY_API_KEY in environment variables'
-              });
-            }
-            
-            if (promptImage && !promptImage.startsWith('http') && !promptImage.startsWith('data:')) {
-              return res.status(400).json({
-                error: 'Invalid image format',
-                details: 'promptImage must be a valid URL or base64 data URL'
-              });
-            }
-            
-            let imageToUse = promptImage;
-            if (!promptImage || promptImage.includes('dummyimage.com')) {
-              imageToUse = 'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
-            }
-            
-            result = await generateRunwayVideo({
-              promptText: enhancedPromptText,
-              promptImage: imageToUse,
-              model: model || MODELS.runway.turbo,
-              ratio: ratio || '1104:832',
-              duration: duration || 5
-            });
-          }
-
-          // Fetch the video from the temporary URL and upload to blob storage
-          console.log('[DEBUG generateVideo] Fetching video from temporary URL...');
-          const videoResponse = await fetch(result.url);
-          
-          if (!videoResponse.ok) {
-            throw new Error(`Failed to fetch video from temporary URL: ${videoResponse.status}`);
-          }
-          
-          const videoBuffer = await videoResponse.buffer();
-          
-          // Upload to Vercel Blob Storage
-          const timestamp = Date.now();
-          const filename = `${sessionId || 'unknown-session'}/video-generated-${timestamp}.mp4`;
-          
-          console.log('[DEBUG generateVideo] Uploading to blob storage:', filename);
-          
-          const { url: permanentUrl } = await put(
-            filename,
-            videoBuffer,
-            { 
-              access: 'public',
-              contentType: 'video/mp4'
-            }
-          );
-          
-          console.log('[DEBUG generateVideo] Video uploaded to:', permanentUrl);
-
-          return res.status(200).json({
-            success: true,
-            videoUrl: permanentUrl,
-            taskId: result.taskId,
-            model: videoModel || 'runway',
-            metadata: result.metadata,
-            storage: 'blob'
-          });
-
-        } catch (error) {
-          console.error('[DEBUG generateVideo] Error:', error);
-          return res.status(500).json({ 
-            error: 'Failed to generate video',
-            details: error.message 
-          });
-        }
-      }
-
-      if (req.body.generateImage === true) {
-        const { prompt, projectId, sessionId, imageModel, dimensions } = req.body;
-
-        if (!prompt) {
-          return res.status(400).json({ 
-            error: 'Missing required fields',
-            details: 'prompt is required'
-          });
-        }
-
-        if (!openAIApiKey) {
-          return res.status(500).json({ 
-            error: 'Image generation service not configured',
-            details: 'Please configure OPENAI_API_KEY'
-          });
-        }
-
-        try {
-          // Check if we should enhance the prompt with production context
-          let enhancedPrompt = prompt;
-          if (sessionId) {
-            // Try to get conversation history to find production context
-            const projectConfig = getProjectConfig(projectId);
-            const { baseId, chatTable } = projectConfig;
-            const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
-            const headersAirtable = { 
-              'Content-Type': 'application/json', 
-              Authorization: `Bearer ${airtableApiKey}` 
-            };
-            
-            const conversationContext = await getConversationHistory(sessionId, projectId, chatUrl, headersAirtable);
-            const lastProductionContext = extractLastProduction(conversationContext);
-            
-            if (lastProductionContext) {
-              // Enhance the prompt with production context
-              enhancedPrompt = `Continue working on this production: ${lastProductionContext}\n\n${prompt}`;
-              console.log('Enhanced image prompt with production context');
-            }
-          }
-          
-          const model = MODELS.openai.image;
-          
-          const requestBody = {
-            model: model,
-            prompt: enhancedPrompt,
-            n: 1
-          };
-          
-          if (dimensions) {
-            requestBody.size = dimensions;
-          } else {
-            requestBody.size = '1536x1024';
-          }
-          
-          const imageResponse = await fetch('https://api.openai.com/v1/images/generations', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${openAIApiKey}`
-            },
-            body: JSON.stringify(requestBody)
-          });
-
-          if (!imageResponse.ok) {
-            const errorData = await imageResponse.text();
-            
-            if (imageResponse.status === 401) {
-              return res.status(401).json({ 
-                error: 'Invalid API key',
-                details: 'Check your OpenAI API key configuration'
-              });
-            }
-            
-            if (imageResponse.status === 429) {
-              return res.status(429).json({ 
-                error: 'Rate limit exceeded',
-                details: 'Too many requests. Please try again later.'
-              });
-            }
-            
-            if (imageResponse.status === 400) {
-              let errorDetails = errorData;
-              try {
-                const errorJson = JSON.parse(errorData);
-                errorDetails = errorJson.error?.message || errorData;
-              } catch (e) {
-              }
-              return res.status(400).json({ 
-                error: 'Invalid request',
-                details: errorDetails
-              });
-            }
-            
-            return res.status(imageResponse.status).json({ 
-              error: 'Failed to generate image',
-              details: errorData
-            });
-          }
-
-          const data = await imageResponse.json();
-
-          // Handle BOTH URL and base64 responses from OpenAI
-          let imageBuffer = null;
-          let permanentUrl = null;
-          
-          if (data.data && data.data.length > 0) {
-            if (data.data[0].url) {
-              // URL response - fetch the image
-              const temporaryImageUrl = data.data[0].url;
-              const imageDataResponse = await fetch(temporaryImageUrl);
-              
-              if (!imageDataResponse.ok) {
-                throw new Error(`Failed to fetch image from OpenAI URL: ${imageDataResponse.status}`);
-              }
-              
-              imageBuffer = await imageDataResponse.buffer();
-              
-            } else if (data.data[0].b64_json) {
-              // Base64 response - decode it
-              const base64Image = data.data[0].b64_json;
-              imageBuffer = Buffer.from(base64Image, 'base64');
-            }
-          } else if (data.url) {
-            // Direct URL in response
-            const imageDataResponse = await fetch(data.url);
-            if (!imageDataResponse.ok) {
-              throw new Error(`Failed to fetch image: ${imageDataResponse.status}`);
-            }
-            imageBuffer = await imageDataResponse.buffer();
-          }
-          
-          if (!imageBuffer) {
-            throw new Error('No image data received from OpenAI');
-          }
-          
-          // Upload to Vercel Blob Storage
-          const timestamp = Date.now();
-          const filename = `${sessionId || 'unknown-session'}/poster-image-${timestamp}.png`;
-          
-          const { url } = await put(
-            filename,
-            imageBuffer,
-            { 
-              access: 'public',
-              contentType: 'image/png'
-            }
-          );
-          
-          permanentUrl = url;
-          
-          return res.status(200).json({
-            success: true,
-            imageUrl: permanentUrl,
-            revisedPrompt: data.data?.[0]?.revised_prompt || prompt,
-            model: model,
-            storage: 'blob'
-          });
-          
-        } catch (error) {
-          console.error('[DEBUG generateImage] Error:', error);
-          return res.status(500).json({ 
-            error: 'Failed to generate image',
-            details: error.message 
-          });
-        }
-      }
-      
-      let { userMessage, sessionId, audioData, projectId, projectName, runId: clientRunId } = req.body;
-
-      // Generate runId if not provided by client
-      const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-      res.setHeader("x-run-id", runId);
-      res.setHeader("Cache-Control", "no-store");
-
-      if (userMessage && userMessage.length > 5000) {
-        userMessage = userMessage.slice(0, 5000) + "…";
-      }
-
-      if (!sessionId) {
-        return res.status(400).json({ error: 'Missing sessionId' });
-      }
-      if (!userMessage && !audioData) {
-        return res.status(400).json({ error: 'Missing required fields' });
-      }
-
-      // Initialize progress tracking for this session with runId
-      await progressInit(sessionId, runId);
-      await progressPush(sessionId, runId, { type: 'info', text: '🔎 Routing request...', runId });
-
-      const projectConfig = getProjectConfig(projectId);
-      const { baseId, chatTable, knowledgeTable } = projectConfig;
-
-      const knowledgeBaseUrl = `https://api.airtable.com/v0/${baseId}/${knowledgeTable}`;
-      const chatUrl = `https://api.airtable.com/v0/${baseId}/${chatTable}`;
-      const headersAirtable = { 
-        'Content-Type': 'application/json', 
-        Authorization: `Bearer ${airtableApiKey}` 
-      };
-
-      let conversationContext = '';
-      let existingRecordId = null;
-
-      let knowledgeBaseInstructions = '';
-      try {
-        const kbResponse = await fetch(knowledgeBaseUrl, { headers: headersAirtable });
-        if (kbResponse.ok) {
-          const knowledgeBaseData = await kbResponse.json();
-          const knowledgeEntries = knowledgeBaseData.records
-            .map(record => record.fields?.Summary)
-            .filter(Boolean)
-            .join('\n\n');
-          knowledgeBaseInstructions = knowledgeEntries;
-        } else {
-        }
-      } catch (error) {
-      }
-
-      try {
-        const searchUrl = `${chatUrl}?filterByFormula=AND(SessionID="${sessionId}",ProjectID="${projectId}")`;
-        const historyResponse = await fetch(searchUrl, { headers: headersAirtable });
-        if (historyResponse.ok) {
-          const result = await historyResponse.json();
-          if (result.records.length > 0) {
-            conversationContext = result.records[0].fields.Conversation || '';
-            existingRecordId = result.records[0].id;
-
-            if (conversationContext.length > 3000) {
-              conversationContext = conversationContext.slice(-3000);
-            }
-          }
-        }
-      } catch (error) {
-      }
-
-      const shouldSearchDatabases = await shouldUseSearch(userMessage, conversationContext);
-      
-      if (audioData) {
-        try {
-          const audioBuffer = Buffer.from(audioData, 'base64');
-          const openaiWsUrl = `wss://api.openai.com/v1/realtime?model=${MODELS.openai.realtime}`;
-
-          const openaiWs = new WebSocket(openaiWsUrl, {
-            headers: {
-              Authorization: `Bearer ${openAIApiKey}`,
-              'OpenAI-Beta': 'realtime=v1',
-            },
-          });
-
-          let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in AI & Automation.";
-          if (conversationContext) {
-            systemMessageContent += `\n\nConversation history: ${conversationContext}`;
-          }
-          systemMessageContent += `\n\nCurrent time in PDT: ${getCurrentTimeInPDT()}.`;
-          if (projectId && projectId !== 'default') {
-            systemMessageContent += ` You are assisting with the ${projectId} project.`;
-          }
-
-          openaiWs.on('open', () => {
-            openaiWs.send(JSON.stringify({
-              type: 'session.update',
-              session: { instructions: systemMessageContent },
-            }));
-            openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioBuffer.toString('base64') }));
-            openaiWs.send(JSON.stringify({
-              type: 'response.create',
-              response: { modalities: ['text'], instructions: 'Please respond to the user.' },
-            }));
-          });
-
-          openaiWs.on('message', async (message) => {
-            const event = JSON.parse(message);
-            if (event.type === 'conversation.item.created' && event.item.role === 'assistant') {
-              const aiReply = event.item.content.filter(content => content.type === 'text').map(content => content.text).join('');
-              if (aiReply) {
-                updateAirtableConversation(
-                  sessionId, 
-                  projectId, 
-                  chatUrl, 
-                  headersAirtable, 
-                  `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`, 
-                  existingRecordId
-                ).catch(err => console.error('Airtable update error:', err));
-                
-                res.json({ 
-                  reply: aiReply,
-                  mcpThinking: null,
-                  usedMCP: false
-                });
-              } else {
-                res.status(500).json({ error: 'No valid reply received from OpenAI.' });
-              }
-              openaiWs.close();
-            }
-          });
-
-          openaiWs.on('error', (error) => {
-            console.error('WebSocket error:', error);
-            res.status(500).json({ error: 'Failed to communicate with OpenAI' });
-          });
-          
-          openaiWs.on('close', (code, reason) => {
-            console.log(`WebSocket closed with code ${code}: ${reason}`);
-            progressDone(sessionId); // Mark done when websocket closes
-          });
-          
-        } catch (error) {
-          res.status(500).json({ error: 'Error processing audio data.', details: error.message });
-        }
-      // This is the complete and final code to paste inside the 'else if (userMessage) { ... }' block
-} else if (userMessage) {
-        try {
-          // Timer and MCP steps are initialized at the very start of processing.
-          const mcpStartTime = Date.now();
-          let mcpSteps = []; 
-          
-          let aiReply = '';
-          let usedMCP = false;
-          let structuredData = null;
-          
-          // Extract the last production context for follow-up questions
-          const lastProductionContext = extractLastProduction(conversationContext);
-          
-          const claudeResult = await handleClaudeSearch(
-              userMessage,
-              projectId,
-              conversationContext,
-              lastProductionContext,
-              projectName, // Pass the known name from the request body
-              runId, // Pass runId for progress tracking
-              (step) => progressPush(sessionId, runId, step)
-          );
-
-          if (claudeResult) {
-              // A tool was successfully used!
-              usedMCP = true;
-              mcpSteps = claudeResult.mcpThinking.map(step => ({
-                    ...step,
-                    timestamp: Date.now() - mcpStartTime // Recalculate timestamp relative to the handler start
-                })) || [];
-              structuredData = claudeResult.organizedData;
-              let systemMessageContent = knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
-              
-              // Special formatting for BRAND_ACTIVITY responses
-              if (structuredData.dataType === 'BRAND_ACTIVITY') {
-                // Count the actual items in the data
-                const totalCommunications = structuredData.communications?.length || 0;
-                const actualMeetings = structuredData.communications?.filter(c => c.type === 'meeting').length || 0;
-                const actualEmails = structuredData.communications?.filter(c => c.type === 'email').length || 0;
-                
-                systemMessageContent += `\n\nYou have retrieved activity data for a brand. Format your response EXACTLY as follows:
-
-**ABSOLUTE REQUIREMENT: Display ALL ${totalCommunications} items from the communications array**
-
-The data contains:
-- ${actualMeetings} meetings
-- ${actualEmails} emails
-- Total: ${totalCommunications} items
-
-YOU MUST DISPLAY ALL ${totalCommunications} ITEMS. If you skip ANY items, the system will fail.
-
-**FORMATTING RULES:**
-1. Start with "Based on the search results, here's the activity summary for [Brand Name]:"
-2. List ALL ${totalCommunications} items in the EXACT order from the communications array
-3. Number them 1 through ${totalCommunications}
-4. Format each item:
-   - Meetings: "[MEETING url='url_if_exists'] Title - Date" or "[MEETING] Title - Date"
-   - Emails: "[EMAIL] Subject - Date"
-5. Include bullet points with details for each item
-
-**VERIFICATION CHECKLIST:**
-☐ Did you display item 1? ${structuredData.communications?.[0]?.title || 'N/A'}
-☐ Did you display item 2? ${structuredData.communications?.[1]?.title || 'N/A'}
-☐ Did you display item 3? ${structuredData.communications?.[2]?.title || 'N/A'}
-[Continue for all ${totalCommunications} items...]
-
-**EXAMPLE (if there were 21 items):**
-Based on the search results, here's the activity summary for [Brand Name]:
-
-1. [EMAIL] Re: Additional Order - PEAK Daytona Helmet - 8/15/2024
-   • From: Sarah Kistler
-   • Follow-up on PEAK helmets timing
-
-2. [MEETING url="https://fireflies.ai/xxx"] Peak Warner Meeting - 8/10/2024
-   • Discussion of marketing efforts
-   • Duration: 45 minutes
-
-[... MUST CONTINUE THROUGH ALL 21 ITEMS ...]
-
-21. [EMAIL] Initial Contact - 1/5/2024
-   • First outreach email
-   • From: Marketing Team
-
-Key Contacts:
-- [List any contacts]
-
-**CRITICAL**: The MCP system found ${actualMeetings} meetings and ${actualEmails} emails.
-You MUST display ALL of them or the numbers won't match and user trust will be lost.
-Count your items before submitting - there should be EXACTLY ${totalCommunications} numbered items.`;
-              } else {
-                systemMessageContent += `\n\nA search has been performed and the structured results are below in JSON format. Your task is to synthesize this data into a helpful, conversational, and insightful summary for the user. Do not just list the data; explain what it means. Ensure all links are clickable in markdown.
-
-**CRITICAL RULE: If the search results in the JSON are empty or contain no relevant information, you MUST state that you couldn't find any matching results. DO NOT, under any circumstances, invent or hallucinate information, brands, or meeting details.**
-
-For brand recommendations, organize your response clearly:
-- Start with a brief overview of what was found
-- Group brands by their tags (Active Clients, New Opportunities, Genre Matches, Creative Suggestions)
-- For each brand, mention key details like status, category, and why it's relevant
-- If there are wildcard suggestions, explain these are creative ideas to explore
-
-Keep the tone helpful and strategic, focusing on actionable insights.`;
-              }
-
-              systemMessageContent += '\n\n```json\n';
-              systemMessageContent += JSON.stringify(structuredData, null, 2);
-              systemMessageContent += '\n```';
-              
-              // Add verification instruction for BRAND_ACTIVITY
-              if (structuredData.dataType === 'BRAND_ACTIVITY') {
-                const totalItems = structuredData.communications?.length || 0;
-                const meetingCount = structuredData.communications?.filter(c => c.type === 'meeting').length || 0;
-                const emailCount = structuredData.communications?.filter(c => c.type === 'email').length || 0;
-                
-                systemMessageContent += `\n\n**FINAL VERIFICATION BEFORE YOU RESPOND**: 
-                - The communications array has ${totalItems} items total
-                - Specifically: ${meetingCount} meetings and ${emailCount} emails
-                - You MUST display ALL ${totalItems} items numbered 1 through ${totalItems}
-                - Each email MUST start with [EMAIL]
-                - Each meeting MUST start with [MEETING] or [MEETING url="..."]
-                - Count your response: it should have EXACTLY ${totalItems} numbered items
-                - DO NOT skip items even if they seem similar
-                - The user sees "${meetingCount} meetings and ${emailCount} emails" in the status, so you MUST show all of them`;
-              }
-
-              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
-
-          } else {
-              // No tool was used, so it's a general conversation.
-              usedMCP = false;
-              let systemMessageContent = knowledgeBaseInstructions || "You are a helpful assistant specialized in brand integration into Hollywood entertainment.";
-              if (conversationContext) {
-                  systemMessageContent += `\n\nConversation history: ${conversationContext}`;
-              }
-              aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
-          }
-
-          if (aiReply) {
-              updateAirtableConversation(
-                  sessionId, projectId, chatUrl, headersAirtable,
-                  `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
-                  existingRecordId
-              ).catch(err => console.error('[DEBUG] Airtable update error:', err));
-
-              // The final response now includes mcpSteps for the frontend
-              await progressDone(sessionId, runId); // Mark progress as done
-              return res.json({
-                  runId: runId, // Include runId in response
-                  reply: aiReply,
-                  structuredData: structuredData,
-                  mcpSteps: mcpSteps, // Clean array with text and timestamp for each step
-                  usedMCP: usedMCP,
-                  breakdown: claudeResult?.breakdown, // Include breakdown if available
-                  // Add metadata for frontend parsing (only for BRAND_ACTIVITY)
-                  activityMetadata: structuredData?.dataType === 'BRAND_ACTIVITY' ? {
-                    totalCommunications: structuredData.communications?.length || 0,
-                    meetingCount: structuredData.communications?.filter(c => c.type === 'meeting').length || 0,
-                    emailCount: structuredData.communications?.filter(c => c.type === 'email').length || 0,
-                    communications: structuredData.communications // Raw data with type field
-                  } : null
-              });
-          } else {
-              console.error('[DEBUG] No AI reply received');
-              await progressDone(sessionId, runId); // Mark progress as done even on error
-              return res.status(500).json({ error: 'No text reply received.' });
-          }
-        } catch (error) {
-          console.error("[CRASH DETECTED IN HANDLER]:", error);
-          console.error("[STACK TRACE]:", error.stack);
-          await progressDone(sessionId, runId); // Mark progress as done even on crash
-          return res.status(500).json({ 
-            error: 'Internal server error', 
-            details: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-          });
-        }
-      }
-    } catch (error) {
-      return res.status(500).json({ error: 'Internal server error', details: error.message });
-    }
-  } else {
-    res.setHeader("Allow", ["POST", "OPTIONS"]);
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-}
-
-async function shouldUseSearch(userMessage, conversationContext) {
-  // Simple keyword-based check for now
-  const searchKeywords = ['brand', 'production', 'show', 'movie', 'series', 'find', 'search', 'recommend', 'suggestion', 'partner'];
-  const messageLower = userMessage.toLowerCase();
-  return searchKeywords.some(keyword => messageLower.includes(keyword));
-}
-
-async function getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent) {
-  try {
-    const messages = [
-      { role: 'system', content: systemMessageContent },
-      { role: 'user', content: userMessage }
-    ];
-    
-    const totalLength = systemMessageContent.length + userMessage.length;
-    
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODELS.openai.chat,
-        messages: messages,
-        max_tokens: 1000,
-        temperature: 0.7
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`OpenAI API error: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    if (data.choices && data.choices.length > 0) {
-      return data.choices[0].message.content;
-    } else {
-      return null;
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-async function getTextResponseFromClaude(userMessage, sessionId, systemMessageContent) {
-  try {
-    // Special handling for BRAND_ACTIVITY to ensure all items are displayed
-    let claudeSystemPrompt = `<role>You are an expert brand partnership analyst for Hollywood entertainment. You provide honest, nuanced analysis while being helpful and conversational.</role>
-
-${systemMessageContent}`;
-    
-    // Check if this is a BRAND_ACTIVITY response
-    if (systemMessageContent.includes('BRAND_ACTIVITY') && systemMessageContent.includes('**ABSOLUTE REQUIREMENT')) {
-      claudeSystemPrompt += `\n\n<critical_instruction>
-YOU MUST DISPLAY EVERY SINGLE ITEM IN THE COMMUNICATIONS ARRAY. 
-Do not summarize, skip, or combine items.
-The user's trust depends on seeing ALL items that were found.
-Before responding, count your numbered items - it must match the total specified.
-</critical_instruction>`;
-    }
-    
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': anthropicApiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: MODELS.anthropic.claude,
-        max_tokens: 4000, // Increased to ensure we don't cut off long lists
-        temperature: 0.3, // Lower temperature for more consistent following of instructions
-        messages: [
-          {
-            role: 'user',
-            content: `${claudeSystemPrompt}\n\nUser's request: ${userMessage}`
-          }
-        ]
-      })
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error('Claude API response:', response.status, errorData);
-      throw new Error(`Claude API error: ${response.status} - ${errorData}`);
-    }
-    
-    const data = await response.json();
-    if (data.content && data.content.length > 0) {
-      return data.content[0].text;
-    } else {
-      return null;
-    }
-  } catch (error) {
-    // Fallback to OpenAI if Claude fails
-    console.error('Claude failed, falling back to OpenAI:', error);
-    if (openAIApiKey) {
-      return getTextResponseFromOpenAI(userMessage, sessionId, systemMessageContent);
-    }
-    throw error;
-  }
-}
-
-async function updateAirtableConversation(sessionId, projectId, chatUrl, headersAirtable, updatedConversation, existingRecordId) {
-  try {
-    let conversationToSave = updatedConversation;
-    if (conversationToSave.length > 10000) {
-      conversationToSave = '...' + conversationToSave.slice(-10000);
-    }
-    
-    const recordData = {
-      fields: {
-        SessionID: sessionId,
-        ProjectID: projectId || 'default',
-        Conversation: conversationToSave
-      }
-    };
-
-    if (existingRecordId) {
-      await fetch(`${chatUrl}/${existingRecordId}`, {
-        method: 'PATCH',
-        headers: headersAirtable,
-        body: JSON.stringify({ fields: recordData.fields }),
-      });
-    } else {
-      await fetch(chatUrl, {
-        method: 'POST',
-        headers: headersAirtable,
-        body: JSON.stringify(recordData),
-      });
-    }
-  } catch (error) {
   }
 }
