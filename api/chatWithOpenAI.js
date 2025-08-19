@@ -162,7 +162,7 @@ const o365API = {
     }
   },
   
-  // --- O365 EMAIL SEARCH (fix: no $orderby with $search, client-side sort) ---
+  // --- O365 EMAIL SEARCH with RAOP handling and precision queries ---
   async searchEmails(query, options = {}) {
     try {
       console.log('[DEBUG o365API.searchEmails] Starting search for:', query);
@@ -170,7 +170,7 @@ const o365API = {
       
       if (!msftClientId || !msftClientSecret || !msftTenantId) {
         console.error('[DEBUG o365API.searchEmails] Missing Microsoft credentials');
-        return [];
+        return { emails: [], o365Status: 'no_credentials', userEmail: null };
       }
       
       const accessToken = await this.getAccessToken();
@@ -179,41 +179,23 @@ const o365API = {
       const userEmail = options.userEmail || 'stacy@hollywoodbranded.com';
       console.log('[DEBUG o365API.searchEmails] Searching emails for user:', userEmail);
       
-      // Convert query to terms array
-      let searchTerms;
-      if (Array.isArray(query)) {
-        searchTerms = query;
-      } else {
-        searchTerms = [query];
-        if (query && query.length > 50) {
-          const extractedTerms = await extractKeywordsForContextSearch(query);
-          if (extractedTerms.length > 0) {
-            searchTerms = [...new Set([query.slice(0, 50), ...extractedTerms])];
-          }
-        }
-      }
-      
-      console.log('[DEBUG o365API.searchEmails] Search terms:', searchTerms);
+      // Build precision AQS queries based on production context
+      const searchQueries = this.buildPrecisionQueries(query, options);
+      console.log('[DEBUG o365API.searchEmails] Precision queries:', searchQueries);
       
       const results = [];
-      const top = options.limit || 20;
+      const top = 5; // Reduced per-query limit for precision
       
-      for (const rawTerm of searchTerms.slice(0, 5)) {
-        const term = (rawTerm ?? '').toString().trim();
-        if (!term) continue;
-        
-        console.log(`[DEBUG o365API.searchEmails] Searching for term: "${term}"`);
-        
+      // Execute queries in parallel with timeout
+      const queryPromises = searchQueries.map(async (searchQuery) => {
         const url = new URL(`${this.baseUrl}/users/${encodeURIComponent(userEmail)}/messages`);
-        // IMPORTANT: cannot use $orderby with $search
         url.searchParams.set('$top', String(top));
-        url.searchParams.set('$search', `"${term.replace(/"/g, '\\"')}"`);
+        url.searchParams.set('$search', searchQuery);
         url.searchParams.set('$select', 'id,subject,from,receivedDateTime,bodyPreview,webLink');
         url.searchParams.set('$count', 'true');
         
-        console.log('[DEBUG o365API.searchEmails] Request URL:', url.toString());
+        console.log(`[DEBUG o365API.searchEmails] Query: "${searchQuery}"`);
         
-        // Add timeout to prevent hanging
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
         
@@ -221,7 +203,7 @@ const o365API = {
           const res = await fetch(url, {
             headers: {
               'Authorization': `Bearer ${accessToken}`,
-              'ConsistencyLevel': 'eventual', // REQUIRED for $search
+              'ConsistencyLevel': 'eventual',
               'Prefer': 'outlook.body-content-type="text"',
             },
             signal: controller.signal
@@ -231,57 +213,111 @@ const o365API = {
           
           if (!res.ok) {
             const body = await res.text();
-            console.log(`[DEBUG o365API.searchEmails] Failed for term "${term}": ${res.status} ${body}`);
-            continue; // don't throw; let other terms still run
+            
+            // Check for RAOP (403 forbidden)
+            if (res.status === 403 && body.includes('ApplicationAccessPolicy')) {
+              console.log('[DEBUG o365API.searchEmails] RAOP restriction detected');
+              return { raopBlocked: true };
+            }
+            
+            console.log(`[DEBUG o365API.searchEmails] Failed: ${res.status}`);
+            return { emails: [] };
           }
           
           const data = await res.json();
-          console.log(`[DEBUG o365API.searchEmails] Found ${data.value?.length || 0} emails for term "${term}"`);
-          
-          if (Array.isArray(data.value)) {
-            results.push(
-              ...data.value.map(m => ({
-                id: m.id,
-                subject: m.subject,
-                from: m.from?.emailAddress?.address,
-                fromName: m.from?.emailAddress?.name,
-                receivedDate: m.receivedDateTime,
-                preview: m.bodyPreview?.slice(0, 200),
-                webLink: m.webLink,
-              }))
-            );
-          }
-        } catch (fetchError) {
+          return {
+            emails: data.value?.map(m => ({
+              id: m.id,
+              subject: m.subject,
+              from: m.from?.emailAddress?.address,
+              fromName: m.from?.emailAddress?.name,
+              receivedDate: m.receivedDateTime,
+              preview: m.bodyPreview?.slice(0, 200),
+              webLink: m.webLink,
+            })) || []
+          };
+        } catch (error) {
           clearTimeout(timeoutId);
-          if (fetchError.name === 'AbortError') {
-            console.error(`[DEBUG o365API.searchEmails] Request timeout for term "${term}"`);
-          } else {
-            console.error(`[DEBUG o365API.searchEmails] Error for term "${term}":`, fetchError);
-          }
-          continue; // Continue with next term
+          console.error('[DEBUG o365API.searchEmails] Query error:', error.message);
+          return { emails: [] };
         }
+      });
+      
+      const queryResults = await Promise.all(queryPromises);
+      
+      // Check if any query hit RAOP
+      if (queryResults.some(r => r.raopBlocked)) {
+        console.log('[DEBUG o365API.searchEmails] RAOP blocked - returning structured response');
+        return { emails: [], o365Status: 'forbidden_raop', userEmail };
       }
       
-      // Client-side sort (newest first) and deduplicate
+      // Merge and deduplicate results
       const uniqueEmails = new Map();
-      results.forEach(email => {
-        if (!uniqueEmails.has(email.id)) {
-          uniqueEmails.set(email.id, email);
+      queryResults.forEach(result => {
+        if (result.emails) {
+          result.emails.forEach(email => {
+            if (!uniqueEmails.has(email.id)) {
+              uniqueEmails.set(email.id, email);
+            }
+          });
         }
       });
       
       const sortedEmails = Array.from(uniqueEmails.values())
         .sort((a, b) => new Date(b.receivedDate) - new Date(a.receivedDate))
-        .slice(0, top);
+        .slice(0, options.limit || 12);
       
-      console.log(`[DEBUG o365API.searchEmails] Returning ${sortedEmails.length} total emails`);
+      console.log(`[DEBUG o365API.searchEmails] Returning ${sortedEmails.length} emails`);
       
-      return sortedEmails;
+      return { emails: sortedEmails, o365Status: 'ok', userEmail };
       
     } catch (error) {
       console.error('[DEBUG o365API.searchEmails] Fatal error:', error);
-      return [];
+      return { emails: [], o365Status: 'error', userEmail: null };
     }
+  },
+  
+  // New helper method to build precision AQS queries
+  buildPrecisionQueries(query, options = {}) {
+    const queries = [];
+    const dealWords = '(brand OR sponsorship OR licensing OR placement OR integration OR co-promo OR partnership)';
+    
+    // If we have production context
+    if (options.productionContext) {
+      const { title, distributor, talent } = options.productionContext;
+      
+      if (title) {
+        // Query 1: Exact title
+        queries.push(`"${title}"`);
+        
+        // Query 2: Title + distributor
+        if (distributor) {
+          queries.push(`"${title}" AND ${distributor}`);
+        }
+        
+        // Query 3: Title + deal words
+        queries.push(`"${title}" AND ${dealWords}`);
+      }
+      
+      // Query 4: Top talent + distributor or deal words
+      if (talent && talent.length > 0) {
+        const topTalent = talent.slice(0, 2).map(t => `"${t}"`).join(' OR ');
+        if (distributor) {
+          queries.push(`(${topTalent}) AND ${distributor}`);
+        } else {
+          queries.push(`(${topTalent}) AND ${dealWords}`);
+        }
+      }
+    } else if (typeof query === 'string') {
+      // Fallback to simple query with deal words
+      queries.push(`"${query}"`);
+      queries.push(`"${query}" AND ${dealWords}`);
+    }
+    
+    // Limit to 4 queries max, each under 150 chars
+    return queries
+      .filter(q => q && q.length < 150)
+      .slice(0, 4);
   },
   
   async createDraft(subject, body, to, options = {}) {
@@ -386,7 +422,7 @@ const o365API = {
 async function searchFireflies(query, options = {}) {
   if (!firefliesApiKey) {
     console.log('[DEBUG searchFireflies] No API key available');
-    return { transcripts: [] };
+    return { transcripts: [], firefliesStatus: 'no_credentials' };
   }
   
   try {
@@ -402,63 +438,38 @@ async function searchFireflies(query, options = {}) {
         await firefliesAPI.initialize();
         const retryConnection = await firefliesAPI.testConnection();
         if (!retryConnection) {
-          return { transcripts: [] };
+          return { transcripts: [], firefliesStatus: 'connection_failed' };
         }
       } else {
-        return { transcripts: [] };
+        return { transcripts: [], firefliesStatus: 'connection_failed' };
       }
     }
     
     console.log('[DEBUG searchFireflies] Connection successful');
     
-    // Ensure query is always a safe string
-    const keyword = Array.isArray(query) ? query.join(' ') : (query ?? '');
-    const safeKeyword = String(keyword).trim();
+    // Build smart entity-based search
+    let searchTerms = [];
+    let meetingsMode = 'entity_search';
     
-    // If no query or empty query, get recent transcripts without keyword filter
-    if (!safeKeyword) {
-      console.log('[DEBUG searchFireflies] No query provided, fetching recent transcripts');
-      const filters = {
-        limit: options.limit || 10
-      };
-      
-      if (options.fromDate) {
-        filters.fromDate = options.fromDate;
-      }
-      
-      const results = await firefliesAPI.searchTranscripts(filters);
-      console.log(`[DEBUG searchFireflies] Found ${results.length} recent transcripts`);
-      
-      return {
-        transcripts: results
-      };
-    }
-    
-    // If query is an array, it's pre-extracted keywords
-    let searchTerms;
     if (Array.isArray(query)) {
-      searchTerms = query.filter(term => term && String(term).trim() !== ''); // Ensure each term is a string
-      console.log('[DEBUG searchFireflies] Using provided search terms:', searchTerms);
-    } else {
-      // For simple searches (like brand names), also search the raw query
-      searchTerms = [safeKeyword]; // Start with the safe keyword
-      
-      // Only extract keywords for complex queries
-      if (safeKeyword.length > 50) {
-        const extractedTerms = await extractKeywordsForContextSearch(safeKeyword);
-        console.log('[DEBUG searchFireflies] Extracted keywords:', extractedTerms);
-        // Add extracted terms but keep the original simpler terms too
-        searchTerms = [...new Set([...searchTerms, ...extractedTerms])].filter(term => term && String(term).trim() !== '');
-      }
-      
-      console.log('[DEBUG searchFireflies] Final search terms:', searchTerms);
+      // Use provided entities
+      searchTerms = query.filter(term => term && String(term).trim() !== '');
+    } else if (typeof query === 'string' && query.trim()) {
+      // Extract entities from query
+      const extractedTerms = await extractKeywordsForContextSearch(query);
+      searchTerms = extractedTerms.filter(term => term && String(term).trim() !== '');
     }
     
-    // If no valid search terms, get recent transcripts
-    if (searchTerms.length === 0) {
-      console.log('[DEBUG searchFireflies] No valid search terms, fetching recent transcripts');
+    console.log('[DEBUG searchFireflies] Entity search terms:', searchTerms);
+    
+    // First try: OR query with top entities
+    if (searchTerms.length > 0) {
+      const orQuery = searchTerms.slice(0, 4).join(' OR ');
+      console.log('[DEBUG searchFireflies] OR query:', orQuery);
+      
       const filters = {
-        limit: options.limit || 10
+        keyword: orQuery,
+        limit: 10
       };
       
       if (options.fromDate) {
@@ -466,55 +477,36 @@ async function searchFireflies(query, options = {}) {
       }
       
       const results = await firefliesAPI.searchTranscripts(filters);
-      return {
-        transcripts: results
-      };
-    }
-    
-    let allTranscripts = new Map();
-    
-    // Search for each term and combine results
-    for (const term of searchTerms.slice(0, 10)) { // Increased limit
-      if (!term || String(term).trim() === '') continue; // Skip empty terms
       
-      try {
-        // Ensure term is always a string
-        const safeTerm = String(term).trim();
-        console.log(`[DEBUG searchFireflies] Searching for term: "${safeTerm}"`);
-        
-        const filters = {
-          keyword: safeTerm, // Always a string now
-          limit: options.limit || 10 // Increased default limit
+      if (results && results.length > 0) {
+        console.log(`[DEBUG searchFireflies] Found ${results.length} entity-based results`);
+        return {
+          transcripts: results,
+          firefliesStatus: 'ok',
+          meetingsMode: 'entity_search'
         };
-        
-        // Add date filter if needed
-        if (options.fromDate) {
-          filters.fromDate = options.fromDate;
-        }
-        
-        const results = await firefliesAPI.searchTranscripts(filters);
-        console.log(`[DEBUG searchFireflies] Found ${results.length} results for "${safeTerm}"`);
-        
-        results.forEach(t => {
-          allTranscripts.set(t.id, t);
-          console.log(`[DEBUG searchFireflies] Added transcript: ${t.title} (${t.dateString})`);
-        });
-      } catch (error) {
-        // Continue with other terms if one fails
-        console.error(`[DEBUG searchFireflies] Error searching for term "${term}":`, error);
       }
     }
     
-    const finalResults = Array.from(allTranscripts.values());
-    console.log(`[DEBUG searchFireflies] Total unique transcripts found: ${finalResults.length}`);
+    // Fallback: Get recent transcripts if no entity matches
+    console.log('[DEBUG searchFireflies] No entity matches, falling back to recent transcripts');
+    
+    const recentFilters = {
+      limit: 10,
+      fromDate: options.fromDate || new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString() // Last 180 days
+    };
+    
+    const recentResults = await firefliesAPI.searchTranscripts(recentFilters);
     
     return {
-      transcripts: finalResults
+      transcripts: recentResults || [],
+      firefliesStatus: 'ok',
+      meetingsMode: 'recent_fallback'
     };
     
   } catch (error) {
     console.error('[DEBUG searchFireflies] Fatal error:', error);
-    return { transcripts: [] };
+    return { transcripts: [], firefliesStatus: 'error' };
   }
 }
 
@@ -561,7 +553,7 @@ async function extractKeywordsForHubSpot(synopsis) {
   }
 }
 
-// Add this new helper function for context search
+// Add this new helper function for context search with smarter entity extraction
 async function extractKeywordsForContextSearch(text) {
   if (!openAIApiKey) return [];
   try {
@@ -571,7 +563,7 @@ async function extractKeywordsForContextSearch(text) {
       body: JSON.stringify({
         model: MODELS.openai.chatLegacy,
         messages: [
-          { role: 'system', content: 'Extract key entities from text for database search. From the text, extract: 1) Primary Project/Film Title, 2) Up to 3 key brand names mentioned, 3) Up to 3 relevant themes/genres. Return as JSON: {"keywords": ["term1", "term2", ...]}. Example: {"keywords": ["The Last Mrs. Parrish", "Netflix", "thriller", "luxury"]}' },
+          { role: 'system', content: 'Extract ONLY concrete entities from text for database search. Return: 1) Project/Film Title (exact), 2) Studio/Distributor names, 3) Top 3 talent names (actors/directors), 4) Any specific brand names mentioned. Exclude generic terms like "movie", "production", "brand", "placement". Return as JSON: {"keywords": ["entity1", "entity2", ...]}. Multi-word names should be in quotes.' },
           { role: 'user', content: text }
         ],
         response_format: { type: "json_object" },
@@ -2809,14 +2801,32 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           const contextStep = { type: 'search', text: '📧 Checking for related communications...' };
           add(contextStep);
           
+          // Extract production context for precision email search
+          const productionContext = {
+            title: extractedTitle || search_term.match(/["']([^"']+)["']/)?.[1] || null,
+            distributor: null,
+            talent: []
+          };
+          
+          // Try to extract distributor and talent from synopsis
+          if (search_term.toLowerCase().includes('netflix')) productionContext.distributor = 'Netflix';
+          else if (search_term.toLowerCase().includes('universal')) productionContext.distributor = 'Universal';
+          else if (search_term.toLowerCase().includes('disney')) productionContext.distributor = 'Disney';
+          else if (search_term.toLowerCase().includes('warner')) productionContext.distributor = 'Warner';
+          
           const contextKeywords = await extractKeywordsForContextSearch(search_term);
           
           console.log('[DEBUG comms] Searching for supporting context...');
           console.log('[DEBUG comms] Keywords:', contextKeywords);
+          console.log('[DEBUG comms] Production context:', productionContext);
           
           const [firefliesRes, emailRes] = await Promise.allSettled([
             firefliesApiKey ? withTimeout(searchFireflies(contextKeywords, { limit: 3 }), 5000, { transcripts: [] }) : Promise.resolve({ transcripts: [] }),
-            msftClientId ? withTimeout(o365API.searchEmails(contextKeywords, { days: 90, limit: 5 }), 5000, []) : Promise.resolve([])
+            msftClientId ? withTimeout(o365API.searchEmails(search_term, { 
+              days: 90, 
+              limit: 12,
+              productionContext: productionContext 
+            }), 6000, { emails: [], o365Status: 'timeout' }) : Promise.resolve({ emails: [], o365Status: 'no_credentials' })
           ]);
           
           // Handle Fireflies result
@@ -2825,22 +2835,32 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             console.log('[DEBUG comms] Fireflies context search failed:', firefliesRes.reason);
           }
           
-          // Handle O365 result
-          const emailData = emailRes.status === 'fulfilled' ? emailRes.value : [];
+          // Handle O365 result with structured response
+          const emailResult = emailRes.status === 'fulfilled' ? emailRes.value : { emails: [], o365Status: 'error' };
           if (emailRes.status === 'rejected') {
             console.log('[DEBUG comms] O365 context search failed:', emailRes.reason);
           }
           
           supportingContext = {
             meetings: firefliesData.transcripts || [],
-            emails: emailData || []
+            emails: emailResult.emails || [],
+            emailStatus: emailResult.o365Status || 'unknown',
+            emailMailbox: emailResult.userEmail || 'unknown',
+            meetingsMode: firefliesData.meetingsMode || 'standard'
           };
           
           console.log(`[DEBUG comms] Context found - Meetings: ${supportingContext.meetings.length}, Emails: ${supportingContext.emails.length}`);
+          console.log(`[DEBUG comms] Email status: ${supportingContext.emailStatus}, Meetings mode: ${supportingContext.meetingsMode}`);
           
           if (supportingContext.meetings.length > 0 || supportingContext.emails.length > 0) {
             const foundStep = { type: 'result', text: `📧 Found ${supportingContext.meetings.length} meetings, ${supportingContext.emails.length} emails` };
             add(foundStep);
+          }
+          
+          // If email search was blocked by RAOP, add informative step
+          if (supportingContext.emailStatus === 'forbidden_raop') {
+            const raopStep = { type: 'info', text: `ℹ️ Email search blocked by tenant policy for ${supportingContext.emailMailbox}` };
+            add(raopStep);
           }
         }
         
@@ -3189,7 +3209,7 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         const [brandRes, firefliesRes, o365Res] = await Promise.allSettled([
           hubspotAPI.searchSpecificBrand(brand_name),
           firefliesApiKey ? searchFireflies(brand_name, { limit: 20 }) : Promise.resolve({ transcripts: [] }),
-          msftClientId ? o365API.searchEmails(brand_name, { days: 180, limit: 20 }) : Promise.resolve([])
+          msftClientId ? o365API.searchEmails(brand_name, { days: 180, limit: 20 }) : Promise.resolve({ emails: [], o365Status: 'no_credentials' })
         ]);
         
         // Handle brand result
@@ -3203,23 +3223,23 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         if (firefliesRes.status === 'fulfilled') {
           firefliesData = firefliesRes.value || { transcripts: [] };
           console.log('[DEBUG comms] Fireflies raw response:', JSON.stringify(firefliesData, null, 2));
-          console.log('[DEBUG comms] Fireflies transcripts array:', firefliesData.transcripts);
-          console.log('[DEBUG comms] Fireflies transcripts is array?:', Array.isArray(firefliesData.transcripts));
         } else if (firefliesRes.status === 'rejected') {
           console.log('[DEBUG comms] Fireflies failed:', firefliesRes.reason);
         }
         
-        // Handle O365 result
-        const o365Data = o365Res.status === 'fulfilled' ? o365Res.value : [];
+        // Handle O365 result with structured response
+        const o365Result = o365Res.status === 'fulfilled' ? o365Res.value : { emails: [], o365Status: 'error' };
         if (o365Res.status === 'rejected') {
           console.log('[DEBUG comms] O365 failed:', o365Res.reason);
         }
         
-        // Extract transcripts properly
-        const meetings = firefliesData.transcripts || firefliesData || [];
-        console.log('[DEBUG comms] Extracted meetings:', meetings.length);
+        // Extract data from structured responses
+        const meetings = firefliesData.transcripts || [];
+        const emails = o365Result.emails || [];
+        const emailStatus = o365Result.o365Status || 'unknown';
         
-        console.log(`[DEBUG comms] Results - Brand: ${!!brand}, Meetings: ${meetings.length}, Emails: ${o365Data?.length || 0}`);
+        console.log(`[DEBUG comms] Results - Brand: ${!!brand}, Meetings: ${meetings.length}, Emails: ${emails.length}`);
+        console.log(`[DEBUG comms] Email status: ${emailStatus}`);
         
         if (!brand) {
           const errorStep = { type: 'error', text: `❌ Brand "${brand_name}" not found in HubSpot.` };
@@ -3230,10 +3250,16 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           add(foundStep);
         }
         
+        // Add status-specific messaging
+        if (emailStatus === 'forbidden_raop') {
+          const raopStep = { type: 'info', text: `ℹ️ Email search blocked by tenant policy for ${o365Result.userEmail || 'user'}` };
+          add(raopStep);
+        }
+        
         const meetingStep = { type: 'result', text: `✅ Found ${meetings.length} meeting(s).` };
         add(meetingStep);
         
-        const emailStep = { type: 'result', text: `✅ Found ${o365Data?.length || 0} email(s).` };
+        const emailStep = { type: 'result', text: `✅ Found ${emails.length} email(s).` };
         add(emailStep);
         
         // Get contacts if brand exists
@@ -3273,8 +3299,8 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         }
         
         // Add emails with type marker
-        if (o365Data && o365Data.length > 0) {
-          o365Data.forEach(email => {
+        if (emails && emails.length > 0) {
+          emails.forEach(email => {
             allCommunications.push({
               type: 'email',
               title: email.subject || 'No Subject',
@@ -3290,10 +3316,6 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
         // Sort by date (most recent first)
         allCommunications.sort((a, b) => b.date - a.date);
         
-        // Verify data integrity
-        const meetingCount = allCommunications.filter(c => c.type === 'meeting').length;
-        const emailCount = allCommunications.filter(c => c.type === 'email').length;
-        
         const doneStep = { type: 'complete', text: `✨ Activity report generated with ${allCommunications.length} items.` };
         add(doneStep);
         
@@ -3304,8 +3326,10 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
             brand: brand ? brand.properties : null,
             contacts: contacts.map(c => c.properties),
             communications: allCommunications, // Sorted chronologically
-            meetings: meetings, // Use the properly extracted meetings
-            emails: o365Data || [] // Keep original for backward compatibility
+            meetings: meetings, // Keep original for backward compatibility
+            emails: emails, // Keep original for backward compatibility
+            emailStatus: emailStatus, // Add email search status
+            emailMailbox: o365Result.userEmail || null
           }, 
           mcpThinking, 
           usedMCP: true
