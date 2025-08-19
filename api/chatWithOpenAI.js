@@ -2655,7 +2655,7 @@ function tagAndCombineBrands({ activityBrands, synopsisBrands, genreBrands, acti
   return sortedBrands.slice(0, Math.min(targetSize, sortedBrands.length));
 }
 
-async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName, runId, onStep = () => {}) {
+async function handleClaudeSearch(userMessage, projectId, conversationContext, lastProductionContext, knownProjectName = '', runId, onStep = () => {}) {
   if (!anthropicApiKey) return null;
   
   // Ensure HubSpot is ready before any searches (cold start fix)
@@ -2712,6 +2712,11 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
               // Only run extraction logic if no title was sent from frontend
               extractedTitle = null; // You can add extraction logic here if needed
           }
+          let extractedTitle = null;
+ if (knownProjectName && knownProjectName.trim()) {
+   extractedTitle = knownProjectName.trim();
+   add({ type: 'process', text: `📌 Using known project: "${extractedTitle}"` });
+ }
           
           // Extract genre and keywords for better matching
           const genre = extractGenreFromSynopsis(search_term);
@@ -2755,7 +2760,9 @@ async function handleClaudeSearch(userMessage, projectId, conversationContext, l
           };
           
           // Build unified search terms for all systems
-          const titleForTerms = extractedTitle || knownProjectName || projectName || '';
+          // ✅ NEW
+const titleForTerms = (knownProjectName || extractedTitle || '').trim();
+
           let distributorForTerms = ''; // Extract if available from search_term
           const talentForTerms = []; // Extract if available from search_term
           
