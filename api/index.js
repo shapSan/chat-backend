@@ -30,7 +30,6 @@ import {
   progressInit,
   progressPush,
   progressDone,
-  getConversationHistory,
   extractLastProduction,
   updateAirtableConversation,
   getCurrentTimeInPDT,
@@ -38,12 +37,18 @@ import {
 } from '../lib/core.js';
 
 export default async function handler(req, res) {
-  // CORS
-  const origin = req.headers.origin || '*';
-  res.setHeader('Access-Control-Allow-Origin', origin);
+  // CORS - Properly handle credentials
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    // Same-origin or CLI calls
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'false');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Max-Age', '86400');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -323,6 +328,7 @@ Keep it under 300 words.`;
         openaiWs.on('open', () => {
           openaiWs.send(JSON.stringify({ type: 'session.update', session: { instructions: systemMessageContent } }));
           openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audioBuffer.toString('base64') }));
+          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
           openaiWs.send(JSON.stringify({ type: 'response.create', response: { modalities: ['text'], instructions: 'Please respond to the user.' } }));
         });
 
@@ -479,7 +485,7 @@ ${JSON.stringify(structuredData, null, 2)}
       }
     }
 
-    // Fallback (shouldn’t reach here)
+    // Fallback (shouldn't reach here)
     await progressDone(sessionId, runId);
     return res.status(400).json({ error: 'Bad Request' });
   } catch (error) {
