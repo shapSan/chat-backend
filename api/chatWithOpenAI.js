@@ -3,8 +3,8 @@ import fetch from 'node-fetch';
 import WebSocket from 'ws';
 import RunwayML from '@runwayml/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import hubspotAPI, { hubspotApiKey } from './hubspot-client.js';
-import firefliesAPI, { firefliesApiKey } from './fireflies-client.js';
+import hubspotAPI, { hubspotApiKey } from '.client/hubspot-client.js';
+import firefliesAPI, { firefliesApiKey } from '.client/fireflies-client.js';
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 
