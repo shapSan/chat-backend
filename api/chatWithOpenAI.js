@@ -37,7 +37,7 @@ async function progressDone(sessionId, runId) {
   const key = progKey(sessionId, runId);
   const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null, ts: Date.now() };
   s.done = true;
-  await kv.set(key, s, { ex: 300 });
+  await kv.set(key, s, { ex: 300 }); 
 }
 
 export const config = {
