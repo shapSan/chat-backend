@@ -265,6 +265,7 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
     const brandsRaw = Array.isArray(body.brands) ? body.brands : [];
+    console.log('[pushDraft TRACE 5] Raw `brands` array received from frontend:', JSON.stringify(brandsRaw, null, 2));
     console.log('[pushDraft] brands:', brandsRaw.length);
 
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
