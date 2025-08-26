@@ -149,10 +149,10 @@ ${brands
   .map(
     (brand, i) => `
 ${i + 1}. ${brand.name}
-   - Category: ${brand.category || 'General'}
-   - Why it works: ${brand.reason || brand.pitch || 'Good fit for production'}
-   - Status: ${brand.clientStatus || 'Prospect'}
-   ${brand.tags ? `- Tags: ${Array.isArray(brand.tags) ? brand.tags.join(', ') : brand.tags}` : ''}`
+    - Why it works: ${brand.whyItWorks || brand.reason || 'It aligns with the project goals.'}
+    - Integration Idea: ${brand.integrationIdeas?.[0] || brand.integrationIdea || 'Strategic product placement.'}
+    - HB Insights: ${brand.hbInsights || 'This brand shows strong potential for partnership.'}
+    ${brand.tags ? `- Tags: ${Array.isArray(brand.tags) ? brand.tags.join(', ') : brand.tags}` : ''}`
   )
   .join('\n')}
 
@@ -164,7 +164,9 @@ Write a draft email to yourself that:
 5. Signs off as "- Shap" or similar
 
 Format as HTML with simple formatting (use <br> for line breaks, <b> for emphasis, <ul>/<li> for lists).
-Keep it under 300 words.`;
+Keep it under 300 words.
+
+CRITICAL: Your entire response must be raw, valid HTML. Do NOT wrap it in markdown code fences (```) under any circumstances.`;
 
         const emailBody = await getTextResponseFromOpenAI(
           emailPrompt,
