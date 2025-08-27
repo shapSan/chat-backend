@@ -1,21 +1,20 @@
 // app/api/graph/search/route.ts
-export const runtime = "node"; // keep secrets server-side
+export const runtime = "node";
 
-const TENANT_ID = process.env.AZURE_TENANT_ID!;
-const CLIENT_ID = process.env.AZURE_CLIENT_ID!;
-const CLIENT_SECRET = process.env.AZURE_CLIENT_SECRET!;
+const TENANT_ID = process.env.MICROSOFT_TENANT_ID!;
+const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID!;
+const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET!;
 
 type Body = { userUpn: string; q: string; top?: number };
 
-export async function POST(req: Request) {
-  const { userUpn, q, top = 10 } = (await req.json()) as Body;
+let cachedToken = "";
+let tokenExpiresAt = 0;
 
-  // (optional) simple allowlist to prevent abuse:
-  if (!userUpn.endsWith("@yourdomain.com")) {
-    return new Response(JSON.stringify({ error: "forbidden user/domain" }), { status: 403 });
-  }
+async function getToken() {
+  const now = Date.now();
+  if (cachedToken && now < tokenExpiresAt - 60_000) return cachedToken;
 
-  const tokenRes = await fetch(
+  const res = await fetch(
     `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`,
     {
       method: "POST",
@@ -26,28 +25,44 @@ export async function POST(req: Request) {
         client_secret: CLIENT_SECRET,
         scope: "https://graph.microsoft.com/.default",
       }),
-      // (optional) next: { revalidate: 300 } // mild caching hint for the token
     }
   );
 
-  if (!tokenRes.ok) {
-    const err = await tokenRes.text();
-    return new Response(JSON.stringify({ error: "token_error", detail: err }), { status: 500 });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`token_error: ${err}`);
   }
 
-  const { access_token } = await tokenRes.json();
+  const data = await res.json();
+  cachedToken = data.access_token as string;
+  tokenExpiresAt = Date.now() + (data.expires_in ?? 3600) * 1000;
+  return cachedToken;
+}
 
-  const url = new URL(`https://graph.microsoft.com/v1.0/users/${userUpn}/messages`);
-  url.searchParams.set("$top", String(top));
-  url.searchParams.set("$search", `"${q}"`);
+export async function POST(req: Request) {
+  try {
+    const { userUpn, q, top = 10 } = (await req.json()) as Body;
 
-  const msRes = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${access_token}`,
-      ConsistencyLevel: "eventual",
-    },
-  });
+    if (!userUpn || !q) {
+      return new Response(JSON.stringify({ error: "missing userUpn or q" }), { status: 400 });
+    }
 
-  const data = await msRes.json();
-  return new Response(JSON.stringify(data), { status: msRes.status });
+    const token = await getToken();
+
+    const url = new URL(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userUpn)}/messages`);
+    url.searchParams.set("$top", String(Math.max(1, Math.min(50, top))));
+    url.searchParams.set("$search", `"${q}"`); // simple KQL, e.g. from:stacy subject:invoice
+
+    const ms = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "ConsistencyLevel": "eventual",
+      },
+    });
+
+    const data = await ms.json();
+    return new Response(JSON.stringify(data), { status: ms.status });
+  } catch (e: any) {
+    return new Response(JSON.stringify({ error: String(e?.message ?? e) }), { status: 500 });
+  }
 }
