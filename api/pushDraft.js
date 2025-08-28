@@ -204,26 +204,42 @@ function quickLinksHtml(brand){
 }
 
 // Professional email writer with natural resource mention
-async function generateAiBody({ project, vibe, cast, location, notes, brand }) {
+async function generateAiBody({ project, vibe, cast, location, notes, brand, isInSystem }) {
   const mention = assetsNote(brand);
+  
+  // Different fallback templates based on whether brand is in system
   const fallback = () => {
     const ideas = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '';
-    return `Hello [name],\n\nI've been exploring how ${brand.name} fits perfectly into ${project}.\n\n${brand.whyItWorks || `The ${vibe} aligns beautifully with ${brand.name}'s brand identity.`}\n\n${ideas ? `Integration vision: ${ideas}` : `${brand.name} could enhance key narrative moments.`}\n\n${mention ? mention + ' ' : ''}Let me know a convenient time to discuss this exciting opportunity.`.trim();
+    
+    if (isInSystem) {
+      // Warmer, relationship-focused email for existing brands
+      return `Hello [name],\n\nGreat news! We have an exciting opportunity with ${project} that aligns perfectly with ${brand.name}.\n\n${brand.whyItWorks || `Given our successful past collaborations, this ${vibe} production would be an ideal fit for ${brand.name}.`}\n\n${ideas ? `Building on our relationship: ${ideas}` : `We see natural integration opportunities that build on ${brand.name}'s previous successes.`}\n\n${mention ? mention + ' ' : ''}Let's catch up soon to explore how we can make this happen together.`.trim();
+    } else {
+      // Introduction-focused email for new brands
+      return `Hello [name],\n\nI'm reaching out from Hollywood Branded to introduce an exciting opportunity for ${brand.name} with ${project}.\n\n${brand.whyItWorks || `The ${vibe} of this production creates a perfect canvas for ${brand.name} to reach new audiences authentically.`}\n\n${ideas ? `Our vision: ${ideas}` : `We've identified compelling ways to integrate ${brand.name} that would feel organic to the story.`}\n\n${mention ? mention + ' ' : ''}I'd love to schedule a brief call to discuss this opportunity and how Hollywood Branded can help bring it to life.`.trim();
+    }
   };
 
   try {
     if (!process.env.OPENAI_API_KEY) return fallback();
 
+    // Different prompts based on whether brand is in system
+    const baseContext = isInSystem 
+      ? "This is an EXISTING CLIENT we have worked with before. Write a warm, relationship-focused email that references our ongoing partnership."
+      : "This is a NEW BRAND we haven't worked with yet. Write an introductory email that establishes credibility and creates interest.";
+
     const prompt = `
-Write a concise brand integration email (4 paragraphs, keep it brief but complete):
+Write a concise brand integration email (4 paragraphs, keep it brief but complete).
 
-1. "Hello [name]," + brief mention of exploring ${brand.name} for the project
+${baseContext}
 
-2. One paragraph on why the brand/film alignment works
+1. "Hello [name]," + ${isInSystem ? "reference our partnership and mention the new opportunity" : "introduce Hollywood Branded and the opportunity"}
+
+2. One paragraph on why the brand/film alignment works ${isInSystem ? "(mention how this builds on past successes)" : "(establish why this is perfect for them)"}
 
 3. One specific integration example (concrete scene or usage)
 
-4. Closing: "${mention || 'I have materials ready.'}" + invitation to connect
+4. Closing: "${mention || 'I have materials ready.'}" + ${isInSystem ? "suggest catching up soon" : "invitation for an introductory call"}
 
 Project: ${project}
 Genre: ${vibe}
@@ -231,6 +247,7 @@ Cast: ${cast}
 Brand: ${brand.name}
 Why it works: ${brand.whyItWorks || 'Natural fit'}
 Integration idea: ${(brand.integrationIdeas && brand.integrationIdeas[0]) || 'Product placement'}
+Existing relationship: ${isInSystem ? 'YES - warm tone' : 'NO - professional introduction'}
 
 Be conversational but concise. Aim for 3-4 sentences per paragraph.
 Complete all thoughts - don't cut off mid-sentence.
@@ -298,7 +315,19 @@ export default async function handler(req, res) {
         console.log('[pushDraft] brand', b.name, 'has assets:', b.assets);
         console.log('[pushDraft] assets count:', (b.assets||[]).length);
 
-        const bodyText = await generateAiBody({ project: projectName, vibe, cast, location, notes, brand: b });
+        // Check if brand is in system (has isInSystem flag)
+        const isInSystem = b.isInSystem || false;
+        console.log('[pushDraft] Brand', b.name, 'isInSystem:', isInSystem);
+        
+        const bodyText = await generateAiBody({ 
+          project: projectName, 
+          vibe, 
+          cast, 
+          location, 
+          notes, 
+          brand: b,
+          isInSystem // Pass the flag to email generator
+        });
 
         const paragraphs = bodyText.split('\n').filter(line => line.trim());
         const formattedBody = paragraphs.map(para =>
