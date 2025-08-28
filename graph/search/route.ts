@@ -5,7 +5,13 @@ const TENANT_ID = process.env.MICROSOFT_TENANT_ID!;
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID!;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET!;
 
-type Body = { userUpn: string; q: string; top?: number };
+type Body = {
+  userUpn: string;
+  q?: string;                 // optional search query
+  top?: number;               // 1..50
+  folder?: string;            // e.g. "Inbox", "SentItems"
+  select?: string[];          // optional select fields
+};
 
 let cachedToken = "";
 let tokenExpiresAt = 0;
@@ -27,12 +33,7 @@ async function getToken() {
       }),
     }
   );
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`token_error: ${err}`);
-  }
-
+  if (!res.ok) throw new Error(`token_error: ${await res.text()}`);
   const data = await res.json();
   cachedToken = data.access_token as string;
   tokenExpiresAt = Date.now() + (data.expires_in ?? 3600) * 1000;
@@ -41,25 +42,31 @@ async function getToken() {
 
 export async function POST(req: Request) {
   try {
-    const { userUpn, q, top = 10 } = (await req.json()) as Body;
-
-    if (!userUpn || !q) {
-      return new Response(JSON.stringify({ error: "missing userUpn or q" }), { status: 400 });
-    }
+    const { userUpn, q, top = 10, folder, select } = (await req.json()) as Body;
+    if (!userUpn) return new Response(JSON.stringify({ error: "missing userUpn" }), { status: 400 });
 
     const token = await getToken();
 
-    const url = new URL(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userUpn)}/messages`);
+    const base =
+      folder
+        ? `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userUpn)}/mailFolders/${encodeURIComponent(folder)}/messages`
+        : `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userUpn)}/messages`;
+
+    const url = new URL(base);
     url.searchParams.set("$top", String(Math.max(1, Math.min(50, top))));
-    url.searchParams.set("$search", `"${q}"`); // simple KQL, e.g. from:stacy subject:invoice
+    // Default ordering: SentItems by sentDateTime, others by receivedDateTime
+    const order = (folder?.toLowerCase() === "sentitems") ? "sentDateTime desc" : "receivedDateTime desc";
+    url.searchParams.set("$orderby", order);
+    if (select?.length) url.searchParams.set("$select", select.join(","));
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
-    const ms = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "ConsistencyLevel": "eventual",
-      },
-    });
+    // Only add $search (and Consistency header) if q is provided & non-empty
+    if (q && q.trim()) {
+      url.searchParams.set("$search", `"${q}"`);
+      headers["ConsistencyLevel"] = "eventual";
+    }
 
+    const ms = await fetch(url, { headers });
     const data = await ms.json();
     return new Response(JSON.stringify(data), { status: ms.status });
   } catch (e: any) {
