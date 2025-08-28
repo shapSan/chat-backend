@@ -82,7 +82,10 @@ const hubspotAPI = {
           'deals_count',
           'target_gender_',
           'target_geography',
-          'hs_lastmodifieddate'
+          'hs_lastmodifieddate',
+          'one_sheet_link',  // Brand one-sheet document
+          'secondary_owner',  // User ID for later resolution
+          'specialty_lead'    // User ID for later resolution
         ],
         limit: filters.limit || 50,
         sorts: [{
@@ -374,7 +377,10 @@ const hubspotAPI = {
             'contract_sent_date',
             'num_associated_contacts',
             'hubspot_owner_id',
-            'hs_lastmodifieddate'
+            'hs_lastmodifieddate',
+            'release__est__date',    // Release date
+            'start_date',            // Production start date
+            'production_type'        // Type of production
           ],
           limit: filters.limit || 30,
           sorts: [{
@@ -396,6 +402,38 @@ const hubspotAPI = {
         results: []
       };
     }
+  },
+
+  async getPartnershipForProject(projectName) {
+    // Search for partnership data related to the project
+    if (!projectName) return null;
+    
+    try {
+      const results = await this.searchProductions({
+        filterGroups: [{
+          filters: [{
+            propertyName: 'production_name',
+            operator: 'CONTAINS_TOKEN',
+            value: projectName
+          }]
+        }],
+        limit: 1
+      });
+      
+      if (results?.results?.length > 0) {
+        const partnership = results.results[0].properties;
+        return {
+          distributor: partnership.distributor || null,
+          releaseDate: partnership.release__est__date || null,
+          startDate: partnership.start_date || null,
+          productionType: partnership.production_type || null
+        };
+      }
+    } catch (error) {
+      console.error('[getPartnershipForProject] error:', error);
+    }
+    
+    return null;
   },
 
   async searchDeals(filters = {}) {
