@@ -31,6 +31,10 @@ const TENANT = process.env.MICROSOFT_TENANT_ID;
 const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
 const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 
+// HubSpot API key for resolving user IDs
+const HUBSPOT_API_KEY = process.env.HUBSPOT_API_KEY;
+const HUBSPOT_BASE_URL = 'https://api.hubapi.com';
+
 async function getGraphToken() {
   const url = `https://login.microsoftonline.com/${encodeURIComponent(TENANT)}/oauth2/v2.0/token`;
   const body = new URLSearchParams({
@@ -105,6 +109,53 @@ async function sendSimpleMail({ subject, htmlBody, to, senderEmail }) {
   if (!resp.ok) throw new Error(`Notify send failed: ${resp.status} ${await resp.text()}`);
 }
 
+// ---------- HubSpot User Resolution ----------
+async function resolveHubSpotUsers(brands) {
+  if (!HUBSPOT_API_KEY) return brands;
+  
+  // Collect unique user IDs from all brands
+  const userIds = new Set();
+  brands.forEach(b => {
+    if (b.secondaryOwnerId) userIds.add(b.secondaryOwnerId);
+    if (b.specialtyLeadId) userIds.add(b.specialtyLeadId);
+  });
+  
+  if (userIds.size === 0) return brands;
+  
+  // Fetch user details from HubSpot
+  const userMap = {};
+  for (const userId of userIds) {
+    try {
+      const response = await fetch(
+        `${HUBSPOT_BASE_URL}/settings/v3/users/${userId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (response.ok) {
+        const userData = await response.json();
+        userMap[userId] = {
+          email: userData.email,
+          firstName: userData.firstName || userData.email?.split('@')[0] || 'there'
+        };
+      }
+    } catch (e) {
+      console.log(`[resolveHubSpotUsers] Could not resolve user ${userId}:`, e.message);
+    }
+  }
+  
+  // Enhance brands with resolved contact info
+  return brands.map(b => ({
+    ...b,
+    primaryContact: b.secondaryOwnerId ? userMap[b.secondaryOwnerId] : null,
+    secondaryContact: b.specialtyLeadId ? userMap[b.specialtyLeadId] : null
+  }));
+}
+
 // ---------- helpers ----------
 const esc = (s="") => String(s).replace(/[<&>]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const isHttp = u => typeof u==='string' && /^https?:\/\//i.test(u) && u.length < 1000;
@@ -173,7 +224,11 @@ function sanitizeBrand(b={}) {
     hbInsights: trim(b.hbInsights),
     integrationIdeas: normIdeas(b.integrationIdeas).slice(0,8).map(x=>trim(x,200)),
     contentText: trim(Array.isArray(b.content)? b.content.join('\n') : b.content, 2000),
-    assets
+    assets,
+    isInSystem: b.isInSystem || false,  // Preserve the isInSystem flag
+    oneSheetLink: b.oneSheetLink || b.one_sheet_link || null,  // Include one-sheet link
+    secondaryOwnerId: b.secondaryOwnerId || null,  // Preserve for resolution
+    specialtyLeadId: b.specialtyLeadId || null  // Preserve for resolution
   };
 }
 
@@ -204,54 +259,71 @@ function quickLinksHtml(brand){
 }
 
 // Professional email writer with natural resource mention
-async function generateAiBody({ project, vibe, cast, location, notes, brand, isInSystem }) {
+async function generateAiBody({ project, vibe, cast, location, notes, brand, isInSystem, recipientName, distributor, releaseDate, oneSheetLink }) {
   const mention = assetsNote(brand);
+  
+  // Use recipientName throughout
+  const greeting = recipientName && recipientName !== '[First Name]' ? `Hi ${recipientName}` : 'Hi [First Name]';
+  
+  // Format distributor/release for email
+  const distributorText = distributor && distributor !== '[Distributor/Studio]' ? distributor : '[Distributor/Studio]';
+  const releaseDateText = releaseDate && releaseDate !== '[Release Date]' ? releaseDate : '[Release Date]';
   
   // Different fallback templates based on whether brand is in system
   const fallback = () => {
     const ideas = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '';
     
     if (isInSystem) {
-      // Warmer, relationship-focused email for existing brands
-      return `Hello [name],\n\nGreat news! We have an exciting opportunity with ${project} that aligns perfectly with ${brand.name}.\n\n${brand.whyItWorks || `Given our successful past collaborations, this ${vibe} production would be an ideal fit for ${brand.name}.`}\n\n${ideas ? `Building on our relationship: ${ideas}` : `We see natural integration opportunities that build on ${brand.name}'s previous successes.`}\n\n${mention ? mention + ' ' : ''}Let's catch up soon to explore how we can make this happen together.`.trim();
+      // VERSION 2: Warmer email for existing clients
+      return `${greeting},\n\nGreat news! We have an exciting opportunity with ${project} that aligns perfectly with ${brand.name}.\n\n${brand.whyItWorks || `Given our successful past collaborations, this ${vibe} production would be an ideal fit for ${brand.name}.`}\n\n${ideas ? `Building on our relationship: ${ideas}` : `We see natural integration opportunities that build on ${brand.name}'s previous successes.`}\n\n${mention ? mention + ' ' : ''}Let's catch up soon to explore how we can make this happen together.\n\nBest,\nStacy`.trim();
     } else {
-      // Introduction-focused email for new brands
-      return `Hello [name],\n\nI'm reaching out from Hollywood Branded to introduce an exciting opportunity for ${brand.name} with ${project}.\n\n${brand.whyItWorks || `The ${vibe} of this production creates a perfect canvas for ${brand.name} to reach new audiences authentically.`}\n\n${ideas ? `Our vision: ${ideas}` : `We've identified compelling ways to integrate ${brand.name} that would feel organic to the story.`}\n\n${mention ? mention + ' ' : ''}I'd love to schedule a brief call to discuss this opportunity and how Hollywood Branded can help bring it to life.`.trim();
+      // VERSION 1: New brand email template from user's requirements
+      const integrationIdea = ideas || '[Integration Idea]';
+      const whyItWorks = brand.whyItWorks || '[Why it works]';
+      
+      return `${greeting},\n\nSeveral of our brand partners are evaluating opportunities around ${project} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.\n\nWe see a strong alignment with ${brand.name} and wanted to share how this could look:\n\nQuick Links: [Poster], [Audio Pitch], [Video], [Proposal], [Slides]${oneSheetLink ? `, [One Sheet: ${oneSheetLink}]` : ''}\n\n• On-Screen Integration: ${integrationIdea} (Scene/placement opportunities from one-sheet).\n• Content Extensions: [Capsule collection, co-promo, social/behind-the-scenes content]. Ie - Co-branded merchandise, social campaigns with the cast, or exclusive partner activations.\n• Amplification: [PR hooks, retail tie-ins, influencer/media activations].\n\nThis is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.\n\nWould you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?\n\nBest,\nStacy`.trim();
     }
   };
 
   try {
     if (!process.env.OPENAI_API_KEY) return fallback();
 
-    // Different prompts based on whether brand is in system
-    const baseContext = isInSystem 
-      ? "This is an EXISTING CLIENT we have worked with before. Write a warm, relationship-focused email that references our ongoing partnership."
-      : "This is a NEW BRAND we haven't worked with yet. Write an introductory email that establishes credibility and creates interest.";
-
+    // Smart prompt that follows the exact template structure
+    const integrationIdea = (brand.integrationIdeas && brand.integrationIdeas[0]) || 'Strategic product placement';
+    const whyItWorks = brand.whyItWorks || 'Natural brand fit';
+    
     const prompt = `
-Write a concise brand integration email (4 paragraphs, keep it brief but complete).
+Generate a professional brand integration email. IMPORTANT: Follow the template EXACTLY.
 
-${baseContext}
+${isInSystem ? 'VERSION 2: EXISTING CLIENT (warm, relationship-focused)' : 'VERSION 1: NEW BRAND (use exact template below)'}
 
-1. "Hello [name]," + ${isInSystem ? "reference our partnership and mention the new opportunity" : "introduce Hollywood Branded and the opportunity"}
+${!isInSystem ? `TEMPLATE TO FOLLOW EXACTLY:
+"${greeting},
 
-2. One paragraph on why the brand/film alignment works ${isInSystem ? "(mention how this builds on past successes)" : "(establish why this is perfect for them)"}
+Several of our brand partners are evaluating opportunities around ${project} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.
 
-3. One specific integration example (concrete scene or usage)
+We see a strong alignment with ${brand.name} and wanted to share how this could look:
 
-4. Closing: "${mention || 'I have materials ready.'}" + ${isInSystem ? "suggest catching up soon" : "invitation for an introductory call"}
+Quick Links: [Keep as placeholders]
+
+• On-Screen Integration: [Expand from: ${integrationIdea}] 
+• Content Extensions: [Generate specific ideas based on brand: ${brand.name} and genre: ${vibe}]
+• Amplification: [Generate PR/retail/influencer ideas]
+
+This is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.
+
+Would you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?
+
+Best,
+Stacy"
+
+Fill in the bracketed sections intelligently. Keep the structure EXACTLY as shown.` : `
+Write warm relationship email mentioning past success and new opportunity.`}
 
 Project: ${project}
-Genre: ${vibe}
-Cast: ${cast}
 Brand: ${brand.name}
-Why it works: ${brand.whyItWorks || 'Natural fit'}
-Integration idea: ${(brand.integrationIdeas && brand.integrationIdeas[0]) || 'Product placement'}
-Existing relationship: ${isInSystem ? 'YES - warm tone' : 'NO - professional introduction'}
-
-Be conversational but concise. Aim for 3-4 sentences per paragraph.
-Complete all thoughts - don't cut off mid-sentence.
-NO subject, NO "Quick links", NO signature.
+Genre: ${vibe}
+Cast: ${cast || 'TBD'}
 `.trim();
 
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -260,11 +332,13 @@ NO subject, NO "Quick links", NO signature.
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [
-          { role:"system", content:"Write concise but complete emails. Each paragraph should be 3-4 sentences. Never cut off mid-thought." },
+          { role:"system", content: isInSystem ? 
+            "Write warm, relationship-focused emails for existing clients. Be concise and professional." :
+            "Follow the email template EXACTLY as provided. Fill in bracketed sections intelligently based on the brand and production context." },
           { role:"user", content: prompt }
         ],
-        temperature: 0.65,
-        max_tokens: 600
+        temperature: 0.7,
+        max_tokens: 800
       })
     });
     if (!resp.ok) return fallback();
@@ -307,27 +381,44 @@ export default async function handler(req, res) {
     if (!brandsRaw.length) return res.status(400).json({ error: "No brands provided" });
 
     const brands = brandsRaw.map(sanitizeBrand).slice(0, 10); // safety cap
+  
+  // Resolve HubSpot user IDs to contact information
+  const brandsWithContacts = await resolveHubSpotUsers(brands);
+  console.log('[pushDraft] Resolved contacts for', brandsWithContacts.filter(b => b.primaryContact).length, 'brands');
 
     // --- ALWAYS SPLIT: one draft per brand ---
     const results = [];
-    for (const b of brands) {
+    for (const b of brandsWithContacts) {
       try {
-        console.log('[pushDraft] brand', b.name, 'has assets:', b.assets);
-        console.log('[pushDraft] assets count:', (b.assets||[]).length);
+      console.log('[pushDraft] brand', b.name, 'has assets:', b.assets);
+      console.log('[pushDraft] assets count:', (b.assets||[]).length);
 
-        // Check if brand is in system (has isInSystem flag)
-        const isInSystem = b.isInSystem || false;
-        console.log('[pushDraft] Brand', b.name, 'isInSystem:', isInSystem);
-        
-        const bodyText = await generateAiBody({ 
-          project: projectName, 
-          vibe, 
-          cast, 
-          location, 
-          notes, 
-          brand: b,
-          isInSystem // Pass the flag to email generator
-        });
+      // Check if brand is in system (has isInSystem flag)
+      const isInSystem = b.isInSystem || false;
+      console.log('[pushDraft] Brand', b.name, 'isInSystem:', isInSystem);
+      
+      // Use resolved contact name or fallback
+      const recipientName = b.primaryContact?.firstName || '[First Name]';
+      const recipientEmail = b.primaryContact?.email || null;
+      console.log('[pushDraft] Using recipient name:', recipientName);
+      
+      // Include distributor and release date from production data
+      const distributor = pd.distributor || '[Distributor/Studio]';
+      const releaseDate = pd.releaseDate ? new Date(pd.releaseDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : '[Release Date]';
+      
+      const bodyText = await generateAiBody({ 
+        project: projectName, 
+        vibe, 
+        cast, 
+        location, 
+        notes, 
+        brand: b,
+        isInSystem, // Pass the flag to email generator
+        recipientName, // Pass resolved name
+        distributor, // Pass distributor
+        releaseDate, // Pass release date
+        oneSheetLink: b.oneSheetLink || b.one_sheet_link // Pass one-sheet link
+      });
 
         const paragraphs = bodyText.split('\n').filter(line => line.trim());
         const formattedBody = paragraphs.map(para =>
@@ -357,10 +448,14 @@ export default async function handler(req, res) {
         console.log('[pushDraft] quickLinksSection:', quickLinksSection ? 'YES' : 'NO');
 
         const subject = `[Agent Pitch] ${projectName} — ${b.name || 'Brand'}`;
+        
+        // Use the resolved email if available, otherwise use default
+        const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
+        
         const draft = await createDraftInMailbox({
           subject,
           htmlBody,
-          to: toRecipients,
+          to: draftRecipients,
           cc: ccRecipients,
           senderEmail,
         });
