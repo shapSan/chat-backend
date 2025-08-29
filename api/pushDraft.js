@@ -109,25 +109,34 @@ async function sendSimpleMail({ subject, htmlBody, to, senderEmail }) {
   if (!resp.ok) throw new Error(`Notify send failed: ${resp.status} ${await resp.text()}`);
 }
 
-// ---------- HubSpot User Resolution ----------
-async function resolveHubSpotUsers(brands) {
-  if (!HUBSPOT_API_KEY) return brands;
+// ---------- HubSpot Contact Resolution ----------
+// IMPORTANT: These are CONTACT IDs, not USER IDs
+// secondary_owner and specialty_lead store CONTACT IDs in HubSpot
+async function resolveHubSpotContacts(brands) {
+  if (!HUBSPOT_API_KEY) {
+    console.log('[resolveHubSpotContacts] No HubSpot API key, skipping resolution');
+    return brands;
+  }
   
-  // Collect unique user IDs from all brands
-  const userIds = new Set();
+  // Collect unique CONTACT IDs from all brands
+  const contactIds = new Set();
   brands.forEach(b => {
-    if (b.secondaryOwnerId) userIds.add(b.secondaryOwnerId);
-    if (b.specialtyLeadId) userIds.add(b.specialtyLeadId);
+    if (b.secondaryOwnerId) contactIds.add(b.secondaryOwnerId);
+    if (b.specialtyLeadId) contactIds.add(b.specialtyLeadId);
   });
   
-  if (userIds.size === 0) return brands;
+  console.log('[resolveHubSpotContacts] Found', contactIds.size, 'unique contact IDs to resolve');
+  if (contactIds.size === 0) return brands;
   
-  // Fetch user details from HubSpot
-  const userMap = {};
-  for (const userId of userIds) {
+  // Fetch CONTACT details from HubSpot
+  const contactMap = {};
+  for (const contactId of contactIds) {
     try {
+      console.log(`[resolveHubSpotContacts] Fetching contact ${contactId}`);
+      
+      // Use the CONTACTS API, not the USERS API
       const response = await fetch(
-        `${HUBSPOT_BASE_URL}/settings/v3/users/${userId}`,
+        `${HUBSPOT_BASE_URL}/crm/v3/objects/contacts/${contactId}?properties=firstname,lastname,email`,
         {
           headers: {
             'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
@@ -137,23 +146,49 @@ async function resolveHubSpotUsers(brands) {
       );
       
       if (response.ok) {
-        const userData = await response.json();
-        userMap[userId] = {
-          email: userData.email,
-          firstName: userData.firstName || userData.email?.split('@')[0] || 'there'
-        };
+        const contactData = await response.json();
+        console.log(`[resolveHubSpotContacts] Contact ${contactId} data:`, contactData.properties);
+        
+        // Use the standard HubSpot contact property: firstname (lowercase)
+        const firstName = contactData.properties?.firstname || null;
+        const email = contactData.properties?.email || null;
+        
+        if (email) {
+          contactMap[contactId] = {
+            email: email,
+            firstName: firstName
+          };
+          console.log(`[resolveHubSpotContacts] Resolved contact ${contactId}: ${firstName || '[No name]'} <${email}>`);
+        } else {
+          console.log(`[resolveHubSpotContacts] Contact ${contactId} has no email`);
+        }
+      } else {
+        console.log(`[resolveHubSpotContacts] Failed to fetch contact ${contactId}: ${response.status}`);
       }
     } catch (e) {
-      console.log(`[resolveHubSpotUsers] Could not resolve user ${userId}:`, e.message);
+      console.log(`[resolveHubSpotContacts] Error resolving contact ${contactId}:`, e.message);
     }
   }
   
+  console.log('[resolveHubSpotContacts] Contact map:', contactMap);
+  
   // Enhance brands with resolved contact info
-  return brands.map(b => ({
-    ...b,
-    primaryContact: b.secondaryOwnerId ? userMap[b.secondaryOwnerId] : null,
-    secondaryContact: b.specialtyLeadId ? userMap[b.specialtyLeadId] : null
-  }));
+  return brands.map(b => {
+    const enhanced = {
+      ...b,
+      primaryContact: b.secondaryOwnerId ? contactMap[b.secondaryOwnerId] : null,
+      secondaryContact: b.specialtyLeadId ? contactMap[b.specialtyLeadId] : null
+    };
+    
+    if (enhanced.primaryContact || enhanced.secondaryContact) {
+      console.log(`[resolveHubSpotContacts] Brand ${b.name} contacts:`, {
+        primary: enhanced.primaryContact,
+        secondary: enhanced.secondaryContact
+      });
+    }
+    
+    return enhanced;
+  });
 }
 
 // ---------- helpers ----------
@@ -357,6 +392,19 @@ Cast: ${cast || 'TBD'}
   } catch { return fallback(); }
 }
 
+// Subject line rotation helper
+let subjectCounter = 0;
+function getRotatingSubject(projectName, brandName) {
+  const formats = [
+    `[Agent Pitch] Hollywood Opportunity: ${projectName} x ${brandName}`,
+    `[Agent Pitch] Idea Starter: ${projectName} for ${brandName}`,
+    `[Agent Pitch] Entertainment Partnership Opportunity for ${brandName}`
+  ];
+  const subject = formats[subjectCounter % 3];
+  subjectCounter++;
+  return subject;
+}
+
 // ---------- handler ----------
 export default async function handler(req, res) {
   applyCORS(req, res);
@@ -392,8 +440,8 @@ export default async function handler(req, res) {
 
     const brands = brandsRaw.map(sanitizeBrand).slice(0, 10); // safety cap
   
-  // Resolve HubSpot user IDs to contact information
-  const brandsWithContacts = await resolveHubSpotUsers(brands);
+  // Resolve HubSpot contact IDs to contact information
+  const brandsWithContacts = await resolveHubSpotContacts(brands);
   console.log('[pushDraft] Resolved contacts for', brandsWithContacts.filter(b => b.primaryContact).length, 'brands');
 
     // --- ALWAYS SPLIT: one draft per brand ---
@@ -407,13 +455,26 @@ export default async function handler(req, res) {
       const isInSystem = b.isInSystem || false;
       console.log('[pushDraft] Brand', b.name, 'isInSystem:', isInSystem);
       
-      // Use resolved contact name or fallback
-      const recipientName = b.primaryContact?.firstName || '[First Name]';
-      const recipientEmail = b.primaryContact?.email || null;
-      console.log('[pushDraft] Using recipient name:', recipientName);
-      console.log('[pushDraft] Using recipient email:', recipientEmail);
-      console.log('[pushDraft] Primary contact:', b.primaryContact);
-      console.log('[pushDraft] Secondary contact:', b.secondaryContact);
+      // Determine the primary recipient - prioritize primaryContact (secondary_owner), then secondaryContact (specialty_lead)
+      let recipientName = '[First Name]';
+      let recipientEmail = null;
+      
+      if (b.primaryContact?.email) {
+        recipientEmail = b.primaryContact.email;
+        recipientName = b.primaryContact.firstName || '[First Name]';
+        console.log('[pushDraft] Using primaryContact (secondary_owner) as recipient:', recipientName, recipientEmail);
+      } else if (b.secondaryContact?.email) {
+        recipientEmail = b.secondaryContact.email;
+        recipientName = b.secondaryContact.firstName || '[First Name]';
+        console.log('[pushDraft] Using secondaryContact (specialty_lead) as recipient:', recipientName, recipientEmail);
+      } else {
+        console.log('[pushDraft] No HubSpot contacts found, using defaults');
+      }
+      
+      console.log('[pushDraft] Final recipient name:', recipientName);
+      console.log('[pushDraft] Final recipient email:', recipientEmail);
+      console.log('[pushDraft] Primary contact (secondary_owner):', b.primaryContact);
+      console.log('[pushDraft] Secondary contact (specialty_lead):', b.secondaryContact);
       
       // Include distributor and release date from production data
       const distributor = pd.distributor || '[Distributor/Studio]';
@@ -462,20 +523,31 @@ export default async function handler(req, res) {
         console.log('[pushDraft] html includes Quick links?', htmlBody.includes('Quick links'));
         console.log('[pushDraft] quickLinksSection:', quickLinksSection ? 'YES' : 'NO');
 
-        const subject = `[Agent Pitch] ${projectName} — ${b.name || 'Brand'}`;
+        // Use rotating subject line format
+        const subject = getRotatingSubject(projectName, b.name || 'Brand');
+        console.log('[pushDraft] Using subject:', subject);
         
         // Use the resolved email if available, otherwise use default
         const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
+        console.log('[pushDraft] TO recipients:', draftRecipients);
         
-        // Build CC list with resolved contacts
+        // Build CC list with resolved contacts - include BOTH contacts if they exist and aren't already in TO
         const brandCCs = [];
+        
+        // Add the other contact to CC if it's not the primary recipient
         if (b.primaryContact?.email && !draftRecipients.includes(b.primaryContact.email)) {
           brandCCs.push(b.primaryContact.email);
+          console.log('[pushDraft] Adding primaryContact to CC:', b.primaryContact.email);
         }
-        if (b.secondaryContact?.email) {
+        if (b.secondaryContact?.email && !draftRecipients.includes(b.secondaryContact.email)) {
           brandCCs.push(b.secondaryContact.email);
+          console.log('[pushDraft] Adding secondaryContact to CC:', b.secondaryContact.email);
         }
+        
+        // Merge with always-CC list and dedupe
         const finalCCList = dedupeEmails([...brandCCs, ...ccRecipients]).slice(0, 10);
+        console.log('[pushDraft] Brand CCs:', brandCCs);
+        console.log('[pushDraft] Always CC:', ALWAYS_CC);
         console.log('[pushDraft] Final CC list:', finalCCList);
         
         const draft = await createDraftInMailbox({
