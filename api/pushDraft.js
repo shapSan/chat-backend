@@ -109,39 +109,30 @@ async function sendSimpleMail({ subject, htmlBody, to, senderEmail }) {
   if (!resp.ok) throw new Error(`Notify send failed: ${resp.status} ${await resp.text()}`);
 }
 
-// ---------- HubSpot Contact/User Resolution ----------
-// NOTE: secondary_owner and specialty_lead might be either Contact IDs or User IDs
-// We'll try both APIs to resolve them
-async function resolveHubSpotContacts(brands) {
+// ---------- HubSpot User Resolution ----------
+// secondary_owner and specialty_lead are USER IDs (internal team members)
+async function resolveHubSpotUsers(brands) {
   if (!HUBSPOT_API_KEY) {
-    console.log('[resolveHubSpotContacts] No HubSpot API key, skipping resolution');
+    console.log('[resolveHubSpotUsers] No HubSpot API key, skipping resolution');
     return brands;
   }
   
-  // Collect unique IDs from all brands
-  const idsToResolve = new Set();
+  // Collect unique User IDs from all brands
+  const userIds = new Set();
   brands.forEach(b => {
-    if (b.secondaryOwnerId) idsToResolve.add(b.secondaryOwnerId);
-    if (b.specialtyLeadId) idsToResolve.add(b.specialtyLeadId);
+    if (b.secondaryOwnerId) userIds.add(b.secondaryOwnerId);
+    if (b.specialtyLeadId) userIds.add(b.specialtyLeadId);
   });
   
-  console.log('[resolveHubSpotContacts] Found', idsToResolve.size, 'unique IDs to resolve:', Array.from(idsToResolve));
-  if (idsToResolve.size === 0) {
-    console.log('[resolveHubSpotContacts] No IDs to resolve, returning brands as-is');
-    return brands;
-  }
+  console.log('[resolveHubSpotUsers] Found', userIds.size, 'unique user IDs to resolve');
+  if (userIds.size === 0) return brands;
   
-  // Fetch details - try both Contact and User APIs
-  const resolvedMap = {};
-  
-  for (const id of idsToResolve) {
-    console.log(`\n[resolveHubSpotContacts] Attempting to resolve ID: ${id}`);
-    
-    // First try as a Contact ID
+  // Fetch User details from HubSpot
+  const userMap = {};
+  for (const userId of userIds) {
     try {
-      console.log(`[resolveHubSpotContacts] Trying as Contact ID...`);
-      const contactResponse = await fetch(
-        `${HUBSPOT_BASE_URL}/crm/v3/objects/contacts/${id}?properties=firstname,lastname,email`,
+      const response = await fetch(
+        `${HUBSPOT_BASE_URL}/settings/v3/users/${userId}`,
         {
           headers: {
             'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
@@ -150,91 +141,32 @@ async function resolveHubSpotContacts(brands) {
         }
       );
       
-      if (contactResponse.ok) {
-        const contactData = await contactResponse.json();
-        console.log(`[resolveHubSpotContacts] SUCCESS as Contact! Data:`, contactData.properties);
-        
-        const firstName = contactData.properties?.firstname || null;
-        const email = contactData.properties?.email || null;
-        
-        if (email) {
-          resolvedMap[id] = {
-            email: email,
-            firstName: firstName,
-            type: 'contact'
-          };
-          console.log(`[resolveHubSpotContacts] Resolved as Contact: ${firstName || '[No name]'} <${email}>`);
-          continue; // Skip trying User API
-        }
-      } else {
-        console.log(`[resolveHubSpotContacts] Not found as Contact (${contactResponse.status})`);
-      }
-    } catch (e) {
-      console.log(`[resolveHubSpotContacts] Contact API error:`, e.message);
-    }
-    
-    // If not found as Contact, try as a User ID
-    try {
-      console.log(`[resolveHubSpotContacts] Trying as User ID...`);
-      const userResponse = await fetch(
-        `${HUBSPOT_BASE_URL}/settings/v3/users/${id}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      
-      if (userResponse.ok) {
-        const userData = await userResponse.json();
-        console.log(`[resolveHubSpotContacts] SUCCESS as User! Data:`, {
-          email: userData.email,
-          firstName: userData.firstName,
-          displayName: userData.displayName
-        });
-        
-        // For Users, try multiple name fields
+      if (response.ok) {
+        const userData = await response.json();
+        // For Users, firstName is the right field
         const firstName = userData.firstName || 
-                         userData.displayName?.split(' ')[0] || 
-                         userData.email?.split('@')[0]?.replace(/[._-]/g, ' ').split(' ')[0] || 
+                         userData.email?.split('@')[0] || 
                          null;
         
-        resolvedMap[id] = {
+        userMap[userId] = {
           email: userData.email,
-          firstName: firstName,
-          type: 'user'
+          firstName: firstName
         };
-        console.log(`[resolveHubSpotContacts] Resolved as User: ${firstName || '[No name]'} <${userData.email}>`);
+        console.log(`[resolveHubSpotUsers] Resolved user ${userId}: ${firstName} <${userData.email}>`);
       } else {
-        console.log(`[resolveHubSpotContacts] Not found as User either (${userResponse.status})`);
+        console.log(`[resolveHubSpotUsers] Failed to fetch user ${userId}: ${response.status}`);
       }
     } catch (e) {
-      console.log(`[resolveHubSpotContacts] User API error:`, e.message);
-    }
-    
-    if (!resolvedMap[id]) {
-      console.log(`[resolveHubSpotContacts] WARNING: Could not resolve ID ${id} as either Contact or User`);
+      console.log(`[resolveHubSpotUsers] Error resolving user ${userId}:`, e.message);
     }
   }
   
-  console.log('\n[resolveHubSpotContacts] Final resolved map:', resolvedMap);
-  
-  // Enhance brands with resolved info
-  return brands.map(b => {
-    const enhanced = {
-      ...b,
-      primaryContact: b.secondaryOwnerId ? resolvedMap[b.secondaryOwnerId] : null,
-      secondaryContact: b.specialtyLeadId ? resolvedMap[b.specialtyLeadId] : null
-    };
-    
-    console.log(`[resolveHubSpotContacts] Brand "${b.name}" enhanced with:`, {
-      primaryContact: enhanced.primaryContact,
-      secondaryContact: enhanced.secondaryContact
-    });
-    
-    return enhanced;
-  });
+  // Enhance brands with resolved user info
+  return brands.map(b => ({
+    ...b,
+    primaryContact: b.secondaryOwnerId ? userMap[b.secondaryOwnerId] : null,
+    secondaryContact: b.specialtyLeadId ? userMap[b.specialtyLeadId] : null
+  }));
 }
 
 // ---------- helpers ----------
@@ -503,9 +435,9 @@ export default async function handler(req, res) {
 
     const brands = brandsRaw.map(sanitizeBrand).slice(0, 10); // safety cap
   
-  // Resolve HubSpot contact IDs to contact information
-  const brandsWithContacts = await resolveHubSpotContacts(brands);
-  console.log('[pushDraft] Resolved contacts for', brandsWithContacts.filter(b => b.primaryContact).length, 'brands');
+  // Resolve HubSpot user IDs to user information
+  const brandsWithContacts = await resolveHubSpotUsers(brands);
+  console.log('[pushDraft] Resolved users for', brandsWithContacts.filter(b => b.primaryContact).length, 'brands');
 
     // --- ALWAYS SPLIT: one draft per brand ---
     const results = [];
