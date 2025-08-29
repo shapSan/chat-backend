@@ -245,6 +245,13 @@ function assetsNote(brand){
   return `I've included ${parts.slice(0,-1).join(', ')} and ${parts.slice(-1)} below for a quick skim.`;
 }
 
+// Clean project name to remove common suffixes
+function cleanProjectName(name) {
+  if (!name) return 'Project';
+  // Remove common trailing words that shouldn't be in the project name
+  return name.replace(/\s*(Synopsis|Description|Overview|Summary|Details?)\s*$/i, '').trim() || name;
+}
+
 // Clickable links block under the body
 function quickLinksHtml(brand){
   if (!brand.assets?.length) return '';
@@ -262,6 +269,9 @@ function quickLinksHtml(brand){
 async function generateAiBody({ project, vibe, cast, location, notes, brand, isInSystem, recipientName, distributor, releaseDate, oneSheetLink }) {
   const mention = assetsNote(brand);
   
+  // Clean the project name
+  const cleanedProject = cleanProjectName(project);
+  
   // Use recipientName throughout
   const greeting = recipientName && recipientName !== '[First Name]' ? `Hi ${recipientName}` : 'Hi [First Name]';
   
@@ -275,13 +285,13 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
     
     if (isInSystem) {
       // VERSION 2: Warmer email for existing clients
-      return `${greeting},\n\nGreat news! We have an exciting opportunity with ${project} that aligns perfectly with ${brand.name}.\n\n${brand.whyItWorks || `Given our successful past collaborations, this ${vibe} production would be an ideal fit for ${brand.name}.`}\n\n${ideas ? `Building on our relationship: ${ideas}` : `We see natural integration opportunities that build on ${brand.name}'s previous successes.`}\n\n${mention ? mention + ' ' : ''}Let's catch up soon to explore how we can make this happen together.\n\nBest,\nStacy`.trim();
+      return `${greeting},\n\nGreat news! We have an exciting opportunity with ${cleanedProject} that aligns perfectly with ${brand.name}.\n\n${brand.whyItWorks || `Given our successful past collaborations, this ${vibe} production would be an ideal fit for ${brand.name}.`}\n\n${ideas ? `Building on our relationship: ${ideas}` : `We see natural integration opportunities that build on ${brand.name}'s previous successes.`}\n\n${mention ? mention + ' ' : ''}Let's catch up soon to explore how we can make this happen together.\n\nBest,\nStacy`.trim();
     } else {
       // VERSION 1: New brand email template from user's requirements
       const integrationIdea = ideas || '[Integration Idea]';
       const whyItWorks = brand.whyItWorks || '[Why it works]';
       
-      return `${greeting},\n\nSeveral of our brand partners are evaluating opportunities around ${project} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.\n\nWe see a strong alignment with ${brand.name} and wanted to share how this could look:\n\nQuick Links: [Poster], [Audio Pitch], [Video], [Proposal], [Slides]${oneSheetLink ? `, [One Sheet: ${oneSheetLink}]` : ''}\n\n• On-Screen Integration: ${integrationIdea} (Scene/placement opportunities from one-sheet).\n• Content Extensions: [Capsule collection, co-promo, social/behind-the-scenes content]. Ie - Co-branded merchandise, social campaigns with the cast, or exclusive partner activations.\n• Amplification: [PR hooks, retail tie-ins, influencer/media activations].\n\nThis is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.\n\nWould you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?\n\nBest,\nStacy`.trim();
+      return `${greeting},\n\nSeveral of our brand partners are evaluating opportunities around ${cleanedProject} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.\n\nWe see a strong alignment with ${brand.name} and wanted to share how this could look:\n\nQuick Links: [Poster], [Audio Pitch], [Video], [Proposal], [Slides]${oneSheetLink ? `, [One Sheet: ${oneSheetLink}]` : ''}\n\n• On-Screen Integration: ${integrationIdea} (Scene/placement opportunities from one-sheet).\n• Content Extensions: [Capsule collection, co-promo, social/behind-the-scenes content]. Ie - Co-branded merchandise, social campaigns with the cast, or exclusive partner activations.\n• Amplification: [PR hooks, retail tie-ins, influencer/media activations].\n\nThis is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.\n\nWould you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?\n\nBest,\nStacy`.trim();
     }
   };
 
@@ -300,7 +310,7 @@ ${isInSystem ? 'VERSION 2: EXISTING CLIENT (warm, relationship-focused)' : 'VERS
 ${!isInSystem ? `TEMPLATE TO FOLLOW EXACTLY:
 "${greeting},
 
-Several of our brand partners are evaluating opportunities around ${project} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.
+Several of our brand partners are evaluating opportunities around ${cleanedProject} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.
 
 We see a strong alignment with ${brand.name} and wanted to share how this could look:
 
@@ -320,7 +330,7 @@ Stacy"
 Fill in the bracketed sections intelligently. Keep the structure EXACTLY as shown.` : `
 Write warm relationship email mentioning past success and new opportunity.`}
 
-Project: ${project}
+Project: ${cleanedProject}
 Brand: ${brand.name}
 Genre: ${vibe}
 Cast: ${cast || 'TBD'}
@@ -360,7 +370,7 @@ export default async function handler(req, res) {
     console.log('[pushDraft] brands:', brandsRaw.length);
 
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
-    const projectName = body.projectName ?? pd.projectName ?? "Project";
+    const projectName = cleanProjectName(body.projectName ?? pd.projectName ?? "Project");
     const cast = body.cast ?? pd.cast ?? "";
     const location = body.location ?? pd.location ?? "";
     const vibe = body.vibe ?? pd.vibe ?? "";
@@ -401,10 +411,15 @@ export default async function handler(req, res) {
       const recipientName = b.primaryContact?.firstName || '[First Name]';
       const recipientEmail = b.primaryContact?.email || null;
       console.log('[pushDraft] Using recipient name:', recipientName);
+      console.log('[pushDraft] Using recipient email:', recipientEmail);
+      console.log('[pushDraft] Primary contact:', b.primaryContact);
+      console.log('[pushDraft] Secondary contact:', b.secondaryContact);
       
       // Include distributor and release date from production data
       const distributor = pd.distributor || '[Distributor/Studio]';
       const releaseDate = pd.releaseDate ? new Date(pd.releaseDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : '[Release Date]';
+      console.log('[pushDraft] Distributor:', distributor);
+      console.log('[pushDraft] Release date:', releaseDate);
       
       const bodyText = await generateAiBody({ 
         project: projectName, 
@@ -452,11 +467,22 @@ export default async function handler(req, res) {
         // Use the resolved email if available, otherwise use default
         const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
         
+        // Build CC list with resolved contacts
+        const brandCCs = [];
+        if (b.primaryContact?.email && !draftRecipients.includes(b.primaryContact.email)) {
+          brandCCs.push(b.primaryContact.email);
+        }
+        if (b.secondaryContact?.email) {
+          brandCCs.push(b.secondaryContact.email);
+        }
+        const finalCCList = dedupeEmails([...brandCCs, ...ccRecipients]).slice(0, 10);
+        console.log('[pushDraft] Final CC list:', finalCCList);
+        
         const draft = await createDraftInMailbox({
           subject,
           htmlBody,
           to: draftRecipients,
-          cc: ccRecipients,
+          cc: finalCCList,
           senderEmail,
         });
 
