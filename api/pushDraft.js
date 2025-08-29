@@ -109,34 +109,39 @@ async function sendSimpleMail({ subject, htmlBody, to, senderEmail }) {
   if (!resp.ok) throw new Error(`Notify send failed: ${resp.status} ${await resp.text()}`);
 }
 
-// ---------- HubSpot Contact Resolution ----------
-// IMPORTANT: These are CONTACT IDs, not USER IDs
-// secondary_owner and specialty_lead store CONTACT IDs in HubSpot
+// ---------- HubSpot Contact/User Resolution ----------
+// NOTE: secondary_owner and specialty_lead might be either Contact IDs or User IDs
+// We'll try both APIs to resolve them
 async function resolveHubSpotContacts(brands) {
   if (!HUBSPOT_API_KEY) {
     console.log('[resolveHubSpotContacts] No HubSpot API key, skipping resolution');
     return brands;
   }
   
-  // Collect unique CONTACT IDs from all brands
-  const contactIds = new Set();
+  // Collect unique IDs from all brands
+  const idsToResolve = new Set();
   brands.forEach(b => {
-    if (b.secondaryOwnerId) contactIds.add(b.secondaryOwnerId);
-    if (b.specialtyLeadId) contactIds.add(b.specialtyLeadId);
+    if (b.secondaryOwnerId) idsToResolve.add(b.secondaryOwnerId);
+    if (b.specialtyLeadId) idsToResolve.add(b.specialtyLeadId);
   });
   
-  console.log('[resolveHubSpotContacts] Found', contactIds.size, 'unique contact IDs to resolve');
-  if (contactIds.size === 0) return brands;
+  console.log('[resolveHubSpotContacts] Found', idsToResolve.size, 'unique IDs to resolve:', Array.from(idsToResolve));
+  if (idsToResolve.size === 0) {
+    console.log('[resolveHubSpotContacts] No IDs to resolve, returning brands as-is');
+    return brands;
+  }
   
-  // Fetch CONTACT details from HubSpot
-  const contactMap = {};
-  for (const contactId of contactIds) {
+  // Fetch details - try both Contact and User APIs
+  const resolvedMap = {};
+  
+  for (const id of idsToResolve) {
+    console.log(`\n[resolveHubSpotContacts] Attempting to resolve ID: ${id}`);
+    
+    // First try as a Contact ID
     try {
-      console.log(`[resolveHubSpotContacts] Fetching contact ${contactId}`);
-      
-      // Use the CONTACTS API, not the USERS API
-      const response = await fetch(
-        `${HUBSPOT_BASE_URL}/crm/v3/objects/contacts/${contactId}?properties=firstname,lastname,email`,
+      console.log(`[resolveHubSpotContacts] Trying as Contact ID...`);
+      const contactResponse = await fetch(
+        `${HUBSPOT_BASE_URL}/crm/v3/objects/contacts/${id}?properties=firstname,lastname,email`,
         {
           headers: {
             'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
@@ -145,47 +150,88 @@ async function resolveHubSpotContacts(brands) {
         }
       );
       
-      if (response.ok) {
-        const contactData = await response.json();
-        console.log(`[resolveHubSpotContacts] Contact ${contactId} data:`, contactData.properties);
+      if (contactResponse.ok) {
+        const contactData = await contactResponse.json();
+        console.log(`[resolveHubSpotContacts] SUCCESS as Contact! Data:`, contactData.properties);
         
-        // Use the standard HubSpot contact property: firstname (lowercase)
         const firstName = contactData.properties?.firstname || null;
         const email = contactData.properties?.email || null;
         
         if (email) {
-          contactMap[contactId] = {
+          resolvedMap[id] = {
             email: email,
-            firstName: firstName
+            firstName: firstName,
+            type: 'contact'
           };
-          console.log(`[resolveHubSpotContacts] Resolved contact ${contactId}: ${firstName || '[No name]'} <${email}>`);
-        } else {
-          console.log(`[resolveHubSpotContacts] Contact ${contactId} has no email`);
+          console.log(`[resolveHubSpotContacts] Resolved as Contact: ${firstName || '[No name]'} <${email}>`);
+          continue; // Skip trying User API
         }
       } else {
-        console.log(`[resolveHubSpotContacts] Failed to fetch contact ${contactId}: ${response.status}`);
+        console.log(`[resolveHubSpotContacts] Not found as Contact (${contactResponse.status})`);
       }
     } catch (e) {
-      console.log(`[resolveHubSpotContacts] Error resolving contact ${contactId}:`, e.message);
+      console.log(`[resolveHubSpotContacts] Contact API error:`, e.message);
+    }
+    
+    // If not found as Contact, try as a User ID
+    try {
+      console.log(`[resolveHubSpotContacts] Trying as User ID...`);
+      const userResponse = await fetch(
+        `${HUBSPOT_BASE_URL}/settings/v3/users/${id}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (userResponse.ok) {
+        const userData = await userResponse.json();
+        console.log(`[resolveHubSpotContacts] SUCCESS as User! Data:`, {
+          email: userData.email,
+          firstName: userData.firstName,
+          displayName: userData.displayName
+        });
+        
+        // For Users, try multiple name fields
+        const firstName = userData.firstName || 
+                         userData.displayName?.split(' ')[0] || 
+                         userData.email?.split('@')[0]?.replace(/[._-]/g, ' ').split(' ')[0] || 
+                         null;
+        
+        resolvedMap[id] = {
+          email: userData.email,
+          firstName: firstName,
+          type: 'user'
+        };
+        console.log(`[resolveHubSpotContacts] Resolved as User: ${firstName || '[No name]'} <${userData.email}>`);
+      } else {
+        console.log(`[resolveHubSpotContacts] Not found as User either (${userResponse.status})`);
+      }
+    } catch (e) {
+      console.log(`[resolveHubSpotContacts] User API error:`, e.message);
+    }
+    
+    if (!resolvedMap[id]) {
+      console.log(`[resolveHubSpotContacts] WARNING: Could not resolve ID ${id} as either Contact or User`);
     }
   }
   
-  console.log('[resolveHubSpotContacts] Contact map:', contactMap);
+  console.log('\n[resolveHubSpotContacts] Final resolved map:', resolvedMap);
   
-  // Enhance brands with resolved contact info
+  // Enhance brands with resolved info
   return brands.map(b => {
     const enhanced = {
       ...b,
-      primaryContact: b.secondaryOwnerId ? contactMap[b.secondaryOwnerId] : null,
-      secondaryContact: b.specialtyLeadId ? contactMap[b.specialtyLeadId] : null
+      primaryContact: b.secondaryOwnerId ? resolvedMap[b.secondaryOwnerId] : null,
+      secondaryContact: b.specialtyLeadId ? resolvedMap[b.specialtyLeadId] : null
     };
     
-    if (enhanced.primaryContact || enhanced.secondaryContact) {
-      console.log(`[resolveHubSpotContacts] Brand ${b.name} contacts:`, {
-        primary: enhanced.primaryContact,
-        secondary: enhanced.secondaryContact
-      });
-    }
+    console.log(`[resolveHubSpotContacts] Brand "${b.name}" enhanced with:`, {
+      primaryContact: enhanced.primaryContact,
+      secondaryContact: enhanced.secondaryContact
+    });
     
     return enhanced;
   });
@@ -237,6 +283,14 @@ function classifyAsset(item={}) {
 }
 
 function sanitizeBrand(b={}) {
+  console.log('[sanitizeBrand] Input brand:', {
+    name: b.name || b.brand,
+    secondaryOwnerId: b.secondaryOwnerId,
+    specialtyLeadId: b.specialtyLeadId,
+    secondary_owner: b.secondary_owner,
+    specialty_lead: b.specialty_lead
+  });
+  
   const base = [];
   // fold any top-level url fields
   if (isHttp(b.videoUrl || b.exportedVideo)) base.push({type:'video', url:b.videoUrl || b.exportedVideo, title:'Video'});
@@ -253,6 +307,15 @@ function sanitizeBrand(b={}) {
   const seen = new Set(); const assets = [];
   [...base, ...extras].forEach(a => { if (!seen.has(a.url)) { seen.add(a.url); assets.push(a); } });
 
+  // Check for both camelCase and snake_case versions
+  const secondaryOwnerId = b.secondaryOwnerId || b.secondary_owner || null;
+  const specialtyLeadId = b.specialtyLeadId || b.specialty_lead || null;
+  
+  console.log('[sanitizeBrand] Extracted IDs:', {
+    secondaryOwnerId,
+    specialtyLeadId
+  });
+
   return {
     name: b.name || b.brand || '',
     whyItWorks: trim(b.whyItWorks),
@@ -262,8 +325,8 @@ function sanitizeBrand(b={}) {
     assets,
     isInSystem: b.isInSystem || false,  // Preserve the isInSystem flag
     oneSheetLink: b.oneSheetLink || b.one_sheet_link || null,  // Include one-sheet link
-    secondaryOwnerId: b.secondaryOwnerId || null,  // Preserve for resolution
-    specialtyLeadId: b.specialtyLeadId || null  // Preserve for resolution
+    secondaryOwnerId: secondaryOwnerId,  // Preserve for resolution
+    specialtyLeadId: specialtyLeadId  // Preserve for resolution
   };
 }
 
