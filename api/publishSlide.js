@@ -23,7 +23,12 @@ export default async function handler(req, res) {
       updateExisting = false 
     } = req.body;
 
-    // Generate token (session-based for now)
+    // Basic validation
+    if (!slides || slides.length === 0) {
+      return res.status(400).json({ error: 'No slides provided' });
+    }
+
+    // Generate token
     const token = updateExisting && sessionId 
       ? crypto.createHash('md5').update(sessionId).digest('hex').substring(0, 8)
       : crypto.randomBytes(4).toString('hex');
@@ -52,12 +57,10 @@ export default async function handler(req, res) {
       addRandomSuffix: false,
     });
 
-    // Store metadata
+    // Store simple metadata
     await put(`slides/${token}/meta.json`, JSON.stringify({
-      sessionId,
       title,
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
       slideCount: slides.length
     }), {
       access: 'public',
@@ -77,11 +80,22 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('Publish error:', error);
-    return res.status(500).json({ error: 'Failed to publish: ' + error.message });
+    return res.status(500).json({ error: 'Failed to publish slides' });
   }
 }
 
 function generateStandaloneHTML(slides, title) {
+  // Simple HTML escape for safety
+  const escape = (str) => {
+    if (!str) return '';
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
+  
   // Convert slides to HTML sections matching AgentPitchSlides.tsx style
   const slideSections = slides.map((slide, index) => {
     const isTitle = slide.type === 'title';
@@ -95,21 +109,21 @@ function generateStandaloneHTML(slides, title) {
     }
     
     if (slide.content.title) {
-      leftContent += `<h2 class="apTitle">${slide.content.title}</h2>`;
+      leftContent += `<h2 class="apTitle">${escape(slide.content.title)}</h2>`;
     }
     
     if (slide.content.subtitle) {
-      leftContent += `<div class="apSubtitle">${slide.content.subtitle}</div>`;
+      leftContent += `<div class="apSubtitle">${escape(slide.content.subtitle)}</div>`;
     }
     
     if (slide.content.body) {
-      leftContent += `<p class="apBody">${slide.content.body.replace(/\n/g, '<br>')}</p>`;
+      leftContent += `<p class="apBody">${escape(slide.content.body).replace(/\n/g, '<br>')}</p>`;
     }
     
     if (slide.content.items && slide.content.items.length > 0) {
       leftContent += '<ul class="apBullets">';
       slide.content.items.forEach(item => {
-        leftContent += `<li>${item}</li>`;
+        leftContent += `<li>${escape(item)}</li>`;
       });
       leftContent += '</ul>';
     }
@@ -157,7 +171,7 @@ function generateStandaloneHTML(slides, title) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title || 'Agent Pitch Presentation'}</title>
+  <title>${escape(title || 'Agent Pitch Presentation')}</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
   <style>
     /* Reset and base styles */
