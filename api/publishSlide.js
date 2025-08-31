@@ -533,19 +533,21 @@ function generateStandaloneHTML(slides, title) {
         
         if (scrollPos >= slideTop && scrollPos < slideBottom) {
           dots.forEach(d => d.classList.remove('active'));
-          dots[index].classList.add('active');
+          if (dots[index]) dots[index].classList.add('active');
         }
       });
       
       ticking = false;
     }
     
-    container.addEventListener('scroll', () => {
-      if (!ticking) {
-        requestAnimationFrame(updateActiveDot);
-        ticking = true;
-      }
-    });
+    if (container) {
+      container.addEventListener('scroll', () => {
+        if (!ticking) {
+          requestAnimationFrame(updateActiveDot);
+          ticking = true;
+        }
+      });
+    }
     
     // Keyboard navigation
     document.addEventListener('keydown', (e) => {
@@ -554,13 +556,15 @@ function generateStandaloneHTML(slides, title) {
       if (e.key === 'ArrowDown' || e.key === 'PageDown') {
         e.preventDefault();
         const nextIndex = Math.min(currentIndex + 1, slides.length - 1);
-        slides[nextIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (slides[nextIndex]) slides[nextIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
       } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
         e.preventDefault();
         const prevIndex = Math.max(currentIndex - 1, 0);
-        slides[prevIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (slides[prevIndex]) slides[prevIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
+    
+    console.log('Slides loaded:', slides.length);
   </script>
 </body>
 </html>
