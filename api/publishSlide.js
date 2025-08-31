@@ -82,11 +82,13 @@ export default async function handler(req, res) {
       addRandomSuffix: false,
     });
 
-    // Store simple metadata
-    await put(`slides/${token}/meta.json`, JSON.stringify({
+    // Store metadata including the actual blob URL
+    const metaBlob = await put(`slides/${token}/meta.json`, JSON.stringify({
       title,
       createdAt: new Date().toISOString(),
-      slideCount: slides.length
+      slideCount: slides.length,
+      htmlUrl: blob.url,  // Store the actual blob URL so frontend can find it
+      token
     }), {
       access: 'public',
       contentType: 'application/json',
@@ -101,7 +103,8 @@ export default async function handler(req, res) {
       success: true,
       url: `${frontendUrl}?token=${token}`,  // Frontend URL with token as query param
       token,
-      blobUrl: blob.url,  // Direct blob storage URL
+      blobUrl: blob.url,  // Direct blob storage URL for the HTML
+      metaUrl: metaBlob.url,  // Direct blob storage URL for the metadata
       htmlUrl: blob.url   // Alias for clarity
     });
   } catch (error) {
