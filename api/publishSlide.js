@@ -58,8 +58,15 @@ export default async function handler(req, res) {
       ? crypto.createHash('md5').update(sessionId).digest('hex').substring(0, 8)
       : crypto.randomBytes(4).toString('hex');
 
+    console.log('Publishing slides:', {
+      slideCount: slides.length,
+      token,
+      firstSlide: slides[0]
+    });
+
     // Generate standalone HTML
     const htmlContent = generateStandaloneHTML(slides, title);
+    console.log('Generated HTML length:', htmlContent.length);
 
     // Store in Vercel Blob
     const filename = `slides/${token}/index.html`;
@@ -138,24 +145,29 @@ function generateStandaloneHTML(slides, title) {
       content += `<div class="apHeader">Slide ${index + 1}: ${slide.type.charAt(0).toUpperCase() + slide.type.slice(1)}</div>`;
     }
     
-    if (slide.content.title) {
+    if (slide.content?.title) {
       content += `<h2 class="apTitle">${escape(slide.content.title)}</h2>`;
     }
     
-    if (slide.content.subtitle) {
+    if (slide.content?.subtitle) {
       content += `<div class="apSubtitle">${escape(slide.content.subtitle)}</div>`;
     }
     
-    if (slide.content.body) {
+    if (slide.content?.body) {
       content += `<p class="apBody">${escape(slide.content.body).replace(/\n/g, '<br>')}</p>`;
     }
     
-    if (slide.content.items && slide.content.items.length > 0) {
+    if (slide.content?.items && slide.content.items.length > 0) {
       content += '<ul class="apBullets">';
       slide.content.items.forEach(item => {
         content += `<li>${escape(item)}</li>`;
       });
       content += '</ul>';
+    }
+    
+    // If no content at all, add debug info
+    if (!content) {
+      content = `<div class="apTitle">Empty Slide ${index + 1}</div><pre>${JSON.stringify(slide, null, 2)}</pre>`;
     }
 
     // For title slides, center everything
