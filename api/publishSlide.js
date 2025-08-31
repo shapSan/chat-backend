@@ -78,8 +78,9 @@ export default async function handler(req, res) {
 
     const blob = await put(filename, htmlContent, {
       access: 'public',
-      contentType: 'text/html',
+      contentType: 'text/html; charset=utf-8',
       addRandomSuffix: false,
+      cacheControlMaxAge: 31536000,
     });
 
     // Store metadata including the actual blob URL
