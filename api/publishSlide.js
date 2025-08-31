@@ -126,36 +126,36 @@ function generateStandaloneHTML(slides, title) {
       .replace(/'/g, '&#39;');
   };
   
-  // Convert slides to HTML sections matching AgentPitchSlides.tsx style
+  // Convert slides to HTML sections with Agent Pitch styling
   const slideSections = slides.map((slide, index) => {
     const isTitle = slide.type === 'title';
     
-    // Build left column (text content)
-    let leftContent = '';
+    // Build content based on slide type
+    let content = '';
     
-    // Add header for non-title slides
-    if (!isTitle) {
-      leftContent += `<div class="apHeader">Slide ${index + 1}: ${slide.type.charAt(0).toUpperCase() + slide.type.slice(1)}</div>`;
+    // Header for non-title slides
+    if (!isTitle && slide.type) {
+      content += `<div class="apHeader">Slide ${index + 1}: ${slide.type.charAt(0).toUpperCase() + slide.type.slice(1)}</div>`;
     }
     
     if (slide.content.title) {
-      leftContent += `<h2 class="apTitle">${escape(slide.content.title)}</h2>`;
+      content += `<h2 class="apTitle">${escape(slide.content.title)}</h2>`;
     }
     
     if (slide.content.subtitle) {
-      leftContent += `<div class="apSubtitle">${escape(slide.content.subtitle)}</div>`;
+      content += `<div class="apSubtitle">${escape(slide.content.subtitle)}</div>`;
     }
     
     if (slide.content.body) {
-      leftContent += `<p class="apBody">${escape(slide.content.body).replace(/\n/g, '<br>')}</p>`;
+      content += `<p class="apBody">${escape(slide.content.body).replace(/\n/g, '<br>')}</p>`;
     }
     
     if (slide.content.items && slide.content.items.length > 0) {
-      leftContent += '<ul class="apBullets">';
+      content += '<ul class="apBullets">';
       slide.content.items.forEach(item => {
-        leftContent += `<li>${escape(item)}</li>`;
+        content += `<li>${escape(item)}</li>`;
       });
-      leftContent += '</ul>';
+      content += '</ul>';
     }
 
     // For title slides, center everything
@@ -163,18 +163,18 @@ function generateStandaloneHTML(slides, title) {
       return `
         <section class="apSection title-section">
           <div class="title-container">
-            ${leftContent}
+            ${content}
           </div>
         </section>
       `;
     }
     
-    // For regular slides, use the grid layout
+    // For regular slides, use the grid layout with media panel
     return `
       <section class="apSection">
         <div class="apGrid">
           <div class="apLeft">
-            ${leftContent}
+            ${content}
           </div>
           <div class="apMedia">
             <div class="panel">
@@ -219,7 +219,7 @@ function generateStandaloneHTML(slides, title) {
     
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: transparent;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
       color: var(--ap-bone);
       overflow-x: hidden;
     }
@@ -301,7 +301,7 @@ function generateStandaloneHTML(slides, title) {
     .apTitle {
       font-family: ui-sans-serif, system-ui, -apple-system;
       font-weight: 900;
-      font-size: clamp(36px, 6vw, 72px);
+      font-size: clamp(36px, 6vw, 80px);
       line-height: .98;
       letter-spacing: .02em;
       text-transform: uppercase;
