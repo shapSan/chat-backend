@@ -93,18 +93,16 @@ export default async function handler(req, res) {
       addRandomSuffix: false,
     });
 
-    // Use the actual deployment URL for production
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}`
-      : process.env.NODE_ENV === 'production'
-        ? 'https://chat-backend-vert.vercel.app'
-        : 'http://localhost:3000';
-
+    // Return the frontend URL where slides can be viewed
+    // The frontend will use the token to fetch from blob storage
+    const frontendUrl = 'https://www.selfrun.ai/agentpitch/published';
+    
     return res.status(200).json({
       success: true,
-      url: `${baseUrl}/s/${token}`,
+      url: `${frontendUrl}?token=${token}`,  // Frontend URL with token as query param
       token,
-      blobUrl: blob.url
+      blobUrl: blob.url,  // Direct blob storage URL
+      htmlUrl: blob.url   // Alias for clarity
     });
   } catch (error) {
     console.error('Publish error:', error);
