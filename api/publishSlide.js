@@ -88,7 +88,11 @@ export default async function handler(req, res) {
       contentType: 'text/html; charset=utf-8',
       addRandomSuffix: false,
       cacheControlMaxAge: 31536000,
+      contentDisposition: 'inline',  // Force inline display, not download
     });
+    
+    console.log('Blob stored at:', blob.url);
+    console.log('Blob metadata:', blob);
 
     // Store metadata including the actual blob URL
     const metaBlob = await put(`slides/${token}/meta.json`, JSON.stringify({
