@@ -56,11 +56,14 @@ export default async function handler(req, res) {
         }
       }
 
-      // Return the publication details
+      // Return the publication details with the correct frontend URL
+      const frontendUrl = 'https://www.selfrun.ai/agentpitch/published';
+      
       return res.status(200).json({
         success: true,
         token,
-        url: htmlBlob.url,
+        url: `${frontendUrl}?token=${token}`,
+        blobUrl: htmlBlob.url,
         viewUrl: `${process.env.NEXT_PUBLIC_BASE_URL || ''}/view/${token}`,
         assets: assetUrls,
         timestamp,
