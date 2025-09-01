@@ -4,6 +4,9 @@ import WebSocket from 'ws';
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 
+// Set max duration for Vercel functions (in seconds)
+export const maxDuration = 120; // 2 minutes for image/audio/video generation
+
 import {
   config as apiRouteConfig,
   airtableApiKey,
