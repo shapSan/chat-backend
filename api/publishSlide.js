@@ -5,6 +5,7 @@ import crypto from 'crypto';
 const ALLOWED_ORIGINS = [
   'https://www.selfrun.ai',
   'https://selfrun.ai',
+  'https://agentpitch.vercel.app',
   'http://localhost:3000',
   'http://localhost:3001',
   'http://127.0.0.1:3000'
