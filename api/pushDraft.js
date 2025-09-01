@@ -346,8 +346,6 @@ Several of our brand partners are evaluating opportunities around ${cleanedProje
 
 We see a strong alignment with ${brand.name} and wanted to share how this could look:
 
-Quick Links: [Keep as placeholders]
-
 • On-Screen Integration: [Expand from: ${integrationIdea}] 
 • Content Extensions: [Generate specific ideas based on brand: ${brand.name} and genre: ${vibe}]
 • Amplification: [Generate PR/retail/influencer ideas]
@@ -359,7 +357,7 @@ Would you be open to a quick call so we can walk you through how we partner with
 Best,
 Stacy"
 
-Fill in the bracketed sections intelligently. Keep the structure EXACTLY as shown.` : `
+Fill in the bracketed sections intelligently. Keep the structure EXACTLY as shown. DO NOT include 'Quick Links' or any link placeholders in the body text.` : `
 Write warm relationship email mentioning past success and new opportunity.`}
 
 Project: ${cleanedProject}
@@ -375,8 +373,8 @@ Cast: ${cast || 'TBD'}
         model: "gpt-4o-mini",
         messages: [
           { role:"system", content: isInSystem ? 
-            "Write warm, relationship-focused emails for existing clients. Be concise and professional." :
-            "Follow the email template EXACTLY as provided. Fill in bracketed sections intelligently based on the brand and production context." },
+            "Write warm, relationship-focused emails for existing clients. Be concise and professional. Never include 'Quick Links' or link placeholders in the email body." :
+            "Follow the email template EXACTLY as provided. Fill in bracketed sections intelligently based on the brand and production context. DO NOT add 'Quick Links' or any link placeholders - these will be added separately as HTML." },
           { role:"user", content: prompt }
         ],
         temperature: 0.7,
