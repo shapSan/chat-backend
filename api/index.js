@@ -213,7 +213,8 @@ export default async function handler(req, res) {
         // Upload generated video to blob storage
         const tempFetch = await fetch(result.url);
         if (!tempFetch.ok) throw new Error(`Failed to fetch video from temporary URL: ${tempFetch.status}`);
-        const videoBuffer = await tempFetch.buffer();
+        const videoArrayBuffer = await tempFetch.arrayBuffer();
+        const videoBuffer = Buffer.from(videoArrayBuffer);
 
         const filename = `${sessionId || 'unknown-session'}/video-generated-${Date.now()}.mp4`;
         const { url: permanentUrl } = await put(filename, videoBuffer, { access: 'public', contentType: 'video/mp4' });
