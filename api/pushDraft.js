@@ -218,18 +218,39 @@ function classifyAsset(item={}) {
 function sanitizeBrand(b={}) {
   console.log('[sanitizeBrand] Input brand:', {
     name: b.name || b.brand,
-    secondaryOwnerId: b.secondaryOwnerId,
-    specialtyLeadId: b.specialtyLeadId,
-    secondary_owner: b.secondary_owner,
-    specialty_lead: b.specialty_lead
+    hasAssets: !!b.assets,
+    assetsCount: b.assets?.length || 0,
+    hasPosterUrl: !!b.posterUrl,
+    hasVideoUrl: !!(b.videoUrl || b.exportedVideo),
+    hasAudioUrl: !!b.audioUrl,
+    hasPdfUrl: !!(b.pdfUrl || b.brandCardPDF),
+    hasSlidesUrl: !!b.slidesUrl
   });
   
   const base = [];
   // fold any top-level url fields
-  if (isHttp(b.videoUrl || b.exportedVideo)) base.push({type:'video', url:b.videoUrl || b.exportedVideo, title:'Video'});
-  if (isHttp(b.pdfUrl || b.brandCardPDF))   base.push({type:'pdf',   url:b.pdfUrl || b.brandCardPDF,   title:'Proposal PDF'});
-  if (isHttp(b.audioUrl))                   base.push({type:'audio', url:b.audioUrl,                   title:'Audio Pitch'});
-  if (isHttp(b.posterUrl))                  base.push({type:'image', url:b.posterUrl,                  title:'Poster'});
+  if (isHttp(b.videoUrl || b.exportedVideo)) {
+    const url = b.videoUrl || b.exportedVideo;
+    base.push({type:'video', url, title:'Video'});
+    console.log('[sanitizeBrand] Added video:', url);
+  }
+  if (isHttp(b.pdfUrl || b.brandCardPDF)) {
+    const url = b.pdfUrl || b.brandCardPDF;
+    base.push({type:'pdf', url, title:'Proposal PDF'});
+    console.log('[sanitizeBrand] Added PDF:', url);
+  }
+  if (isHttp(b.audioUrl)) {
+    base.push({type:'audio', url:b.audioUrl, title:'Audio Pitch'});
+    console.log('[sanitizeBrand] Added audio:', b.audioUrl);
+  }
+  if (isHttp(b.posterUrl)) {
+    base.push({type:'image', url:b.posterUrl, title:'Poster'});
+    console.log('[sanitizeBrand] Added poster:', b.posterUrl);
+  }
+  if (isHttp(b.slidesUrl)) {
+    base.push({type:'link', url:b.slidesUrl, title:'Slides'});
+    console.log('[sanitizeBrand] Added slides:', b.slidesUrl);
+  }
 
   const extras = (Array.isArray(b.assets)?b.assets:[])
     .filter(a => a && isHttp(a.url))
@@ -239,6 +260,8 @@ function sanitizeBrand(b={}) {
   // de-dupe by url
   const seen = new Set(); const assets = [];
   [...base, ...extras].forEach(a => { if (!seen.has(a.url)) { seen.add(a.url); assets.push(a); } });
+  
+  console.log('[sanitizeBrand] Final assets array:', assets.length, 'items', assets);
 
   // Check for both camelCase and snake_case versions
   const secondaryOwnerId = b.secondaryOwnerId || b.secondary_owner || null;
@@ -498,15 +521,26 @@ export default async function handler(req, res) {
 
         // Build Quick links section - ALWAYS include if there are assets
         let quickLinksSection = '';
+        console.log('[pushDraft] Checking assets for Quick Links:', {
+          hasAssets: !!b.assets,
+          assetsLength: b.assets?.length || 0,
+          assetsDetails: b.assets
+        });
+        
         if (b.assets && b.assets.length > 0) {
-          const linkItems = b.assets.map(a =>
-            `<p style="margin:4px 0;"><a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a></p>`
-          ).join('');
+          console.log('[pushDraft] Building Quick Links for', b.assets.length, 'assets');
+          const linkItems = b.assets.map(a => {
+            console.log('[pushDraft] Adding link:', a.title, '->', a.url);
+            return `<p style="margin:4px 0;"><a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a></p>`;
+          }).join('');
           quickLinksSection = `
-            <div style="margin-top:24px;padding-top:16px;">
+            <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;">
               <p style="font-weight:600;margin:0 0 8px 0;">Quick links</p>
               ${linkItems}
             </div>`;
+          console.log('[pushDraft] Quick Links HTML built:', quickLinksSection.substring(0, 200) + '...');
+        } else {
+          console.log('[pushDraft] NO ASSETS - Quick Links section will be empty');
         }
 
         const htmlBody = `
