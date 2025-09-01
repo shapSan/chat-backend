@@ -1,9 +1,25 @@
 {
-  "version": 2,
   "functions": {
-    "api/*.js": {
+    "api/index.js": {
+      "maxDuration": 120
+    },
+    "api/pushDraft.js": {
+      "maxDuration": 60
+    },
+    "api/publishSlide.js": {
       "maxDuration": 30
+    },
+    "api/uploadAsset.js": {
+      "maxDuration": 30
+    },
+    "api/getSlide.js": {
+      "maxDuration": 10
+    },
+    "api/viewSlide.js": {
+      "maxDuration": 10
+    },
+    "api/translate.js": {
+      "maxDuration": 60
     }
   }
 }
-
