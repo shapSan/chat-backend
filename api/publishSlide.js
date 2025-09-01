@@ -1,6 +1,9 @@
 import { put, list, del } from '@vercel/blob';
 import crypto from 'crypto';
 
+// Set max duration for Vercel functions
+export const maxDuration = 30; // 30 seconds for slide operations
+
 // CORS allowed origins
 const ALLOWED_ORIGINS = [
   'https://www.selfrun.ai',
