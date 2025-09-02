@@ -334,36 +334,68 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
   const distributorText = distributor && distributor !== '[Distributor/Studio]' ? distributor : '[Distributor/Studio]';
   const releaseDateText = releaseDate && releaseDate !== '[Release Date]' ? releaseDate : '[Release Date]';
   
-  // BUILD THE EXACT TEMPLATE - NO AI NEEDED
+  // BUILD THE EXACT TEMPLATE
   const buildTemplate = () => {
-    const ideas = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : 'Strategic product placement';
-    const whyItWorks = brand.whyItWorks || 'aligns perfectly with your brand values';
+    // Use brand's content or generate from integrationIdeas
+    const integrationIdea = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '[Scene/placement opportunities from one-sheet]';
+    const whyItWorks = brand.whyItWorks || 'is a globally recognized franchise with multi-generational appeal';
     
     if (isInSystem) {
-      // VERSION 2: Warmer email for existing clients
-      return `${greeting},\n\nGreat news! We have an exciting opportunity with ${cleanedProject} that aligns perfectly with ${brand.name}.\n\n${whyItWorks}\n\n${ideas ? `Building on our relationship: ${ideas}` : `We see natural integration opportunities that build on ${brand.name}'s previous successes.`}\n\n${mention ? mention + ' ' : ''}Let's catch up soon to explore how we can make this happen together.\n\nBest,\nStacy`.trim();
+      // VERSION 2 — BRAND ALREADY IN SYSTEM [HB]BOX SYSTEM
+      // Extract specific content ideas from brand data
+      const integrationOps = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '[On-screen/scripted moments or character tie-ins from one-sheet]';
+      const extensions = brand.integrationIdeas?.length > 1 ? brand.integrationIdeas[1] : '[Merchandise, digital content, cast/social campaigns]';
+      const amplification = brand.integrationIdeas?.length > 2 ? brand.integrationIdeas[2] : '[Studio/global visibility + PR, retail, influencer activations]';
+      
+      return `${greeting},
+
+As part of the opportunities currently being evaluated by several of our brand partners, **${cleanedProject}** (${distributorText}, releasing ${releaseDateText}) stands out as a strong potential fit for ${brand.name}.
+
+Here's how it could look:
+
+• **Integration Opportunities:** ${integrationOps}.
+• **Extensions:** ${extensions}.
+• **Amplification:** ${amplification}.
+
+This is exactly the type of opportunity surfaced through your **Playbook + Radar**. Once you greenlight through Access, we can move into securing the placement and building out extensions. From there, we layer in Produce (content creation) and Amplify (PR/media/retail) to turn it into a full campaign platform.
+
+Let's set up a working session to map this one — or we can review additional opportunities currently in your pipeline.
+
+Best,
+Stacy`.trim();
     } else {
-      // VERSION 1: New brand email template - EXACT FORMAT REQUIRED
-      const integrationIdea = ideas || 'Strategic product placement';
+      // VERSION 1 — BRAND NOT IN SYSTEM (Intro + Opportunity + HB Credibility)
+      // Quick description from one-sheet - use whyItWorks or default
+      const quickDescription = brand.whyItWorks || '[quick description from one-sheet - e.g., "is a globally recognized franchise with multi-generational appeal"]';
       
-      // Generate specific content extension ideas based on genre
-      let contentExtensions = 'Capsule collection, co-branded merchandise, social campaigns with the cast';
-      if (vibe) {
-        if (vibe.toLowerCase().includes('horror') || vibe.toLowerCase().includes('scary')) {
-          contentExtensions = 'Limited edition Halloween merchandise, themed social campaigns with cast, exclusive screening events';
-        } else if (vibe.toLowerCase().includes('action')) {
-          contentExtensions = 'Adventure gear collection, behind-the-scenes stunt content, adrenaline-focused activations';
-        } else if (vibe.toLowerCase().includes('comedy')) {
-          contentExtensions = 'Fun merchandise line, viral social content with cast, comedy club partnership events';
-        }
-      }
+      // Use brand's integration ideas or defaults
+      const onScreenIntegration = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '[Scene/placement opportunities from one-sheet]';
+      const contentExtensions = brand.integrationIdeas?.length > 1 ? brand.integrationIdeas[1] : '[Capsule collection, co-promo, social/behind-the-scenes content]';
+      const amplificationText = brand.integrationIdeas?.length > 2 ? brand.integrationIdeas[2] : '[PR hooks, retail tie-ins, influencer/media activations]';
       
-      // Don't include Quick Links line in fallback - it will be added as HTML
-      return `${greeting},\n\nSeveral of our brand partners are evaluating opportunities around ${cleanedProject} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.\n\nWe see a strong alignment with ${brand.name} and wanted to share how this could look:\n\n• On-Screen Integration: ${integrationIdea} (Scene/placement opportunities from one-sheet).\n• Content Extensions: ${contentExtensions}.\n• Amplification: PR hooks through premiere events, retail tie-ins at key locations, influencer partnerships for social reach.\n\nThis is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.\n\nWould you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?\n\nBest,\nStacy`.trim();
+      return `${greeting},
+
+Several of our brand partners are evaluating opportunities around **${cleanedProject}** (${distributorText}, releasing ${releaseDateText}). The project ${quickDescription}.
+
+We see a strong alignment with **${brand.name}** and wanted to share how this could look:
+
+• **On-Screen Integration:** ${onScreenIntegration}.
+• **Content Extensions:** ${contentExtensions}.
+• **Amplification:** ${amplificationText}.
+
+This is exactly what we do at **Hollywood Branded**. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.
+
+Would you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?
+
+Best,
+Stacy`.trim();
     }
   };
 
-  // Use AI for light rewriting to make it flow naturally
+  // SKIP AI - just use the template directly
+  return buildTemplate();
+  
+  /* DISABLED - AI keeps fucking it up
   try {
     if (!process.env.OPENAI_API_KEY) return buildTemplate();
 
@@ -472,19 +504,34 @@ RULES:
     console.log('[generateAiBody] Error calling OpenAI:', e.message);
     return buildTemplate(); 
   }
+  */
 }
 
 // Subject line rotation helper
 let subjectCounter = 0;
-function getRotatingSubject(projectName, brandName) {
-  const formats = [
-    `[Agent Pitch] Hollywood Opportunity: ${projectName} x ${brandName}`,
-    `[Agent Pitch] Idea Starter: ${projectName} for ${brandName}`,
-    `[Agent Pitch] Entertainment Partnership Opportunity for ${brandName}`
-  ];
-  const subject = formats[subjectCounter % 3];
-  subjectCounter++;
-  return subject;
+function getRotatingSubject(projectName, brandName, isInSystem = false) {
+  // Different subject lines for brands in system vs not in system
+  if (isInSystem) {
+    // VERSION 2 - Brand already in system subject lines
+    const formats = [
+      `Sample Opportunity for ${brandName}: ${projectName}`,
+      `Radar Preview: ${projectName} for ${brandName}`,
+      `Next Step: Turning ${projectName} Into ${brandName}'s Hollywood Platform`
+    ];
+    const subject = formats[subjectCounter % 3];
+    subjectCounter++;
+    return subject;
+  } else {
+    // VERSION 1 - Brand not in system subject lines
+    const formats = [
+      `Hollywood Opportunity: ${projectName} x ${brandName}`,
+      `Idea Starter: ${projectName} for ${brandName}`,
+      `Entertainment Partnership Opportunity for ${brandName}`
+    ];
+    const subject = formats[subjectCounter % 3];
+    subjectCounter++;
+    return subject;
+  }
 }
 
 // ---------- handler ----------
@@ -630,9 +677,9 @@ export default async function handler(req, res) {
         console.log('[pushDraft] html includes Quick links?', htmlBody.includes('Quick links'));
         console.log('[pushDraft] quickLinksSection:', quickLinksSection ? 'YES' : 'NO');
 
-        // Use rotating subject line format
-        const subject = getRotatingSubject(projectName, b.name || 'Brand');
-        console.log('[pushDraft] Using subject:', subject);
+        // Use rotating subject line format based on isInSystem status
+        const subject = getRotatingSubject(projectName, b.name || 'Brand', isInSystem);
+        console.log('[pushDraft] Using subject:', subject, 'isInSystem:', isInSystem);
         
         // Use the resolved email if available, otherwise use default
         const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
