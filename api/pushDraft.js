@@ -321,7 +321,7 @@ function quickLinksHtml(brand){
 }
 
 // Professional email writer with natural resource mention
-async function generateAiBody({ project, vibe, cast, location, notes, brand, isInSystem, recipientName, distributor, releaseDate, oneSheetLink }) {
+async function generateAiBody({ project, vibe, cast, location, notes, brand, isInSystem, recipientName, distributor, releaseDate, productionStartDate, productionType, oneSheetLink }) {
   const mention = assetsNote(brand);
   
   // Clean the project name
@@ -330,9 +330,12 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
   // Use recipientName throughout
   const greeting = recipientName && recipientName !== '[First Name]' ? `Hi ${recipientName}` : 'Hi [First Name]';
   
-  // Format distributor/release for email
-  const distributorText = distributor && distributor !== '[Distributor/Studio]' ? distributor : '[Distributor/Studio]';
-  const releaseDateText = releaseDate && releaseDate !== '[Release Date]' ? releaseDate : '[Release Date]';
+  // Format all production data for email - USE THE ACTUAL DATA
+  const distributorText = distributor || '[Distributor/Studio]';
+  const releaseDateText = releaseDate || '[Release Date]';
+  const productionStartText = productionStartDate || '[Production Start Date]';
+  const productionTypeText = productionType || '[Production Type]';
+  const locationText = location || '[Location]';
   
   // BUILD THE EXACT TEMPLATE
   const buildTemplate = () => {
@@ -342,14 +345,41 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
     
     if (isInSystem) {
       // VERSION 2 — BRAND ALREADY IN SYSTEM [HB]BOX SYSTEM
-      // Extract specific content ideas from brand data
-      const integrationOps = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '[On-screen/scripted moments or character tie-ins from one-sheet]';
-      const extensions = brand.integrationIdeas?.length > 1 ? brand.integrationIdeas[1] : '[Merchandise, digital content, cast/social campaigns]';
-      const amplification = brand.integrationIdeas?.length > 2 ? brand.integrationIdeas[2] : '[Studio/global visibility + PR, retail, influencer activations]';
+      // Extract specific content ideas from brand data or use smart defaults
+      let integrationOps = '[On-screen/scripted moments or character tie-ins from one-sheet]';
+      let extensions = '[Merchandise, digital content, cast/social campaigns]';
+      let amplification = '[Studio/global visibility + PR, retail, influencer activations]';
+      
+      if (brand.integrationIdeas?.length) {
+        integrationOps = brand.integrationIdeas[0];
+        if (brand.integrationIdeas.length > 1) extensions = brand.integrationIdeas[1];
+        if (brand.integrationIdeas.length > 2) amplification = brand.integrationIdeas[2];
+      } else if (vibe) {
+        // Generate smart defaults based on genre/vibe for existing clients
+        const vibeLower = vibe.toLowerCase();
+        if (vibeLower.includes('horror') || vibeLower.includes('scary')) {
+          integrationOps = 'Key product moments in suspense sequences aligned with brand safety guidelines';
+          extensions = 'Halloween activation package, exclusive fan experiences, limited merchandise';
+          amplification = 'Genre media blitz, specialty retail exclusives, horror influencer partnerships';
+        } else if (vibeLower.includes('action')) {
+          integrationOps = 'Hero product integration with stunt sequences and action set pieces';
+          extensions = 'Adrenaline-focused content series, BTS stunt footage, adventure gear line';
+          amplification = 'Global studio push, action sports partnerships, high-octane influencer content';
+        } else if (vibeLower.includes('comedy')) {
+          integrationOps = 'Organic brand moments woven into comedic beats';
+          extensions = 'Viral content with cast, comedy club partnerships, fun merchandise';
+          amplification = 'Mainstream media push, retail comedy campaigns, comedian partnerships';
+        } else if (vibeLower.includes('drama')) {
+          integrationOps = 'Meaningful brand integration into character arcs';
+          extensions = 'Prestige content series, emotional storytelling campaigns';
+          amplification = 'Awards season push, premium retail placements, thoughtful influencer strategy';
+        }
+      }
       
       return `${greeting},
 
 As part of the opportunities currently being evaluated by several of our brand partners, **${cleanedProject}** (${distributorText}, releasing ${releaseDateText}) stands out as a strong potential fit for ${brand.name}.
+**Quick Links:** [Keep as placeholders]
 
 Here's how it could look:
 
@@ -365,17 +395,52 @@ Best,
 Stacy`.trim();
     } else {
       // VERSION 1 — BRAND NOT IN SYSTEM (Intro + Opportunity + HB Credibility)
-      // Quick description from one-sheet - use whyItWorks or default
-      const quickDescription = brand.whyItWorks || '[quick description from one-sheet - e.g., "is a globally recognized franchise with multi-generational appeal"]';
+      // Quick description - use actual data or brand.whyItWorks
+      let quickDescription = '';
+      if (brand.whyItWorks && brand.whyItWorks !== '[quick description from one-sheet - e.g., "is a globally recognized franchise with multi-generational appeal"]') {
+        quickDescription = brand.whyItWorks;
+      } else if (vibe) {
+        // Generate description based on vibe/genre
+        quickDescription = `is a ${vibe.toLowerCase()} ${productionTypeText.toLowerCase() || 'production'}`;
+      } else {
+        quickDescription = '[quick description from one-sheet - e.g., "is a globally recognized franchise with multi-generational appeal"]';
+      }
       
-      // Use brand's integration ideas or defaults
-      const onScreenIntegration = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '[Scene/placement opportunities from one-sheet]';
-      const contentExtensions = brand.integrationIdeas?.length > 1 ? brand.integrationIdeas[1] : '[Capsule collection, co-promo, social/behind-the-scenes content]';
-      const amplificationText = brand.integrationIdeas?.length > 2 ? brand.integrationIdeas[2] : '[PR hooks, retail tie-ins, influencer/media activations]';
+      // Use brand's actual integration ideas or smart defaults based on genre
+      let onScreenIntegration = '[Scene/placement opportunities from one-sheet]';
+      let contentExtensions = '[Capsule collection, co-promo, social/behind-the-scenes content]';
+      let amplificationText = '[PR hooks, retail tie-ins, influencer/media activations]';
+      
+      if (brand.integrationIdeas?.length) {
+        onScreenIntegration = brand.integrationIdeas[0];
+        if (brand.integrationIdeas.length > 1) contentExtensions = brand.integrationIdeas[1];
+        if (brand.integrationIdeas.length > 2) amplificationText = brand.integrationIdeas[2];
+      } else if (vibe) {
+        // Generate smart defaults based on genre/vibe
+        const vibeLower = vibe.toLowerCase();
+        if (vibeLower.includes('horror') || vibeLower.includes('scary')) {
+          onScreenIntegration = 'Strategic product placement in key suspense scenes';
+          contentExtensions = 'Limited edition Halloween merchandise, themed social campaigns';
+          amplificationText = 'Horror fan PR hooks, specialty retail tie-ins, genre influencer activations';
+        } else if (vibeLower.includes('action')) {
+          onScreenIntegration = 'Hero product integration in action sequences';
+          contentExtensions = 'Adventure gear collection, behind-the-scenes stunt content';
+          amplificationText = 'Action sports PR, outdoor retail tie-ins, stunt team social content';
+        } else if (vibeLower.includes('comedy')) {
+          onScreenIntegration = 'Natural brand moments in comedic scenes';
+          contentExtensions = 'Fun merchandise line, viral social content with cast';
+          amplificationText = 'Comedy PR angles, mainstream retail, comedian influencer activations';
+        } else if (vibeLower.includes('drama')) {
+          onScreenIntegration = 'Authentic brand integration into character stories';
+          contentExtensions = 'Premium collection, emotional storytelling content';
+          amplificationText = 'Prestige media PR, upscale retail partnerships, thoughtful influencer campaigns';
+        }
+      }
       
       return `${greeting},
 
 Several of our brand partners are evaluating opportunities around **${cleanedProject}** (${distributorText}, releasing ${releaseDateText}). The project ${quickDescription}.
+**Quick Links:** [Keep as placeholders]
 
 We see a strong alignment with **${brand.name}** and wanted to share how this could look:
 
@@ -619,23 +684,38 @@ export default async function handler(req, res) {
       console.log('[pushDraft] Primary contact (secondary_owner):', b.primaryContact);
       console.log('[pushDraft] Secondary contact (specialty_lead):', b.secondaryContact);
       
-      // Include distributor and release date from production data
-      const distributor = pd.distributor || '[Distributor/Studio]';
-      const releaseDate = pd.releaseDate ? new Date(pd.releaseDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : '[Release Date]';
-      console.log('[pushDraft] Distributor:', distributor);
-      console.log('[pushDraft] Release date:', releaseDate);
+      // Extract ALL production data fields
+      const distributor = pd.distributor || body.distributor || '[Distributor/Studio]';
+      const releaseDate = pd.releaseDate || body.releaseDate ? 
+        new Date(pd.releaseDate || body.releaseDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 
+        '[Release Date]';
+      const productionStartDate = pd.productionStartDate || body.productionStartDate ? 
+        new Date(pd.productionStartDate || body.productionStartDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 
+        '[Production Start Date]';
+      const productionType = pd.productionType || body.productionType || '[Production Type]';
+      const productionLocation = pd.location || body.location || location || '[Location]';
+      
+      console.log('[pushDraft] Production Data:', {
+        distributor,
+        releaseDate,
+        productionStartDate,
+        productionType,
+        productionLocation
+      });
       
       const bodyText = await generateAiBody({ 
         project: projectName, 
         vibe, 
         cast, 
-        location, 
+        location: productionLocation, 
         notes, 
         brand: b,
         isInSystem, // Pass the flag to email generator
         recipientName, // Pass resolved name
         distributor, // Pass distributor
         releaseDate, // Pass release date
+        productionStartDate, // Pass production start date
+        productionType, // Pass production type
         oneSheetLink: b.oneSheetLink || b.one_sheet_link // Pass one-sheet link
       });
 
@@ -664,43 +744,48 @@ export default async function handler(req, res) {
           return `<p style="margin:${topMargin} 0 16px 0;">${formatted}</p>`;
         }).join('');
 
-        // Build Quick links section
-        let quickLinksSection = '';
-        console.log('[pushDraft] Checking assets for Quick Links:', {
-          hasAssets: !!b.assets,
-          assetsLength: b.assets?.length || 0,
-          assetsDetails: b.assets
-        });
-        
-        if (b.assets && b.assets.length > 0) {
-          console.log('[pushDraft] Building Quick Links for', b.assets.length, 'assets');
-          const linkItems = b.assets.map(a => {
-            console.log('[pushDraft] Adding link:', a.title, '->', a.url);
-            return `<a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a>`;
-          }).join(', ');
-          // Format as: Quick Links: Audio Pitch, Proposal, Poster, etc (each as a link)
-          quickLinksSection = `
-            <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;">
-              <p style="margin:0;"><strong>Quick Links:</strong> ${linkItems}</p>
-            </div>`;
-          console.log('[pushDraft] Quick Links HTML built:', quickLinksSection.substring(0, 200) + '...');
-        } else {
-          // Add placeholder text for Quick Links when no assets
-          console.log('[pushDraft] NO ASSETS - Adding placeholder Quick Links');
-          quickLinksSection = `
-            <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;">
-              <p style="margin:0;"><strong>Quick Links:</strong> [Audio Pitch, Proposal, Poster, etc]</p>
-            </div>`;
-        }
+        const paragraphsProcessed = paragraphs.map((para, index) => {
+          // Convert markdown-style bold to HTML bold
+          let formatted = esc(para);
+          // Replace **text** with <strong>text</strong>
+          formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          
+          // Handle Quick Links line specially - replace placeholder with actual links
+          if (formatted.includes('<strong>Quick Links:</strong>')) {
+            if (b.assets && b.assets.length > 0) {
+              const linkItems = b.assets.map(a => {
+                return `<a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a>`;
+              }).join(', ');
+              formatted = `<strong>Quick Links:</strong> ${linkItems}`;
+            }
+            // Otherwise keep the placeholder as is
+          }
+          
+          // Check if this is a bullet point line
+          if (formatted.startsWith('• ')) {
+            // Format as a bullet point with proper indentation
+            formatted = formatted.substring(2); // Remove the bullet
+            return `<p style="margin:0 0 12px 0;padding-left:20px;text-indent:-20px;">• ${formatted}</p>`;
+          }
+          
+          // Add extra spacing before certain sections
+          let topMargin = '0';
+          if (para.startsWith('We see a strong alignment') || 
+              para.startsWith('As part of the opportunities') ||
+              para.startsWith("Here's how it could look:")) {
+            topMargin = '20px';
+          }
+          
+          return `<p style="margin:${topMargin} 0 16px 0;">${formatted}</p>`;
+        }).join('');
 
         const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;max-width:720px;">
-  ${formattedBody}
-  ${quickLinksSection}
+  ${paragraphsProcessed}
 </div>`.trim();
 
-        console.log('[pushDraft] html includes Quick links?', htmlBody.includes('Quick links'));
-        console.log('[pushDraft] quickLinksSection:', quickLinksSection ? 'YES' : 'NO');
+        console.log('[pushDraft] html includes Quick links?', htmlBody.includes('Quick'));
+        console.log('[pushDraft] Assets for Quick Links:', b.assets?.length || 0);
 
         // Use rotating subject line format based on isInSystem status
         const subject = getRotatingSubject(projectName, b.name || 'Brand', isInSystem);
