@@ -264,8 +264,9 @@ function sanitizeBrand(b={}) {
   console.log('[sanitizeBrand] Final assets array:', assets.length, 'items', assets);
 
   // Check for both camelCase and snake_case versions
-  const secondaryOwnerId = b.secondaryOwnerId || b.secondary_owner || null;
-  const specialtyLeadId = b.specialtyLeadId || b.specialty_lead || null;
+  // Also check in the properties object if it exists
+  const secondaryOwnerId = b.secondaryOwnerId || b.secondary_owner || b.properties?.secondary_owner || null;
+  const specialtyLeadId = b.specialtyLeadId || b.specialty_lead || b.properties?.specialty_lead || null;
   
   console.log('[sanitizeBrand] Extracted IDs:', {
     secondaryOwnerId,
@@ -333,8 +334,8 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
   const distributorText = distributor && distributor !== '[Distributor/Studio]' ? distributor : '[Distributor/Studio]';
   const releaseDateText = releaseDate && releaseDate !== '[Release Date]' ? releaseDate : '[Release Date]';
   
-  // Different fallback templates based on whether brand is in system
-  const fallback = () => {
+  // BUILD THE EXACT TEMPLATE - NO AI NEEDED
+  const buildTemplate = () => {
     const ideas = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : 'Strategic product placement';
     const whyItWorks = brand.whyItWorks || 'aligns perfectly with your brand values';
     
@@ -362,59 +363,43 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
     }
   };
 
+  // Use AI for light rewriting to make it flow naturally
   try {
-    if (!process.env.OPENAI_API_KEY) return fallback();
+    if (!process.env.OPENAI_API_KEY) return buildTemplate();
 
-    // Smart prompt that follows the exact template structure
+    // Get the exact template first
+    const templateEmail = buildTemplate();
+    
+    // Extract key info for AI to use
     const integrationIdea = (brand.integrationIdeas && brand.integrationIdeas[0]) || 'Strategic product placement';
     const whyItWorks = brand.whyItWorks || 'Natural brand fit';
     
     const prompt = isInSystem ? 
-      // VERSION 2: Existing client prompt
-      `Write a warm, relationship-focused email for an existing client. Be concise and professional.
+      // VERSION 2: Existing client prompt - LIGHT REWRITE ONLY
+      `Take this EXACT email template and make it flow naturally. You may ONLY make minor wording adjustments:
 
-Context:
-- Project: ${cleanedProject}
-- Brand: ${brand.name} (EXISTING CLIENT)
-- Genre: ${vibe}
-- Cast: ${cast || 'TBD'}
-- Why it works: ${whyItWorks}
-- Integration idea: ${integrationIdea}
+${templateEmail}
 
-Write a warm email that:
-1. Opens with "${greeting},"
-2. Mentions exciting news about ${cleanedProject}
-3. References our past successful collaborations
-4. Briefly explains why this is perfect for ${brand.name}
-5. Suggests catching up to explore the opportunity
-6. Signs off with "Best,\nStacy"
+RULES:
+1. Keep the exact same structure and length
+2. Keep greeting as "${greeting},"
+3. Keep sign-off as "Best,\nStacy"
+4. DO NOT add "I hope this finds you well" or similar pleasantries
+5. DO NOT add new sentences or ideas
+6. Just make the existing text flow smoothly` :
+      // VERSION 1: New brand template - Fill in specific ideas ONLY
+      `Take this email and ONLY improve the Content Extensions and Amplification bullets with specific ideas:
 
-Keep it brief, warm, and relationship-focused. DO NOT include 'Quick Links' or any link placeholders.` :
-      // VERSION 1: New brand template
-      `Generate an email following this EXACT template structure:
+${templateEmail}
 
-"${greeting},
-
-Several of our brand partners are evaluating opportunities around ${cleanedProject} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.
-
-We see a strong alignment with ${brand.name} and wanted to share how this could look:
-
-• On-Screen Integration: ${integrationIdea} (Scene/placement opportunities from one-sheet).
-• Content Extensions: [Generate 2-3 specific ideas like: capsule collection, co-branded merchandise, social campaigns with cast, exclusive partner activations - BE SPECIFIC to ${brand.name} and ${vibe} genre]
-• Amplification: [Generate 2-3 specific PR/retail/influencer ideas relevant to ${brand.name}]
-
-This is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.
-
-Would you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?
-
-Best,
-Stacy"
-
-IMPORTANT:
-1. Keep the EXACT structure and wording shown above
-2. Only fill in the [bracketed] sections with specific, relevant ideas
-3. DO NOT change the template text
-4. DO NOT add 'Quick Links' or any link placeholders`;
+RULES:
+1. KEEP EVERYTHING ELSE EXACTLY THE SAME
+2. For "Content Extensions" bullet: Replace the generic ideas with 2-3 specific ones for ${brand.name} in a ${vibe || 'entertainment'} context
+3. For "Amplification" bullet: Make the PR/retail/influencer ideas specific to ${brand.name}
+4. DO NOT change the opening paragraph
+5. DO NOT change the closing paragraph
+6. DO NOT add "I hope this finds you well" or any pleasantries
+7. Keep the exact same structure`;
 
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -422,40 +407,70 @@ IMPORTANT:
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [
-          { role:"system", content: isInSystem ? 
-            "You are Stacy from Hollywood Branded writing to an existing client. Write warm, concise, relationship-focused emails. Never include 'Quick Links' or link placeholders." :
-            "You MUST follow the email template EXACTLY as provided. Only fill in bracketed sections with specific ideas. Keep all other text exactly as shown in the template. Never add 'Quick Links' or link placeholders." },
+          { role:"system", content: "You are a professional email editor. Your ONLY job is to make minor adjustments to existing email templates. You MUST preserve the exact structure, length, and key phrases. Never add pleasantries like 'I hope this finds you well'. Never add new paragraphs. Only make the minimal changes requested." },
           { role:"user", content: prompt }
         ],
-        temperature: 0.7,
+        temperature: 0.2,
         max_tokens: 800
       })
     });
     if (!resp.ok) {
       console.log('[generateAiBody] OpenAI API failed, using fallback template');
-      return fallback();
+      return buildTemplate();
     }
     const json = await resp.json();
     const aiResponse = json?.choices?.[0]?.message?.content?.trim();
     
-    // Validate that AI followed the template (for new brands)
-    if (!isInSystem && aiResponse) {
-      // Check if it contains the key template phrases
-      const hasKeyPhrases = 
-        aiResponse.includes('Several of our brand partners are evaluating') &&
-        aiResponse.includes('We see a strong alignment') &&
-        aiResponse.includes('This is exactly what we do at Hollywood Branded');
+    // Validate that AI followed instructions
+    if (aiResponse) {
+      // Check for forbidden phrases that indicate AI went off-script
+      const forbiddenPhrases = [
+        'I hope this finds you well',
+        'I hope this message finds you',
+        'thrilling news',
+        'exciting to share',
+        'trust you are doing well',
+        'wonderful opportunity',
+        'delighted to',
+        'pleasure to'
+      ];
       
-      if (!hasKeyPhrases) {
-        console.log('[generateAiBody] AI did not follow template, using fallback');
-        return fallback();
+      for (const phrase of forbiddenPhrases) {
+        if (aiResponse.toLowerCase().includes(phrase.toLowerCase())) {
+          console.log(`[generateAiBody] AI added forbidden phrase: "${phrase}" - using fallback`);
+          return buildTemplate();
+        }
+      }
+      
+      // For new brands, check key phrases are preserved
+      if (!isInSystem) {
+        const requiredPhrases = [
+          'Several of our brand partners are evaluating',
+          'We see a strong alignment',
+          'This is exactly what we do at Hollywood Branded'
+        ];
+        
+        for (const phrase of requiredPhrases) {
+          if (!aiResponse.includes(phrase)) {
+            console.log(`[generateAiBody] AI removed required phrase: "${phrase}" - using fallback`);
+            return buildTemplate();
+          }
+        }
+      }
+      
+      // Check if AI made it too long or too short
+      const templateLength = templateEmail.length;
+      const responseLength = aiResponse.length;
+      if (responseLength > templateLength * 1.3 || responseLength < templateLength * 0.7) {
+        console.log(`[generateAiBody] AI response wrong length (template: ${templateLength}, response: ${responseLength}) - using fallback`);
+        return buildTemplate();
       }
     }
     
-    return aiResponse || fallback();
+    return aiResponse || buildTemplate();
   } catch (e) { 
     console.log('[generateAiBody] Error calling OpenAI:', e.message);
-    return fallback(); 
+    return buildTemplate(); 
   }
 }
 
@@ -505,6 +520,20 @@ export default async function handler(req, res) {
 
     if (!brandsRaw.length) return res.status(400).json({ error: "No brands provided" });
 
+    // First, log the raw data to understand what we're receiving
+    console.log('[pushDraft] Raw brand data received:');
+    brandsRaw.forEach((b, i) => {
+      console.log(`  Brand ${i}:`, {
+        name: b.name || b.brand,
+        hasSecondaryOwner: !!b.secondary_owner || !!b.secondaryOwnerId,
+        hasSpecialtyLead: !!b.specialty_lead || !!b.specialtyLeadId,
+        secondary_owner: b.secondary_owner,
+        secondaryOwnerId: b.secondaryOwnerId,
+        specialty_lead: b.specialty_lead,
+        specialtyLeadId: b.specialtyLeadId
+      });
+    });
+    
     const brands = brandsRaw.map(sanitizeBrand).slice(0, 10); // safety cap
   
   // Resolve HubSpot user IDs to user information
