@@ -357,21 +357,39 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
     const integrationIdea = (brand.integrationIdeas && brand.integrationIdeas[0]) || 'Strategic product placement';
     const whyItWorks = brand.whyItWorks || 'Natural brand fit';
     
-    const prompt = `
-Generate a professional brand integration email. IMPORTANT: Follow the template EXACTLY.
+    const prompt = isInSystem ? 
+      // VERSION 2: Existing client prompt
+      `Write a warm, relationship-focused email for an existing client. Be concise and professional.
 
-${isInSystem ? 'VERSION 2: EXISTING CLIENT (warm, relationship-focused)' : 'VERSION 1: NEW BRAND (use exact template below)'}
+Context:
+- Project: ${cleanedProject}
+- Brand: ${brand.name} (EXISTING CLIENT)
+- Genre: ${vibe}
+- Cast: ${cast || 'TBD'}
+- Why it works: ${whyItWorks}
+- Integration idea: ${integrationIdea}
 
-${!isInSystem ? `TEMPLATE TO FOLLOW EXACTLY:
+Write a warm email that:
+1. Opens with "${greeting},"
+2. Mentions exciting news about ${cleanedProject}
+3. References our past successful collaborations
+4. Briefly explains why this is perfect for ${brand.name}
+5. Suggests catching up to explore the opportunity
+6. Signs off with "Best,\nStacy"
+
+Keep it brief, warm, and relationship-focused. DO NOT include 'Quick Links' or any link placeholders.` :
+      // VERSION 1: New brand template
+      `Generate an email following this EXACT template structure:
+
 "${greeting},
 
 Several of our brand partners are evaluating opportunities around ${cleanedProject} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.
 
 We see a strong alignment with ${brand.name} and wanted to share how this could look:
 
-• On-Screen Integration: [Expand from: ${integrationIdea}] 
-• Content Extensions: [Generate specific ideas based on brand: ${brand.name} and genre: ${vibe}]
-• Amplification: [Generate PR/retail/influencer ideas]
+• On-Screen Integration: ${integrationIdea} (Scene/placement opportunities from one-sheet).
+• Content Extensions: [Generate 2-3 specific ideas like: capsule collection, co-branded merchandise, social campaigns with cast, exclusive partner activations - BE SPECIFIC to ${brand.name} and ${vibe} genre]
+• Amplification: [Generate 2-3 specific PR/retail/influencer ideas relevant to ${brand.name}]
 
 This is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.
 
@@ -380,14 +398,11 @@ Would you be open to a quick call so we can walk you through how we partner with
 Best,
 Stacy"
 
-Fill in the bracketed sections intelligently. Keep the structure EXACTLY as shown. DO NOT include 'Quick Links' or any link placeholders in the body text.` : `
-Write warm relationship email mentioning past success and new opportunity.`}
-
-Project: ${cleanedProject}
-Brand: ${brand.name}
-Genre: ${vibe}
-Cast: ${cast || 'TBD'}
-`.trim();
+IMPORTANT:
+1. Keep the EXACT structure and wording shown above
+2. Only fill in the [bracketed] sections with specific, relevant ideas
+3. DO NOT change the template text
+4. DO NOT add 'Quick Links' or any link placeholders`;
 
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -396,8 +411,8 @@ Cast: ${cast || 'TBD'}
         model: "gpt-4o-mini",
         messages: [
           { role:"system", content: isInSystem ? 
-            "Write warm, relationship-focused emails for existing clients. Be concise and professional. Never include 'Quick Links' or link placeholders in the email body." :
-            "Follow the email template EXACTLY as provided. Fill in bracketed sections intelligently based on the brand and production context. DO NOT add 'Quick Links' or any link placeholders - these will be added separately as HTML." },
+            "You are Stacy from Hollywood Branded writing to an existing client. Write warm, concise, relationship-focused emails. Never include 'Quick Links' or link placeholders." :
+            "You MUST follow the email template EXACTLY as provided. Only fill in bracketed sections with specific ideas. Keep all other text exactly as shown in the template. Never add 'Quick Links' or link placeholders." },
           { role:"user", content: prompt }
         ],
         temperature: 0.7,
