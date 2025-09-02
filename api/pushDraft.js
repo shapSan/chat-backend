@@ -335,18 +335,30 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
   
   // Different fallback templates based on whether brand is in system
   const fallback = () => {
-    const ideas = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '';
+    const ideas = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : 'Strategic product placement';
+    const whyItWorks = brand.whyItWorks || 'aligns perfectly with your brand values';
     
     if (isInSystem) {
       // VERSION 2: Warmer email for existing clients
-      return `${greeting},\n\nGreat news! We have an exciting opportunity with ${cleanedProject} that aligns perfectly with ${brand.name}.\n\n${brand.whyItWorks || `Given our successful past collaborations, this ${vibe} production would be an ideal fit for ${brand.name}.`}\n\n${ideas ? `Building on our relationship: ${ideas}` : `We see natural integration opportunities that build on ${brand.name}'s previous successes.`}\n\n${mention ? mention + ' ' : ''}Let's catch up soon to explore how we can make this happen together.\n\nBest,\nStacy`.trim();
+      return `${greeting},\n\nGreat news! We have an exciting opportunity with ${cleanedProject} that aligns perfectly with ${brand.name}.\n\n${whyItWorks}\n\n${ideas ? `Building on our relationship: ${ideas}` : `We see natural integration opportunities that build on ${brand.name}'s previous successes.`}\n\n${mention ? mention + ' ' : ''}Let's catch up soon to explore how we can make this happen together.\n\nBest,\nStacy`.trim();
     } else {
-      // VERSION 1: New brand email template from user's requirements
-      const integrationIdea = ideas || '[Integration Idea]';
-      const whyItWorks = brand.whyItWorks || '[Why it works]';
+      // VERSION 1: New brand email template - EXACT FORMAT REQUIRED
+      const integrationIdea = ideas || 'Strategic product placement';
+      
+      // Generate specific content extension ideas based on genre
+      let contentExtensions = 'Capsule collection, co-branded merchandise, social campaigns with the cast';
+      if (vibe) {
+        if (vibe.toLowerCase().includes('horror') || vibe.toLowerCase().includes('scary')) {
+          contentExtensions = 'Limited edition Halloween merchandise, themed social campaigns with cast, exclusive screening events';
+        } else if (vibe.toLowerCase().includes('action')) {
+          contentExtensions = 'Adventure gear collection, behind-the-scenes stunt content, adrenaline-focused activations';
+        } else if (vibe.toLowerCase().includes('comedy')) {
+          contentExtensions = 'Fun merchandise line, viral social content with cast, comedy club partnership events';
+        }
+      }
       
       // Don't include Quick Links line in fallback - it will be added as HTML
-      return `${greeting},\n\nSeveral of our brand partners are evaluating opportunities around ${cleanedProject} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.\n\nWe see a strong alignment with ${brand.name} and wanted to share how this could look:\n\n• On-Screen Integration: ${integrationIdea} (Scene/placement opportunities from one-sheet).\n• Content Extensions: [Capsule collection, co-promo, social/behind-the-scenes content]. Ie - Co-branded merchandise, social campaigns with the cast, or exclusive partner activations.\n• Amplification: [PR hooks, retail tie-ins, influencer/media activations].\n\nThis is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.\n\nWould you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?\n\nBest,\nStacy`.trim();
+      return `${greeting},\n\nSeveral of our brand partners are evaluating opportunities around ${cleanedProject} (${distributorText}, releasing ${releaseDateText}). The project ${whyItWorks}.\n\nWe see a strong alignment with ${brand.name} and wanted to share how this could look:\n\n• On-Screen Integration: ${integrationIdea} (Scene/placement opportunities from one-sheet).\n• Content Extensions: ${contentExtensions}.\n• Amplification: PR hooks through premiere events, retail tie-ins at key locations, influencer partnerships for social reach.\n\nThis is exactly what we do at Hollywood Branded. We've delivered over 10,000 campaigns across film, TV, music, sports, and influencer marketing - including global partnerships that turned integrations into full marketing platforms.\n\nWould you be open to a quick call so we can walk you through how we partner with brands to unlock opportunities like this and build a long-term Hollywood strategy?\n\nBest,\nStacy`.trim();
     }
   };
 
@@ -419,10 +431,32 @@ IMPORTANT:
         max_tokens: 800
       })
     });
-    if (!resp.ok) return fallback();
+    if (!resp.ok) {
+      console.log('[generateAiBody] OpenAI API failed, using fallback template');
+      return fallback();
+    }
     const json = await resp.json();
-    return json?.choices?.[0]?.message?.content?.trim() || fallback();
-  } catch { return fallback(); }
+    const aiResponse = json?.choices?.[0]?.message?.content?.trim();
+    
+    // Validate that AI followed the template (for new brands)
+    if (!isInSystem && aiResponse) {
+      // Check if it contains the key template phrases
+      const hasKeyPhrases = 
+        aiResponse.includes('Several of our brand partners are evaluating') &&
+        aiResponse.includes('We see a strong alignment') &&
+        aiResponse.includes('This is exactly what we do at Hollywood Branded');
+      
+      if (!hasKeyPhrases) {
+        console.log('[generateAiBody] AI did not follow template, using fallback');
+        return fallback();
+      }
+    }
+    
+    return aiResponse || fallback();
+  } catch (e) { 
+    console.log('[generateAiBody] Error calling OpenAI:', e.message);
+    return fallback(); 
+  }
 }
 
 // Subject line rotation helper
