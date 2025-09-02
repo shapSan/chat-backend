@@ -640,11 +640,31 @@ export default async function handler(req, res) {
       });
 
         const paragraphs = bodyText.split('\n').filter(line => line.trim());
-        const formattedBody = paragraphs.map(para =>
-          `<p style="margin:0 0 16px 0;">${esc(para)}</p>`
-        ).join('');
+        const formattedBody = paragraphs.map((para, index) => {
+          // Convert markdown-style bold to HTML bold
+          let formatted = esc(para);
+          // Replace **text** with <strong>text</strong>
+          formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          
+          // Check if this is a bullet point line
+          if (formatted.startsWith('• ')) {
+            // Format as a bullet point with proper indentation
+            formatted = formatted.substring(2); // Remove the bullet
+            return `<p style="margin:0 0 12px 0;padding-left:20px;text-indent:-20px;">• ${formatted}</p>`;
+          }
+          
+          // Add extra spacing before certain sections
+          let topMargin = '0';
+          if (para.startsWith('We see a strong alignment') || 
+              para.startsWith('As part of the opportunities') ||
+              para.startsWith("Here's how it could look:")) {
+            topMargin = '20px';
+          }
+          
+          return `<p style="margin:${topMargin} 0 16px 0;">${formatted}</p>`;
+        }).join('');
 
-        // Build Quick links section - ALWAYS include if there are assets
+        // Build Quick links section
         let quickLinksSection = '';
         console.log('[pushDraft] Checking assets for Quick Links:', {
           hasAssets: !!b.assets,
@@ -656,16 +676,21 @@ export default async function handler(req, res) {
           console.log('[pushDraft] Building Quick Links for', b.assets.length, 'assets');
           const linkItems = b.assets.map(a => {
             console.log('[pushDraft] Adding link:', a.title, '->', a.url);
-            return `<p style="margin:4px 0;"><a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a></p>`;
-          }).join('');
+            return `<a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;">${esc(a.title)}</a>`;
+          }).join(', ');
+          // Format as: Quick Links: Audio Pitch, Proposal, Poster, etc (each as a link)
           quickLinksSection = `
             <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;">
-              <p style="font-weight:600;margin:0 0 8px 0;">Quick links</p>
-              ${linkItems}
+              <p style="margin:0;"><strong>Quick Links:</strong> ${linkItems}</p>
             </div>`;
           console.log('[pushDraft] Quick Links HTML built:', quickLinksSection.substring(0, 200) + '...');
         } else {
-          console.log('[pushDraft] NO ASSETS - Quick Links section will be empty');
+          // Add placeholder text for Quick Links when no assets
+          console.log('[pushDraft] NO ASSETS - Adding placeholder Quick Links');
+          quickLinksSection = `
+            <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;"><strong>Quick Links:</strong> [Audio Pitch, Proposal, Poster, etc]</p>
+            </div>`;
         }
 
         const htmlBody = `
