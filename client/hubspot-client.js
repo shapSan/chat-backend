@@ -408,6 +408,8 @@ const hubspotAPI = {
     // Search for partnership data related to the project
     if (!projectName) return null;
     
+    console.log('[getPartnershipForProject] Searching for:', projectName);
+    
     try {
       const results = await this.searchProductions({
         filterGroups: [{
@@ -417,22 +419,45 @@ const hubspotAPI = {
             value: projectName
           }]
         }],
-        limit: 1
+        limit: 5  // Get more results in case the first isn't the best match
       });
       
       if (results?.results?.length > 0) {
-        const partnership = results.results[0].properties;
+        // Try to find exact match first
+        let partnership = results.results.find(r => 
+          r.properties.production_name?.toLowerCase() === projectName.toLowerCase()
+        );
+        
+        // If no exact match, use the first result
+        if (!partnership) {
+          partnership = results.results[0];
+        }
+        
+        const props = partnership.properties;
+        console.log('[getPartnershipForProject] Found partnership data:', props);
+        
         return {
-          distributor: partnership.distributor || null,
-          releaseDate: partnership.release__est__date || null,
-          startDate: partnership.start_date || null,
-          productionType: partnership.production_type || null
+          distributor: props.distributor || null,
+          studio: props.distributor || null,  // Also provide as 'studio'
+          releaseDate: props.release__est__date || null,
+          release_date: props.release__est__date || null,  // Also snake_case
+          startDate: props.start_date || null,
+          production_start_date: props.start_date || null,  // Full name
+          productionType: props.production_type || null,
+          production_type: props.production_type || null,  // Snake case
+          synopsis: props.synopsis || null,
+          content_type: props.content_type || null,
+          partnership_status: props.partnership_status || null,
+          brand_name: props.brand_name || null,
+          amount: props.amount || null,
+          hollywood_branded_fee: props.hollywood_branded_fee || null
         };
       }
     } catch (error) {
       console.error('[getPartnershipForProject] error:', error);
     }
     
+    console.log('[getPartnershipForProject] No partnership data found for:', projectName);
     return null;
   },
 
