@@ -317,6 +317,12 @@ export default async function handler(req, res) {
         const { kb: knowledgeBaseInstructions, conversationContext, existingRecordId } = await loadContext();
         const lastProductionContext = extractLastProduction(conversationContext);
 
+        console.log('[index.js] Calling handleClaudeSearch with:');
+        console.log('  - userMessage:', userMessage);
+        console.log('  - projectId:', projectId);
+        console.log('  - knownProjectName:', knownProjectName);
+        console.log('  - lastProductionContext:', lastProductionContext);
+        
         const claudeResult = await handleClaudeSearch(
           userMessage,
           projectId,
