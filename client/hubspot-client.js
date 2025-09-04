@@ -126,8 +126,16 @@ const hubspotAPI = {
         }]
       };
 
-      // Check for explicit search type parameter
-      if (filters.searchType === 'synopsis') {
+      // Check if explicit filterGroups are provided (from bucket searches)
+      if (filters.filterGroups && filters.filterGroups.length > 0) {
+        console.log('[DEBUG searchBrands] Using provided filterGroups:', JSON.stringify(filters.filterGroups));
+        searchBody.filterGroups = filters.filterGroups;
+        
+        // Use provided sorts if available
+        if (filters.sorts && filters.sorts.length > 0) {
+          searchBody.sorts = filters.sorts;
+        }
+      } else if (filters.searchType === 'synopsis') {
         console.log('[DEBUG searchBrands] Using synopsis/genre search logic...');
 
         // Extract genre from synopsis for category matching
@@ -218,7 +226,7 @@ const hubspotAPI = {
         }];
       }
 
-      console.log('[DEBUG searchBrands] Making HubSpot API request...');
+      console.log('[DEBUG searchBrands] Making HubSpot API request with searchBody:', JSON.stringify(searchBody, null, 2));
       
       // Make the actual search request with retry logic
       let attempts = 0;
