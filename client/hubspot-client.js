@@ -198,31 +198,44 @@ const hubspotAPI = {
         
         try {
           const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.BRANDS}/search`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${hubspotApiKey}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(searchBody)
+          method: 'POST',
+          headers: {
+          'Authorization': `Bearer ${hubspotApiKey}`,
+          'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(searchBody)
           });
 
           if (!response.ok) {
-            const errorBody = await response.text();
-            console.error(`[DEBUG searchBrands] HubSpot API error (attempt ${attempts}/${maxAttempts}):`, response.status, errorBody);
-            lastError = new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
+          const errorBody = await response.text();
+          console.error(`[DEBUG searchBrands] HubSpot API error (attempt ${attempts}/${maxAttempts}):`, response.status, errorBody);
+          
+          // Handle rate limiting with exponential backoff
+          if (response.status === 429) {
+            const retryAfter = response.headers.get('Retry-After');
+          const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : Math.min(1000 * Math.pow(2, attempts), 10000);
+            console.log(`[DEBUG searchBrands] Rate limited. Waiting ${waitTime}ms before retry...`);
             
-            // If it's a 401, don't retry
-            if (response.status === 401) {
-              throw lastError;
-            }
-            
-            // Wait before retry
             if (attempts < maxAttempts) {
-              console.log('[DEBUG searchBrands] Retrying after delay...');
-              await new Promise(resolve => setTimeout(resolve, 1000));
-              continue;
-            }
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+            continue;
           }
+          }
+          
+            lastError = new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
+        
+        // If it's a 401, don't retry
+        if (response.status === 401) {
+          throw lastError;
+        }
+        
+        // Wait before retry for other errors
+        if (attempts < maxAttempts) {
+          console.log('[DEBUG searchBrands] Retrying after delay...');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
+      }
 
           const result = await response.json();
           console.log(`[DEBUG searchBrands] Success (attempt ${attempts}), got`, result.results?.length || 0, 'brands');
