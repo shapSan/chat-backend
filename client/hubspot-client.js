@@ -4,6 +4,35 @@ import fetch from 'node-fetch';
 
 export const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 
+// Rate limiter class for HubSpot API
+class RateLimiter {
+  constructor(requestsPerSecond) {
+    this.tokens = requestsPerSecond;
+    this.requestsPerSecond = requestsPerSecond;
+    this.lastRefill = Date.now();
+  }
+
+  async acquire() {
+    const now = Date.now();
+    const elapsedSeconds = (now - this.lastRefill) / 1000;
+    this.tokens += elapsedSeconds * this.requestsPerSecond;
+    this.lastRefill = now;
+
+    this.tokens = Math.min(this.requestsPerSecond, this.tokens);
+
+    if (this.tokens < 1) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return this.acquire();
+    }
+
+    this.tokens--;
+    return true;
+  }
+}
+
+// Create rate limiter instance (8 requests per second, staying below HubSpot's 10/sec limit)
+const hubspotLimiter = new RateLimiter(8);
+
 const hubspotAPI = {
   baseUrl: 'https://api.hubapi.com',
   portalId: '2944980',
@@ -59,6 +88,9 @@ const hubspotAPI = {
   },
 
   async searchBrands(filters = {}) {
+    // Acquire rate limit token first
+    await hubspotLimiter.acquire();
+    
     console.log('[DEBUG searchBrands] Starting with filters:', filters);
     
     // Ensure we're initialized before searching
@@ -207,6 +239,8 @@ const hubspotAPI = {
           });
 
           if (!response.ok) {
+          // Clone the response to avoid "body used already" error
+          const responseClone = response.clone();
           const errorBody = await response.text();
           console.error(`[DEBUG searchBrands] HubSpot API error (attempt ${attempts}/${maxAttempts}):`, response.status, errorBody);
           
@@ -367,6 +401,9 @@ const hubspotAPI = {
   },
 
   async searchProductions(filters = {}) {
+    // Acquire rate limit token first
+    await hubspotLimiter.acquire();
+    
     // Ensure initialization
     if (!this.isInitialized) {
       await this.initialize();
@@ -433,6 +470,9 @@ const hubspotAPI = {
   async getPartnershipForProject(projectName) {
     // Search for partnership data related to the project
     if (!projectName) return null;
+    
+    // Acquire rate limit token first
+    await hubspotLimiter.acquire();
     
     console.log('[getPartnershipForProject] Searching for:', projectName);
     
@@ -549,6 +589,9 @@ const hubspotAPI = {
   },
 
   async searchDeals(filters = {}) {
+    // Acquire rate limit token first
+    await hubspotLimiter.acquire();
+    
     // Ensure initialization
     if (!this.isInitialized) {
       await this.initialize();
@@ -648,6 +691,9 @@ const hubspotAPI = {
   },
 
   async searchSpecificBrand(brandName) {
+    // Acquire rate limit token first
+    await hubspotLimiter.acquire();
+    
     // Ensure initialization
     if (!this.isInitialized) {
       await this.initialize();
