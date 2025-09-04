@@ -277,7 +277,8 @@ export default async function handler(req, res) {
                 chatUrl,
                 headersAirtable,
                 `${conversationContext}\nUser: [Voice Message]\nAI: ${aiReply}`,
-                existingRecordId
+                existingRecordId,
+                knownProjectName // Pass the project name
               ).catch(() => {});
               await progressDone(sessionId, runId);
               res.json({ reply: aiReply, mcpThinking: null, usedMCP: false });
@@ -394,7 +395,8 @@ ${JSON.stringify(structuredData, null, 2)}
           chatUrl,
           headersAirtable,
           `${conversationContext}\nUser: ${userMessage}\nAI: ${aiReply}`,
-          existingRecordId
+          existingRecordId,
+          knownProjectName || claudeResult?.organizedData?.projectName // Pass the project name
         ).catch(() => {});
 
         await progressDone(sessionId, runId);
