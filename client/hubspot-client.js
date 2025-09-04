@@ -374,8 +374,7 @@ const hubspotAPI = {
             filters: []
           }],
           properties: [
-            'partnership_name',
-            'production_name',
+            'partnership_name',      // Primary name field
             'partnership_status',
             'hs_pipeline_stage',
             'synopsis',
@@ -391,7 +390,13 @@ const hubspotAPI = {
             'hs_lastmodifieddate',
             'release__est__date',    // Release date
             'start_date',            // Production start date
-            'production_type'        // Type of production
+            'production_type',       // Type of production
+            // Add contextual fields for better matching:
+            'genre_production',      // Genre of the production
+            'time_period',           // Era/time period setting
+            'plot_location',         // Where the story takes place
+            'storyline_location__city_',  // Specific city location
+            'audience_segment'       // Target audience
           ],
           limit: filters.limit || 30,
           sorts: [{
@@ -426,7 +431,7 @@ const hubspotAPI = {
       let results = await this.searchProductions({
         filterGroups: [{
           filters: [{
-            propertyName: 'production_name',
+            propertyName: 'partnership_name',
             operator: 'CONTAINS_TOKEN',
             value: projectName
           }]
@@ -446,7 +451,7 @@ const hubspotAPI = {
           // Search for any of the main words
           const filterGroups = mainWords.map(word => ({
             filters: [{
-              propertyName: 'production_name',
+              propertyName: 'partnership_name',
               operator: 'CONTAINS_TOKEN',
               value: word
             }]
@@ -463,7 +468,7 @@ const hubspotAPI = {
         // Score each result based on similarity
         const projectLower = projectName.toLowerCase();
         const scoredResults = results.results.map(r => {
-          const prodName = r.properties.production_name?.toLowerCase() || '';
+          const prodName = r.properties.partnership_name?.toLowerCase() || '';
           let score = 0;
           
           // Exact match gets highest score
@@ -494,7 +499,7 @@ const hubspotAPI = {
         
         if (partnership && partnership.score > 0) {
           const props = partnership.properties;
-          console.log('[getPartnershipForProject] Found partnership data (score:', partnership.score, '):', props.production_name);
+          console.log('[getPartnershipForProject] Found partnership data (score:', partnership.score, '):', props.partnership_name);
           
           return {
             distributor: props.distributor || null,
@@ -510,7 +515,18 @@ const hubspotAPI = {
             partnership_status: props.partnership_status || null,
             brand_name: props.brand_name || null,
             amount: props.amount || null,
-            hollywood_branded_fee: props.hollywood_branded_fee || null
+            hollywood_branded_fee: props.hollywood_branded_fee || null,
+            // Include new contextual fields
+            genre: props.genre_production || null,
+            genre_production: props.genre_production || null,
+            timePeriod: props.time_period || null,
+            time_period: props.time_period || null,
+            plotLocation: props.plot_location || null,
+            plot_location: props.plot_location || null,
+            storylineCity: props.storyline_location__city_ || null,
+            storyline_location__city_: props.storyline_location__city_ || null,
+            audienceSegment: props.audience_segment || null,
+            audience_segment: props.audience_segment || null
           };
         }
       }
