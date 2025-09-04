@@ -340,16 +340,21 @@ export default async function handler(req, res) {
           mcpSteps = (claudeResult.mcpThinking || []).map((step) => ({ ...step, timestamp: Date.now() - mcpStartTime }));
           structuredData = claudeResult.organizedData;
 
-          let systemMessageContent =
-            knowledgeBaseInstructions || `You are an expert assistant specialized in brand integration for Hollywood entertainment.`;
-
-          if (structuredData.dataType === 'BRAND_ACTIVITY') {
+          // Use the final reply text directly from the orchestrator's result
+          aiReply = claudeResult.finalReplyText || '';
+          
+          // Fallback if no finalReplyText but we have brand data
+          if (!aiReply && structuredData?.dataType === 'BRAND_RECOMMENDATIONS' && structuredData?.detailedBrands?.length > 0) {
+            aiReply = `Brand integration suggestions for ${structuredData.projectName || 'your project'}:\n\nI have identified ${structuredData.detailedBrands.length} potential brand partners. Please see the structured data for details.`;
+          } 
+          // Special handling for brand activity data
+          else if (!aiReply && structuredData?.dataType === 'BRAND_ACTIVITY') {
             const total = structuredData.communications?.length || 0;
             const meetings = structuredData.communications?.filter((c) => c.type === 'meeting').length || 0;
             const emails = structuredData.communications?.filter((c) => c.type === 'email').length || 0;
-
-            systemMessageContent += `
-You have retrieved activity data for a brand. Format your response EXACTLY as follows:
+            
+            // For brand activity, we still need Claude to format the communications properly
+            let systemMessageContent = `You have retrieved activity data for a brand. Format your response EXACTLY as follows:
 
 **ABSOLUTE REQUIREMENT: Display ALL ${total} items from the communications array**
 
@@ -363,19 +368,16 @@ Formatting:
 2) List ALL ${total} items in order, numbered 1..${total}
 3) Meetings: "[MEETING url='url_if_exists'] Title - Date" or "[MEETING] Title - Date"
    Emails: "[EMAIL] Subject - Date"
-4) Include bullet points for details under each item.`;
+4) Include bullet points for details under each item.
 
-            systemMessageContent += `\n\n\`\`\`json\n${JSON.stringify(structuredData, null, 2)}\n\`\`\``;
-          } else {
-            systemMessageContent += `
-A search has been performed and the structured results are below in JSON. Synthesize into a helpful summary. If empty, say you couldn't find matches. Make links clickable in markdown.
-\`\`\`json
-${JSON.stringify(structuredData, null, 2)}
-\`\`\`
-`;
+\`\`\`json\n${JSON.stringify(structuredData, null, 2)}\n\`\`\``;
+            
+            aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
           }
-
-          aiReply = await getTextResponseFromClaude(userMessage, sessionId, systemMessageContent);
+          // General fallback
+          else if (!aiReply) {
+            aiReply = "I was unable to find relevant brand matches for this project.";
+          }
         } else {
           // no tool path → general chat
           let systemMessageContent =
