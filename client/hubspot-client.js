@@ -240,6 +240,16 @@ const hubspotAPI = {
           const result = await response.json();
           console.log(`[DEBUG searchBrands] Success (attempt ${attempts}), got`, result.results?.length || 0, 'brands');
           
+          // ADD DETAILED BRAND LOGGING
+          if (result.results && result.results.length > 0) {
+            const brandDetails = result.results.map(b => ({
+              name: b.properties.brand_name,
+              category: b.properties.main_category,
+              sub_category: b.properties.product_sub_category__multi_
+            }));
+            console.log(`[DEBUG searchBrands] Data returned for query "${filters.searchType || 'bucket'}"`, brandDetails);
+          }
+          
           // If we got 0 results on first attempt with a specific query, try different search method
           if (attempts === 1 && result.results?.length === 0 && filters.query && filters.query.length < 50) {
             console.log('[DEBUG searchBrands] Got 0 results for keyword search, trying without filters...');
