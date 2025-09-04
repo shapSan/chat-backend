@@ -94,9 +94,9 @@ const hubspotAPI = {
         }]
       };
 
-      // If a query (like a synopsis) is passed, use category matching
-      if (filters.query && filters.query.length > 50) {
-        console.log('[DEBUG searchBrands] Detected synopsis, extracting genre...');
+      // Check for explicit search type parameter
+      if (filters.searchType === 'synopsis') {
+        console.log('[DEBUG searchBrands] Using synopsis/genre search logic...');
 
         // Extract genre from synopsis for category matching
         const genreMap = {
@@ -112,7 +112,7 @@ const hubspotAPI = {
         };
 
         // Simple genre detection
-        const queryLower = filters.query.toLowerCase();
+        const queryLower = (filters.query || '').toLowerCase();
         let categories = [];
 
         for (const [genre, cats] of Object.entries(genreMap)) {
@@ -145,11 +145,9 @@ const hubspotAPI = {
         }
 
       } else if (filters.query) {
-        // Short keyword search - search by brand name
+        // This is the logic for 'keywords' or default search
         console.log('[DEBUG searchBrands] Keyword search for:', filters.query);
         
-        // For keyword searches, we'll try a more flexible approach
-        // Remove the status filter initially to ensure we get results
         searchBody.filterGroups = [{
           filters: [{
             propertyName: 'brand_name',
