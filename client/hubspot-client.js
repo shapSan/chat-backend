@@ -411,7 +411,8 @@ const hubspotAPI = {
     console.log('[getPartnershipForProject] Searching for:', projectName);
     
     try {
-      const results = await this.searchProductions({
+      // First try with CONTAINS_TOKEN for partial matching
+      let results = await this.searchProductions({
         filterGroups: [{
           filters: [{
             propertyName: 'production_name',
@@ -419,39 +420,88 @@ const hubspotAPI = {
             value: projectName
           }]
         }],
-        limit: 5  // Get more results in case the first isn't the best match
+        limit: 10  // Get more results for better matching
       });
       
-      if (results?.results?.length > 0) {
-        // Try to find exact match first
-        let partnership = results.results.find(r => 
-          r.properties.production_name?.toLowerCase() === projectName.toLowerCase()
+      // If no results, try a more relaxed search with just the main words
+      if (!results?.results?.length && projectName.includes(' ')) {
+        const mainWords = projectName.split(' ').filter(word => 
+          word.length > 3 && !['the', 'and', 'for', 'with'].includes(word.toLowerCase())
         );
         
-        // If no exact match, use the first result
-        if (!partnership) {
-          partnership = results.results[0];
+        if (mainWords.length > 0) {
+          console.log('[getPartnershipForProject] Trying with main words:', mainWords);
+          
+          // Search for any of the main words
+          const filterGroups = mainWords.map(word => ({
+            filters: [{
+              propertyName: 'production_name',
+              operator: 'CONTAINS_TOKEN',
+              value: word
+            }]
+          }));
+          
+          results = await this.searchProductions({
+            filterGroups,
+            limit: 20
+          });
         }
+      }
+      
+      if (results?.results?.length > 0) {
+        // Score each result based on similarity
+        const projectLower = projectName.toLowerCase();
+        const scoredResults = results.results.map(r => {
+          const prodName = r.properties.production_name?.toLowerCase() || '';
+          let score = 0;
+          
+          // Exact match gets highest score
+          if (prodName === projectLower) {
+            score = 100;
+          } else {
+            // Count matching words
+            const projectWords = projectLower.split(/\s+/);
+            const prodWords = prodName.split(/\s+/);
+            
+            projectWords.forEach(word => {
+              if (prodWords.includes(word)) score += 10;
+              else if (prodName.includes(word)) score += 5;
+            });
+            
+            // Bonus if starts with same word
+            if (projectWords[0] && prodWords[0] === projectWords[0]) {
+              score += 20;
+            }
+          }
+          
+          return { ...r, score };
+        });
         
-        const props = partnership.properties;
-        console.log('[getPartnershipForProject] Found partnership data:', props);
+        // Sort by score and get best match
+        scoredResults.sort((a, b) => b.score - a.score);
+        const partnership = scoredResults[0];
         
-        return {
-          distributor: props.distributor || null,
-          studio: props.distributor || null,  // Also provide as 'studio'
-          releaseDate: props.release__est__date || null,
-          release_date: props.release__est__date || null,  // Also snake_case
-          startDate: props.start_date || null,
-          production_start_date: props.start_date || null,  // Full name
-          productionType: props.production_type || null,
-          production_type: props.production_type || null,  // Snake case
-          synopsis: props.synopsis || null,
-          content_type: props.content_type || null,
-          partnership_status: props.partnership_status || null,
-          brand_name: props.brand_name || null,
-          amount: props.amount || null,
-          hollywood_branded_fee: props.hollywood_branded_fee || null
-        };
+        if (partnership && partnership.score > 0) {
+          const props = partnership.properties;
+          console.log('[getPartnershipForProject] Found partnership data (score:', partnership.score, '):', props.production_name);
+          
+          return {
+            distributor: props.distributor || null,
+            studio: props.distributor || null,
+            releaseDate: props.release__est__date || null,
+            release_date: props.release__est__date || null,
+            startDate: props.start_date || null,
+            production_start_date: props.start_date || null,
+            productionType: props.production_type || null,
+            production_type: props.production_type || null,
+            synopsis: props.synopsis || null,
+            content_type: props.content_type || null,
+            partnership_status: props.partnership_status || null,
+            brand_name: props.brand_name || null,
+            amount: props.amount || null,
+            hollywood_branded_fee: props.hollywood_branded_fee || null
+          };
+        }
       }
     } catch (error) {
       console.error('[getPartnershipForProject] error:', error);
