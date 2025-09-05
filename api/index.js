@@ -402,6 +402,28 @@ Formatting:
         ).catch(() => {});
 
         await progressDone(sessionId, runId);
+        
+        // Ensure partnership data is properly included in structuredData
+        if (structuredData && structuredData.dataType === 'BRAND_RECOMMENDATIONS') {
+          // Ensure all partnership fields are available at top level for frontend
+          const partnershipData = structuredData.partnershipData || {};
+          structuredData = {
+            ...structuredData,
+            // Include individual fields at top level for easier access
+            projectName: structuredData.projectName || partnershipData.title,
+            distributor: partnershipData.distributor || structuredData.distributor,
+            releaseDate: partnershipData.releaseDate || structuredData.releaseDate,
+            productionStartDate: partnershipData.productionStartDate || partnershipData.startDate || structuredData.productionStartDate,
+            productionType: partnershipData.productionType || structuredData.productionType,
+            location: partnershipData.location || structuredData.location,
+            cast: partnershipData.cast || structuredData.cast,
+            vibe: partnershipData.vibe || partnershipData.genre_production || structuredData.vibe,
+            synopsis: partnershipData.synopsis || structuredData.synopsis,
+            // Keep the nested object too for compatibility
+            partnershipData: partnershipData
+          };
+        }
+        
         return res.json({
           runId,
           reply: aiReply,
