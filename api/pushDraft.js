@@ -119,11 +119,13 @@ async function resolveHubSpotUsers(brands, onStep = () => {}) {
     return brands;
   }
   
-  // Collect unique User IDs from all brands
+  // Collect unique User IDs from all brands - all 4 owner types
   const userIds = new Set();
   brands.forEach(b => {
     if (b.secondaryOwnerId) userIds.add(b.secondaryOwnerId);
     if (b.specialtyLeadId) userIds.add(b.specialtyLeadId);
+    if (b.partnershipsLeadId) userIds.add(b.partnershipsLeadId);
+    if (b.hubspotOwnerId) userIds.add(b.hubspotOwnerId);
   });
   
   // --- TRACE 3.2: Log unique IDs found ---
@@ -149,7 +151,7 @@ async function resolveHubSpotUsers(brands, onStep = () => {}) {
       console.log(`[pushDraft TRACE 3.3] Querying HubSpot for User ID: ${userId}`);
       
       const response = await fetch(
-        `${HUBSPOT_BASE_URL}/settings/v3/users/${userId}`,
+        `${HUBSPOT_BASE_URL}/crm/v3/owners/${userId}`,
         {
           headers: {
             'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
@@ -196,9 +198,16 @@ async function resolveHubSpotUsers(brands, onStep = () => {}) {
     onStep({ type: 'warning', text: 'Could not resolve any HubSpot contacts - using defaults.' });
   }
   
-  // Enhance brands with resolved user info
+  // Enhance brands with resolved user info - all 4 contact types
   return brands.map(b => ({
     ...b,
+    contacts: {
+      secondaryOwner: b.secondaryOwnerId ? userMap[b.secondaryOwnerId] : null,
+      specialtyLead: b.specialtyLeadId ? userMap[b.specialtyLeadId] : null,
+      partnershipsLead: b.partnershipsLeadId ? userMap[b.partnershipsLeadId] : null,
+      hubspotOwner: b.hubspotOwnerId ? userMap[b.hubspotOwnerId] : null
+    },
+    // Keep backward compatibility
     primaryContact: b.secondaryOwnerId ? userMap[b.secondaryOwnerId] : null,
     secondaryContact: b.specialtyLeadId ? userMap[b.specialtyLeadId] : null
   }));
@@ -297,14 +306,18 @@ function sanitizeBrand(b={}) {
   
   console.log('[sanitizeBrand] Final assets array:', assets.length, 'items', assets);
 
-  // Check for both camelCase and snake_case versions
+  // Check for both camelCase and snake_case versions for all 4 owner fields
   // Also check in the properties object if it exists
   const secondaryOwnerId = b.secondaryOwnerId || b.secondary_owner || b.properties?.secondary_owner || null;
   const specialtyLeadId = b.specialtyLeadId || b.specialty_lead || b.properties?.specialty_lead || null;
+  const partnershipsLeadId = b.partnershipsLeadId || b.partnerships_lead || b.properties?.partnerships_lead || null;
+  const hubspotOwnerId = b.hubspotOwnerId || b.hubspot_owner_id || b.properties?.hubspot_owner_id || null;
   
   console.log('[sanitizeBrand] Extracted IDs:', {
     secondaryOwnerId,
-    specialtyLeadId
+    specialtyLeadId,
+    partnershipsLeadId,
+    hubspotOwnerId
   });
 
   return {
@@ -316,8 +329,10 @@ function sanitizeBrand(b={}) {
     assets,
     isInSystem: b.isInSystem || false,  // Preserve the isInSystem flag
     oneSheetLink: b.oneSheetLink || b.one_sheet_link || null,  // Include one-sheet link
-    secondaryOwnerId: secondaryOwnerId,  // Preserve for resolution
-    specialtyLeadId: specialtyLeadId  // Preserve for resolution
+    secondaryOwnerId: secondaryOwnerId,  // Client Team Lead
+    specialtyLeadId: specialtyLeadId,    // Specialty Lead
+    partnershipsLeadId: partnershipsLeadId,  // Partnerships Lead
+    hubspotOwnerId: hubspotOwnerId      // Primary Owner
   };
 }
 
@@ -737,35 +752,38 @@ export default async function handler(req, res) {
       const isInSystem = b.isInSystem || false;
       console.log('[pushDraft] Brand', b.name, 'isInSystem:', isInSystem);
       
-      // 1. Determine the recipient's name and email for this specific brand
+      // 1. Determine the recipient's name and email using priority order
       let recipientEmail = null;
       let recipientName = '[First Name]';
+      const contacts = b.contacts || {};
       
-      // Prioritize the secondary_owner ("Client Team Lead") as the main recipient
-      if (b.primaryContact?.email) {
-        recipientEmail = b.primaryContact.email;
-        recipientName = b.primaryContact.firstName || '[First Name]';
-      } else if (b.secondaryContact?.email) {
-        // Fallback to specialty_lead if no primary contact is found
-        recipientEmail = b.secondaryContact.email;
-        recipientName = b.secondaryContact.firstName || '[First Name]';
+      // Priority order for main recipient (To:)
+      if (contacts.secondaryOwner?.email) {         // Priority 1: Client Team Lead
+        recipientEmail = contacts.secondaryOwner.email;
+        recipientName = contacts.secondaryOwner.firstName || '[First Name]';
+      } else if (contacts.partnershipsLead?.email) { // Priority 2: Partnerships Lead
+        recipientEmail = contacts.partnershipsLead.email;
+        recipientName = contacts.partnershipsLead.firstName || '[First Name]';
+      } else if (contacts.hubspotOwner?.email) {     // Priority 3: Primary Owner
+        recipientEmail = contacts.hubspotOwner.email;
+        recipientName = contacts.hubspotOwner.firstName || '[First Name]';
+      } else if (contacts.specialtyLead?.email) {    // Priority 4: Specialty Lead
+        recipientEmail = contacts.specialtyLead.email;
+        recipientName = contacts.specialtyLead.firstName || '[First Name]';
       }
       
       const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
 
-      // 2. Build the CC list dynamically for this brand
-      const brandCCs = [];
-      // If the primary contact was the recipient, CC the secondary contact
-      if (b.primaryContact?.email === recipientEmail && b.secondaryContact?.email) {
-        brandCCs.push(b.secondaryContact.email);
-      }
-      // If the secondary contact was the recipient, CC the primary contact
-      if (b.secondaryContact?.email === recipientEmail && b.primaryContact?.email) {
-        brandCCs.push(b.primaryContact.email);
-      }
+      // 2. Build the CC list with ALL OTHER resolved contacts
+      const brandCCs = new Set();
+      Object.values(contacts).forEach(contact => {
+        if (contact?.email && contact.email !== recipientEmail) {
+          brandCCs.add(contact.email);
+        }
+      });
       
       // Combine brand-specific CCs with the standard internal list
-      const finalCCList = dedupeEmails([...brandCCs, ...ccRecipients]).slice(0, 10);
+      const finalCCList = dedupeEmails([...Array.from(brandCCs), ...ccRecipients]).slice(0, 10);
       
       // Extract ALL production data fields - prioritize pd over body fields
       const distributor = pd.distributor || body.distributor || '[Distributor/Studio]';
