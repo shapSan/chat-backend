@@ -2,6 +2,9 @@
 export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 export const maxDuration = 60; // 1 minute for email generation
 
+// Import HubSpot client for fetching associations
+import hubspotAPI from '../client/hubspot-client.js';
+
 // ---------- CORS ----------
 const ALLOWED = [
   "https://www.selfrun.ai",
@@ -213,6 +216,37 @@ async function resolveHubSpotUsers(brands, onStep = () => {}) {
   }));
 }
 
+// ====== Get the MOST ACTIVE client contact for a brand ======
+async function getMostActiveClientContact(brandId) {
+  try {
+    // Step 1: Get all associated contact IDs from the brand
+    const associations = await hubspotAPI.listAssociations({
+      objectType: hubspotAPI.OBJECTS.BRANDS,
+      objectId: brandId,
+      toObjectType: hubspotAPI.OBJECTS.CONTACTS
+    });
+
+    const contactIds = associations.results.map(a => a.id);
+    if (contactIds.length === 0) return null;
+
+    // Step 2: Batch read the details for those contacts
+    const contactsResponse = await hubspotAPI.batchReadContacts(contactIds);
+
+    // Step 3: Filter out internal emails to get only client contacts
+    const clientContacts = contactsResponse.results.filter(contact => {
+      const email = contact.properties.email;
+      return email && !email.toLowerCase().includes('@hollywoodbranded.com');
+    });
+    
+    // Step 4: Return the FIRST client contact found (HubSpot typically orders by activity/relevance)
+    // If we need more sophisticated logic later, we can sort by last activity date
+    return clientContacts.length > 0 ? clientContacts[0] : null;
+  } catch (error) {
+    console.error(`Error fetching client contact for brand ${brandId}:`, error);
+    return null;
+  }
+}
+
 // ---------- helpers ----------
 const esc = (s="") => String(s).replace(/[<&>]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const isHttp = u => typeof u==='string' && /^https?:\/\//i.test(u) && u.length < 1000;
@@ -321,6 +355,7 @@ function sanitizeBrand(b={}) {
   });
 
   return {
+    id: b.id || b.brandId || null,  // Preserve the brand ID for fetching associations
     name: b.name || b.brand || '',
     whyItWorks: trim(b.whyItWorks),
     hbInsights: trim(b.hbInsights),
@@ -752,33 +787,46 @@ export default async function handler(req, res) {
       const isInSystem = b.isInSystem || false;
       console.log('[pushDraft] Brand', b.name, 'isInSystem:', isInSystem);
       
-      // 1. Determine the recipient's name and email using priority order
+      // SIMPLIFIED VERSION: Get the most active client + internal team
+      // Note: b already has internal team contacts from resolveHubSpotUsers
+      const internalTeam = b.contacts || {};
+      
+      // Fetch THE MOST ACTIVE client contact if brand has an ID
+      let clientContact = null;
+      if (b.id) {
+        clientContact = await getMostActiveClientContact(b.id);
+        if (clientContact) {
+          console.log(`[pushDraft] Found client contact for ${b.name}: ${clientContact.properties.firstname} <${clientContact.properties.email}>`);
+        } else {
+          console.log(`[pushDraft] No client contacts found for brand ${b.name}`);
+        }
+      } else {
+        console.log(`[pushDraft] No brand ID for ${b.name}, skipping client contact lookup`);
+      }
+      
+      // 1. Determine the Primary Recipient (To:)
       let recipientEmail = null;
       let recipientName = '[First Name]';
-      const contacts = b.contacts || {};
       
-      // Priority order for main recipient (To:)
-      if (contacts.secondaryOwner?.email) {         // Priority 1: Client Team Lead
-        recipientEmail = contacts.secondaryOwner.email;
-        recipientName = contacts.secondaryOwner.firstName || '[First Name]';
-      } else if (contacts.partnershipsLead?.email) { // Priority 2: Partnerships Lead
-        recipientEmail = contacts.partnershipsLead.email;
-        recipientName = contacts.partnershipsLead.firstName || '[First Name]';
-      } else if (contacts.hubspotOwner?.email) {     // Priority 3: Primary Owner
-        recipientEmail = contacts.hubspotOwner.email;
-        recipientName = contacts.hubspotOwner.firstName || '[First Name]';
-      } else if (contacts.specialtyLead?.email) {    // Priority 4: Specialty Lead
-        recipientEmail = contacts.specialtyLead.email;
-        recipientName = contacts.specialtyLead.firstName || '[First Name]';
+      // Use the client contact if found, otherwise use default
+      if (clientContact) {
+        recipientEmail = clientContact.properties.email;
+        recipientName = clientContact.properties.firstname || '[First Name]';
+        console.log(`[pushDraft] Using client as primary recipient: ${recipientName}`);
+      } else {
+        // No client found, use default recipient
+        console.log(`[pushDraft] No client contact, using default recipient`);
       }
       
       const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
 
-      // 2. Build the CC list with ALL OTHER resolved contacts
+      // 2. Build the CC list - just internal HB team members
       const brandCCs = new Set();
-      Object.values(contacts).forEach(contact => {
-        if (contact?.email && contact.email !== recipientEmail) {
-          brandCCs.add(contact.email);
+      
+      // Add ALL resolved internal HB team members to CC
+      Object.values(internalTeam).forEach(member => {
+        if (member?.email) {
+          brandCCs.add(member.email);
         }
       });
       
@@ -787,10 +835,12 @@ export default async function handler(req, res) {
       
       // --- ADD THIS FINAL DIAGNOSTIC LOG ---
       console.log(`[pushDraft TRACE 5] Recipient assignment for brand "${b.name}":`);
-      console.log(`  - All Resolved Contacts:`, b.contacts);
-      console.log(`  - Primary Recipient (To): ${recipientEmail}`);
-      console.log(`  - Brand-Specific Contacts (Cc):`, Array.from(brandCCs));
-      console.log(`  - Final CC List (Internal + Brand):`, finalCCList);
+      console.log(`  - Internal HB Team:`, internalTeam);
+      console.log(`  - Client Contact Found:`, clientContact ? 'YES' : 'NO');
+      console.log(`  - Primary Recipient (To): ${recipientEmail || 'default'}`);
+      console.log(`  - Greeting Name: "${recipientName}"`);
+      console.log(`  - CC List (HB Team):`, Array.from(brandCCs));
+      console.log(`  - Final CC List (HB + Always-CC):`, finalCCList);
       
       // Extract ALL production data fields - prioritize pd over body fields
       const distributor = pd.distributor || body.distributor || '[Distributor/Studio]';
