@@ -773,6 +773,35 @@ const hubspotAPI = {
       console.error('[DEBUG testConnection] Error:', error.message);
       return false;
     }
+  },
+
+  async listAssociations({ objectType, objectId, toObjectType }) {
+    await hubspotLimiter.acquire();
+    const url = `${this.baseUrl}/crm/v3/objects/${objectType}/${objectId}/associations/${toObjectType}`;
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${hubspotApiKey}` }
+    });
+    if (!response.ok) return { results: [] };
+    return response.json();
+  },
+
+  async batchReadContacts(contactIds) {
+    if (!contactIds || contactIds.length === 0) return { results: [] };
+    await hubspotLimiter.acquire();
+    const url = `${this.baseUrl}/crm/v3/objects/contacts/batch/read`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${hubspotApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        inputs: contactIds.map(id => ({ id })),
+        properties: ['email', 'firstname', 'lastname', 'jobtitle']
+      })
+    });
+    if (!response.ok) return { results: [] };
+    return response.json();
   }
 };
 
