@@ -112,9 +112,10 @@ async function sendSimpleMail({ subject, htmlBody, to, senderEmail }) {
 
 // ---------- HubSpot User Resolution ----------
 // secondary_owner and specialty_lead are USER IDs (internal team members)
-async function resolveHubSpotUsers(brands) {
+async function resolveHubSpotUsers(brands, onStep = () => {}) {
   if (!HUBSPOT_API_KEY) {
     console.log('[pushDraft TRACE 3.1] HubSpot API key not configured. Skipping resolution.');
+    onStep({ type: 'info', text: 'HubSpot API not configured - using default recipients.' });
     return brands;
   }
   
@@ -128,10 +129,20 @@ async function resolveHubSpotUsers(brands) {
   // --- TRACE 3.2: Log unique IDs found ---
   console.log('[pushDraft TRACE 3.2] Found unique HubSpot User IDs to resolve:', Array.from(userIds));
   
-  if (userIds.size === 0) return brands;
+  if (userIds.size === 0) {
+    onStep({ type: 'info', text: 'No HubSpot contacts to resolve - using default recipients.' });
+    console.log('[pushDraft] No HubSpot user IDs found, will use default recipients');
+    return brands;
+  }
+  
+  onStep({ type: 'process', text: `Resolving ${userIds.size} HubSpot contact(s)...` });
+  console.log(`[pushDraft] Resolving ${userIds.size} unique HubSpot user IDs`);
   
   // Fetch User details from HubSpot
   const userMap = {};
+  let successCount = 0;
+  let failCount = 0;
+  
   for (const userId of userIds) {
     try {
       // --- TRACE 3.3: Log each API call ---
@@ -158,20 +169,32 @@ async function resolveHubSpotUsers(brands) {
           email: userData.email,
           firstName: firstName
         };
+        successCount++;
         // --- TRACE 3.4: Log successful resolution ---
         console.log(`[pushDraft TRACE 3.4] SUCCESS - Resolved ${userId} to: ${firstName} <${userData.email}>`);
       } else {
+        failCount++;
         // --- TRACE 3.5: Log failed resolution ---
         console.error(`[pushDraft TRACE 3.5] FAILED to fetch user ${userId}. Status: ${response.status}`);
+        onStep({ type: 'warning', text: `Could not resolve contact ID ${userId}.` });
       }
     } catch (e) {
+      failCount++;
       // --- TRACE 3.6: Log errors ---
       console.error(`[pushDraft TRACE 3.6] ERROR resolving user ${userId}:`, e.message);
+      onStep({ type: 'error', text: `API error resolving contact ID ${userId}.` });
     }
   }
   
   // --- TRACE 3.7: Log final user map ---
   console.log('[pushDraft TRACE 3.7] Final resolved user map:', userMap);
+  
+  // Report final status
+  if (successCount > 0) {
+    onStep({ type: 'result', text: `✓ Resolved ${successCount} of ${userIds.size} contacts successfully.` });
+  } else {
+    onStep({ type: 'warning', text: 'Could not resolve any HubSpot contacts - using defaults.' });
+  }
   
   // Enhance brands with resolved user info
   return brands.map(b => ({
@@ -691,8 +714,16 @@ export default async function handler(req, res) {
     specialtyLeadId: b.specialtyLeadId 
   })), null, 2));
   
-  // Resolve HubSpot user IDs to user information
-  const brandsWithContacts = await resolveHubSpotUsers(brands);
+  // Resolve HubSpot user IDs to user information with progress reporting
+  const progressSteps = [];
+  const brandsWithContacts = await resolveHubSpotUsers(brands, (step) => {
+    console.log(`[MCP PROGRESS] ${step.text}`);
+    progressSteps.push(step);
+    // If a function like `progressPush` is available from body.progressCallback, use it here
+    if (typeof body.progressCallback === 'function') {
+      body.progressCallback(step);
+    }
+  });
   console.log('[pushDraft] Resolved users for', brandsWithContacts.filter(b => b.primaryContact).length, 'brands');
 
     // --- ALWAYS SPLIT: one draft per brand ---
