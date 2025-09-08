@@ -340,8 +340,11 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
   
   // BUILD THE EXACT TEMPLATE
   const buildTemplate = () => {
-    // USE THE BRAND-SPECIFIC DATA
-    const integrationIdea = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '[Scene/placement opportunities from one-sheet]';
+    // Dynamically get the Integration Idea from the brand object
+    const onScreenIntegrationText = brand.integrationIdeas?.length 
+      ? brand.integrationIdeas[0] 
+      : '[Scene/placement opportunities from one-sheet]';
+    
     const whyItWorks = brand.whyItWorks || `is a ${vibe.toLowerCase()} ${productionTypeText.toLowerCase()} that aligns with your brand`;
     
     if (isInSystem) {
@@ -352,7 +355,7 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
       let amplification = '[Studio/global visibility + PR, retail, influencer activations]';
       
       if (brand.integrationIdeas?.length) {
-        integrationOps = brand.integrationIdeas[0];
+        integrationOps = onScreenIntegrationText;
         if (brand.integrationIdeas.length > 1) extensions = brand.integrationIdeas[1];
         if (brand.integrationIdeas.length > 2) amplification = brand.integrationIdeas[2];
       } else if (vibe) {
@@ -407,13 +410,13 @@ Stacy`.trim();
         quickDescription = '[quick description from one-sheet - e.g., "is a globally recognized franchise with multi-generational appeal"]';
       }
       
-      // Use brand's actual integration ideas or smart defaults based on genre
-      let onScreenIntegration = '[Scene/placement opportunities from one-sheet]';
+      // Use brand's actual integration ideas with onScreenIntegrationText
+      let onScreenIntegration = onScreenIntegrationText;
       let contentExtensions = '[Capsule collection, co-promo, social/behind-the-scenes content]';
       let amplificationText = '[PR hooks, retail tie-ins, influencer/media activations]';
       
       if (brand.integrationIdeas?.length) {
-        onScreenIntegration = brand.integrationIdeas[0];
+        // onScreenIntegration already set to onScreenIntegrationText above
         if (brand.integrationIdeas.length > 1) contentExtensions = brand.integrationIdeas[1];
         if (brand.integrationIdeas.length > 2) amplificationText = brand.integrationIdeas[2];
       } else if (vibe) {
@@ -683,26 +686,35 @@ export default async function handler(req, res) {
       const isInSystem = b.isInSystem || false;
       console.log('[pushDraft] Brand', b.name, 'isInSystem:', isInSystem);
       
-      // Determine the primary recipient - prioritize primaryContact (secondary_owner), then secondaryContact (specialty_lead)
-      let recipientName = '[First Name]';
+      // 1. Determine the recipient's name and email for this specific brand
       let recipientEmail = null;
+      let recipientName = '[First Name]';
       
+      // Prioritize the secondary_owner ("Client Team Lead") as the main recipient
       if (b.primaryContact?.email) {
         recipientEmail = b.primaryContact.email;
         recipientName = b.primaryContact.firstName || '[First Name]';
-        console.log('[pushDraft] Using primaryContact (secondary_owner) as recipient:', recipientName, recipientEmail);
       } else if (b.secondaryContact?.email) {
+        // Fallback to specialty_lead if no primary contact is found
         recipientEmail = b.secondaryContact.email;
         recipientName = b.secondaryContact.firstName || '[First Name]';
-        console.log('[pushDraft] Using secondaryContact (specialty_lead) as recipient:', recipientName, recipientEmail);
-      } else {
-        console.log('[pushDraft] No HubSpot contacts found, using defaults');
       }
       
-      console.log('[pushDraft] Final recipient name:', recipientName);
-      console.log('[pushDraft] Final recipient email:', recipientEmail);
-      console.log('[pushDraft] Primary contact (secondary_owner):', b.primaryContact);
-      console.log('[pushDraft] Secondary contact (specialty_lead):', b.secondaryContact);
+      const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
+
+      // 2. Build the CC list dynamically for this brand
+      const brandCCs = [];
+      // If the primary contact was the recipient, CC the secondary contact
+      if (b.primaryContact?.email === recipientEmail && b.secondaryContact?.email) {
+        brandCCs.push(b.secondaryContact.email);
+      }
+      // If the secondary contact was the recipient, CC the primary contact
+      if (b.secondaryContact?.email === recipientEmail && b.primaryContact?.email) {
+        brandCCs.push(b.primaryContact.email);
+      }
+      
+      // Combine brand-specific CCs with the standard internal list
+      const finalCCList = dedupeEmails([...brandCCs, ...ccRecipients]).slice(0, 10);
       
       // Extract ALL production data fields - prioritize pd over body fields
       const distributor = pd.distributor || body.distributor || '[Distributor/Studio]';
@@ -817,28 +829,8 @@ export default async function handler(req, res) {
         // Use rotating subject line format based on isInSystem status
         const subject = getRotatingSubject(projectName, b.name || 'Brand', isInSystem);
         console.log('[pushDraft] Using subject:', subject, 'isInSystem:', isInSystem);
-        
-        // Use the resolved email if available, otherwise use default
-        const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
+
         console.log('[pushDraft] TO recipients:', draftRecipients);
-        
-        // Build a dynamic CC list for this specific brand
-        const brandCCs = [];
-        // If primaryContact was the recipient, add secondaryContact to CC
-        if (b.primaryContact?.email === recipientEmail && b.secondaryContact?.email) {
-          brandCCs.push(b.secondaryContact.email);
-          console.log('[pushDraft] Adding secondaryContact to CC:', b.secondaryContact.email);
-        }
-        // If secondaryContact was the recipient, add primaryContact to CC
-        if (b.secondaryContact?.email === recipientEmail && b.primaryContact?.email) {
-          brandCCs.push(b.primaryContact.email);
-          console.log('[pushDraft] Adding primaryContact to CC:', b.primaryContact.email);
-        }
-        
-        // Merge with always-CC list and dedupe
-        const finalCCList = dedupeEmails([...brandCCs, ...ccRecipients]).slice(0, 10);
-        console.log('[pushDraft] Brand CCs:', brandCCs);
-        console.log('[pushDraft] Always CC:', ALWAYS_CC);
         console.log('[pushDraft] Final CC list:', finalCCList);
         
         const draft = await createDraftInMailbox({
