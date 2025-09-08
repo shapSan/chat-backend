@@ -1,18 +1,17 @@
 import { put } from "@vercel/blob";
 
-export const config = { api: { bodyParser: false } };
+export const config = { 
+  api: { 
+    bodyParser: false,
+    sizeLimit: '10mb' // Increase size limit for video uploads
+  } 
+};
 
 export default async function handler(req, res) {
-  // CORS - Allow all origins for now (you can restrict later)
-  const origin = req.headers.origin;
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  } else {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  }
+  // CORS (allow from your site)
+  res.setHeader("Access-Control-Allow-Origin", "*"); // Allow all origins
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-vercel-filename");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
 
   // Preflight
   if (req.method === "OPTIONS") {
@@ -36,6 +35,11 @@ export default async function handler(req, res) {
     return res.status(200).json({ success: true, url: permanentUrl });
   } catch (error) {
     console.error("Error uploading to Vercel Blob:", error);
-    return res.status(500).json({ error: "Failed to upload file." });
+    // Return more detailed error for debugging
+    return res.status(500).json({ 
+      error: "Failed to upload file.",
+      details: error.message || error.toString(),
+      filename: filename
+    });
   }
 }
