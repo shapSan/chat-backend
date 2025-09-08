@@ -882,6 +882,8 @@ export default async function handler(req, res) {
         }
 
         // optionally notify the watchers that a draft exists (separate email)
+        // COMMENTED OUT: Notification emails disabled temporarily
+        /*
         if (notifyWatchers) {
           try {
             const linkHtml = draft?.webLink ? `<p><a href="${draft.webLink}" target="_blank" rel="noopener">Open draft</a></p>` : '';
@@ -898,6 +900,7 @@ export default async function handler(req, res) {
             console.error('[pushDraft] notifyWatchers failed:', e);
           }
         }
+        */
 
         results.push({ brand: b.name || "Brand", subject, webLink: draft.webLink || null, sent });
       } catch (e) {
