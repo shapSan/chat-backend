@@ -116,8 +116,10 @@ const hubspotAPI = {
         'target_geography',
         'hs_lastmodifieddate',
         'one_sheet_link',  // Brand one-sheet document
-        'secondary_owner',  // User ID for later resolution
-        'specialty_lead'    // User ID for later resolution
+        'secondary_owner',  // Client Team Lead
+        'specialty_lead',   // Specialty Lead
+        'partnerships_lead', // Partnerships Lead - NEW
+        'hubspot_owner_id'  // Primary Owner - NEW
       ];
       
       let searchBody = {
