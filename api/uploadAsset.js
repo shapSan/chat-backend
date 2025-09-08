@@ -3,10 +3,16 @@ import { put } from "@vercel/blob";
 export const config = { api: { bodyParser: false } };
 
 export default async function handler(req, res) {
-  // CORS (allow from your site)
-  res.setHeader("Access-Control-Allow-Origin", "https://www.selfrun.ai"); // <-- change if needed
+  // CORS - Allow all origins for now (you can restrict later)
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-vercel-filename");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
 
   // Preflight
   if (req.method === "OPTIONS") {
