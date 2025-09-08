@@ -102,23 +102,26 @@ const hubspotAPI = {
     }
     
     try {
+      // Default properties to request - ALWAYS include owner IDs
+      const defaultProperties = [
+        'id',
+        'brand_name',
+        'client_status',
+        'client_type',
+        'main_category',
+        'product_sub_category__multi_',
+        'partnership_count',
+        'deals_count',
+        'target_gender_',
+        'target_geography',
+        'hs_lastmodifieddate',
+        'one_sheet_link',  // Brand one-sheet document
+        'secondary_owner',  // User ID for later resolution
+        'specialty_lead'    // User ID for later resolution
+      ];
+      
       let searchBody = {
-        properties: [
-          'id',
-          'brand_name',
-          'client_status',
-          'client_type',
-          'main_category',
-          'product_sub_category__multi_',
-          'partnership_count',
-          'deals_count',
-          'target_gender_',
-          'target_geography',
-          'hs_lastmodifieddate',
-          'one_sheet_link',  // Brand one-sheet document
-          'secondary_owner',  // User ID for later resolution
-          'specialty_lead'    // User ID for later resolution
-        ],
+        properties: filters.properties || defaultProperties,  // Use provided properties or defaults
         limit: filters.limit || 50,
         sorts: [{
           propertyName: 'partnership_count',
