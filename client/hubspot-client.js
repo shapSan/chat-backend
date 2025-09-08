@@ -103,6 +103,7 @@ const hubspotAPI = {
     
     try {
       // Default properties to request - ALWAYS include owner IDs
+      // Try multiple variations of owner field names to handle HubSpot inconsistencies
       const defaultProperties = [
         'id',
         'brand_name',
@@ -116,10 +117,20 @@ const hubspotAPI = {
         'target_geography',
         'hs_lastmodifieddate',
         'one_sheet_link',  // Brand one-sheet document
+        // Try multiple owner field variations
         'secondary_owner',  // Client Team Lead
+        'secondaryowner',   // Alternative naming
+        'secondary_owner_id',
         'specialty_lead',   // Specialty Lead
-        'partnerships_lead', // Partnerships Lead - NEW
-        'hubspot_owner_id'  // Primary Owner - NEW
+        'specialtylead',    // Alternative naming
+        'specialty_lead_id',
+        'partnerships_lead', // Partnerships Lead
+        'partnershipslead',  // Alternative naming
+        'partnerships_lead_id',
+        'hubspot_owner_id',  // Primary Owner
+        'hubspot_owner',
+        'hs_owner_id',
+        'owner'  // Generic owner field
       ];
       
       let searchBody = {
