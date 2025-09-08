@@ -785,6 +785,13 @@ export default async function handler(req, res) {
       // Combine brand-specific CCs with the standard internal list
       const finalCCList = dedupeEmails([...Array.from(brandCCs), ...ccRecipients]).slice(0, 10);
       
+      // --- ADD THIS FINAL DIAGNOSTIC LOG ---
+      console.log(`[pushDraft TRACE 5] Recipient assignment for brand "${b.name}":`);
+      console.log(`  - All Resolved Contacts:`, b.contacts);
+      console.log(`  - Primary Recipient (To): ${recipientEmail}`);
+      console.log(`  - Brand-Specific Contacts (Cc):`, Array.from(brandCCs));
+      console.log(`  - Final CC List (Internal + Brand):`, finalCCList);
+      
       // Extract ALL production data fields - prioritize pd over body fields
       const distributor = pd.distributor || body.distributor || '[Distributor/Studio]';
       const releaseDate = pd.releaseDate ? 
