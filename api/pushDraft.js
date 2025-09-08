@@ -321,7 +321,7 @@ function quickLinksHtml(brand){
 }
 
 // Professional email writer with natural resource mention
-async function generateAiBody({ project, vibe, cast, location, notes, brand, isInSystem, recipientName, distributor, releaseDate, productionStartDate, productionType, oneSheetLink }) {
+async function generateAiBody({ project, vibe, cast, location, notes, brand, isInSystem, recipientName, distributor, releaseDate, productionStartDate, productionType, synopsis, oneSheetLink }) {
   const mention = assetsNote(brand);
   
   // Clean the project name
@@ -336,12 +336,13 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
   const productionStartText = productionStartDate || '[Production Start Date]';
   const productionTypeText = productionType || '[Production Type]';
   const locationText = location || '[Location]';
+  const castText = cast || '[Cast]';
   
   // BUILD THE EXACT TEMPLATE
   const buildTemplate = () => {
-    // Use brand's content or generate from integrationIdeas
+    // USE THE BRAND-SPECIFIC DATA
     const integrationIdea = brand.integrationIdeas?.length ? brand.integrationIdeas[0] : '[Scene/placement opportunities from one-sheet]';
-    const whyItWorks = brand.whyItWorks || 'is a globally recognized franchise with multi-generational appeal';
+    const whyItWorks = brand.whyItWorks || `is a ${vibe.toLowerCase()} ${productionTypeText.toLowerCase()} that aligns with your brand`;
     
     if (isInSystem) {
       // VERSION 2 — BRAND ALREADY IN SYSTEM [HB]BOX SYSTEM
@@ -611,12 +612,28 @@ export default async function handler(req, res) {
     console.log('[pushDraft TRACE 5] Raw `brands` array received from frontend:', JSON.stringify(brandsRaw, null, 2));
     console.log('[pushDraft] brands:', brandsRaw.length);
 
+    // Extract production data from the payload
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
     const projectName = cleanProjectName(body.projectName ?? pd.projectName ?? "Project");
     const cast = body.cast ?? pd.cast ?? "";
     const location = body.location ?? pd.location ?? "";
     const vibe = body.vibe ?? pd.vibe ?? "";
     const notes = body.notes ?? pd.notes ?? "";
+    const synopsis = pd.synopsis ?? "";
+    
+    // Log received production data for debugging
+    console.log('[pushDraft] Received production data:', pd);
+    console.log('[pushDraft] Extracted fields:', {
+        projectName,
+        cast,
+        location,
+        vibe,
+        synopsis,
+        distributor: pd.distributor,
+        releaseDate: pd.releaseDate,
+        productionStartDate: pd.productionStartDate,
+        productionType: pd.productionType
+    });
 
     const toRecipients = Array.isArray(body.to) && body.to.length ? body.to.slice(0, 10) : ["shap@hollywoodbranded.com"];
 
@@ -642,7 +659,10 @@ export default async function handler(req, res) {
         secondary_owner: b.secondary_owner,
         secondaryOwnerId: b.secondaryOwnerId,
         specialty_lead: b.specialty_lead,
-        specialtyLeadId: b.specialtyLeadId
+        specialtyLeadId: b.specialtyLeadId,
+        isInSystem: b.isInSystem,
+        hubspotUrl: b.hubspotUrl,
+        oneSheetLink: b.oneSheetLink || b.one_sheet_link
       });
     });
     
@@ -684,29 +704,35 @@ export default async function handler(req, res) {
       console.log('[pushDraft] Primary contact (secondary_owner):', b.primaryContact);
       console.log('[pushDraft] Secondary contact (specialty_lead):', b.secondaryContact);
       
-      // Extract ALL production data fields
+      // Extract ALL production data fields - prioritize pd over body fields
       const distributor = pd.distributor || body.distributor || '[Distributor/Studio]';
-      const releaseDate = pd.releaseDate || body.releaseDate ? 
-        new Date(pd.releaseDate || body.releaseDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 
+      const releaseDate = pd.releaseDate ? 
+        new Date(pd.releaseDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 
         '[Release Date]';
-      const productionStartDate = pd.productionStartDate || body.productionStartDate ? 
-        new Date(pd.productionStartDate || body.productionStartDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 
+      const productionStartDate = pd.productionStartDate ? 
+        new Date(pd.productionStartDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 
         '[Production Start Date]';
       const productionType = pd.productionType || body.productionType || '[Production Type]';
-      const productionLocation = pd.location || body.location || location || '[Location]';
+      const productionLocation = location || pd.location || '[Location]';
+      const productionCast = cast || pd.cast || '[Cast]';
+      const productionVibe = vibe || pd.vibe || '[Vibe]';
+      const productionSynopsis = synopsis || pd.synopsis || '';
       
-      console.log('[pushDraft] Production Data:', {
+      console.log('[pushDraft] Production Data for email:', {
         distributor,
         releaseDate,
         productionStartDate,
         productionType,
-        productionLocation
+        productionLocation,
+        productionCast,
+        productionVibe,
+        synopsis: productionSynopsis ? productionSynopsis.substring(0, 100) + '...' : 'none'
       });
       
       const bodyText = await generateAiBody({ 
         project: projectName, 
-        vibe, 
-        cast, 
+        vibe: productionVibe, 
+        cast: productionCast, 
         location: productionLocation, 
         notes, 
         brand: b,
@@ -716,6 +742,7 @@ export default async function handler(req, res) {
         releaseDate, // Pass release date
         productionStartDate, // Pass production start date
         productionType, // Pass production type
+        synopsis: productionSynopsis, // Pass synopsis
         oneSheetLink: b.oneSheetLink || b.one_sheet_link // Pass one-sheet link
       });
 
@@ -795,17 +822,17 @@ export default async function handler(req, res) {
         const draftRecipients = recipientEmail ? [recipientEmail] : toRecipients;
         console.log('[pushDraft] TO recipients:', draftRecipients);
         
-        // Build CC list with resolved contacts - include BOTH contacts if they exist and aren't already in TO
+        // Build a dynamic CC list for this specific brand
         const brandCCs = [];
-        
-        // Add the other contact to CC if it's not the primary recipient
-        if (b.primaryContact?.email && !draftRecipients.includes(b.primaryContact.email)) {
-          brandCCs.push(b.primaryContact.email);
-          console.log('[pushDraft] Adding primaryContact to CC:', b.primaryContact.email);
-        }
-        if (b.secondaryContact?.email && !draftRecipients.includes(b.secondaryContact.email)) {
+        // If primaryContact was the recipient, add secondaryContact to CC
+        if (b.primaryContact?.email === recipientEmail && b.secondaryContact?.email) {
           brandCCs.push(b.secondaryContact.email);
           console.log('[pushDraft] Adding secondaryContact to CC:', b.secondaryContact.email);
+        }
+        // If secondaryContact was the recipient, add primaryContact to CC
+        if (b.secondaryContact?.email === recipientEmail && b.primaryContact?.email) {
+          brandCCs.push(b.primaryContact.email);
+          console.log('[pushDraft] Adding primaryContact to CC:', b.primaryContact.email);
         }
         
         // Merge with always-CC list and dedupe
