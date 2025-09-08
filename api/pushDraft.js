@@ -114,7 +114,7 @@ async function sendSimpleMail({ subject, htmlBody, to, senderEmail }) {
 // secondary_owner and specialty_lead are USER IDs (internal team members)
 async function resolveHubSpotUsers(brands) {
   if (!HUBSPOT_API_KEY) {
-    console.log('[resolveHubSpotUsers] No HubSpot API key, skipping resolution');
+    console.log('[pushDraft TRACE 3.1] HubSpot API key not configured. Skipping resolution.');
     return brands;
   }
   
@@ -125,13 +125,18 @@ async function resolveHubSpotUsers(brands) {
     if (b.specialtyLeadId) userIds.add(b.specialtyLeadId);
   });
   
-  console.log('[resolveHubSpotUsers] Found', userIds.size, 'unique user IDs to resolve');
+  // --- TRACE 3.2: Log unique IDs found ---
+  console.log('[pushDraft TRACE 3.2] Found unique HubSpot User IDs to resolve:', Array.from(userIds));
+  
   if (userIds.size === 0) return brands;
   
   // Fetch User details from HubSpot
   const userMap = {};
   for (const userId of userIds) {
     try {
+      // --- TRACE 3.3: Log each API call ---
+      console.log(`[pushDraft TRACE 3.3] Querying HubSpot for User ID: ${userId}`);
+      
       const response = await fetch(
         `${HUBSPOT_BASE_URL}/settings/v3/users/${userId}`,
         {
@@ -153,14 +158,20 @@ async function resolveHubSpotUsers(brands) {
           email: userData.email,
           firstName: firstName
         };
-        console.log(`[resolveHubSpotUsers] Resolved user ${userId}: ${firstName} <${userData.email}>`);
+        // --- TRACE 3.4: Log successful resolution ---
+        console.log(`[pushDraft TRACE 3.4] SUCCESS - Resolved ${userId} to: ${firstName} <${userData.email}>`);
       } else {
-        console.log(`[resolveHubSpotUsers] Failed to fetch user ${userId}: ${response.status}`);
+        // --- TRACE 3.5: Log failed resolution ---
+        console.error(`[pushDraft TRACE 3.5] FAILED to fetch user ${userId}. Status: ${response.status}`);
       }
     } catch (e) {
-      console.log(`[resolveHubSpotUsers] Error resolving user ${userId}:`, e.message);
+      // --- TRACE 3.6: Log errors ---
+      console.error(`[pushDraft TRACE 3.6] ERROR resolving user ${userId}:`, e.message);
     }
   }
+  
+  // --- TRACE 3.7: Log final user map ---
+  console.log('[pushDraft TRACE 3.7] Final resolved user map:', userMap);
   
   // Enhance brands with resolved user info
   return brands.map(b => ({
@@ -611,6 +622,8 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body || {};
+    // --- TRACE 1: Log incoming payload ---
+    console.log('[pushDraft TRACE 1] Received request body:', JSON.stringify(body, null, 2));
     const brandsRaw = Array.isArray(body.brands) ? body.brands : [];
     console.log('[pushDraft TRACE 5] Raw `brands` array received from frontend:', JSON.stringify(brandsRaw, null, 2));
     console.log('[pushDraft] brands:', brandsRaw.length);
@@ -670,6 +683,13 @@ export default async function handler(req, res) {
     });
     
     const brands = brandsRaw.map(sanitizeBrand).slice(0, 10); // safety cap
+  
+  // --- TRACE 2: Log brands being passed to HubSpot resolver ---
+  console.log('[pushDraft TRACE 2] Brands prepared for HubSpot resolution:', JSON.stringify(brands.map(b => ({ 
+    name: b.name, 
+    secondaryOwnerId: b.secondaryOwnerId, 
+    specialtyLeadId: b.specialtyLeadId 
+  })), null, 2));
   
   // Resolve HubSpot user IDs to user information
   const brandsWithContacts = await resolveHubSpotUsers(brands);
@@ -740,6 +760,15 @@ export default async function handler(req, res) {
         productionVibe,
         synopsis: productionSynopsis ? productionSynopsis.substring(0, 100) + '...' : 'none'
       });
+      
+      // --- TRACE 4: Log final recipient lists ---
+      console.log(`[pushDraft TRACE 4] Preparing draft for brand "${b.name}"`);
+      console.log(`  - TO: ${JSON.stringify(draftRecipients)}`);
+      console.log(`  - CC: ${JSON.stringify(finalCCList)}`);
+      console.log(`  - GREETING NAME: "${recipientName}"`);
+      console.log(`  - IS IN SYSTEM: ${isInSystem}`);
+      console.log(`  - PRIMARY CONTACT: ${JSON.stringify(b.primaryContact)}`);
+      console.log(`  - SECONDARY CONTACT: ${JSON.stringify(b.secondaryContact)}`);
       
       const bodyText = await generateAiBody({ 
         project: projectName, 
