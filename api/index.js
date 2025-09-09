@@ -126,6 +126,56 @@ export default async function handler(req, res) {
 
 
     /* =========================
+     * REFRESH PARTNERSHIP DATA
+     * ======================= */
+    if (req.body.refreshPartnership === true) {
+      const { projectName, partnershipId } = req.body;
+      
+      if (!projectName && !partnershipId) {
+        return res.status(400).json({ error: 'Project name or partnership ID required' });
+      }
+      
+      try {
+        // Import hubspot client if not already imported
+        const { default: hubspotAPI } = await import('../client/hubspot-client.js');
+        
+        // Force a fresh fetch from HubSpot (bypassing any cache)
+        const freshData = await hubspotAPI.getPartnershipForProject(projectName);
+        
+        if (freshData) {
+          console.log('[refreshPartnership] Fresh data fetched:', {
+            projectName,
+            releaseDate: freshData.release__est__date,
+            startDate: freshData.start_date,
+            shootingEnd: freshData.est__shooting_end_date,
+            productionEnd: freshData.production_end_date,
+            lastModified: freshData.hs_lastmodifieddate
+          });
+          
+          await progressDone(sessionId, runId);
+          return res.status(200).json({
+            success: true,
+            data: freshData,
+            timestamp: new Date().toISOString()
+          });
+        } else {
+          await progressDone(sessionId, runId);
+          return res.status(404).json({ 
+            error: 'Partnership not found',
+            projectName 
+          });
+        }
+      } catch (error) {
+        console.error('[refreshPartnership] Error:', error);
+        await progressDone(sessionId, runId);
+        return res.status(500).json({ 
+          error: 'Failed to refresh partnership data',
+          details: error.message 
+        });
+      }
+    }
+
+    /* =========================
      * GENERATE AUDIO
      * ======================= */
     if (req.body.generateAudio === true) {
