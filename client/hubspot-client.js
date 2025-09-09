@@ -585,9 +585,12 @@ const hubspotAPI = {
             release__est__date: props.release__est__date || null,
             startDate: props.start_date || null,
             start_date: props.start_date || null,
+            productionStartDate: props.start_date || null,
             production_start_date: props.start_date || null,
             est__shooting_end_date: props.est__shooting_end_date || null,  // NEW
+            estimatedShootingEndDate: props.est__shooting_end_date || null, // Alternative naming
             production_end_date: props.production_end_date || null,        // NEW
+            productionEndDate: props.production_end_date || null,          // Alternative naming
             productionType: props.production_type || null,
             production_type: props.production_type || null,
             synopsis: props.synopsis || null,
