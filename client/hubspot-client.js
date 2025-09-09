@@ -461,6 +461,8 @@ const hubspotAPI = {
             'hs_lastmodifieddate',
             'release__est__date',    // Release date
             'start_date',            // Production start date
+            'est__shooting_end_date', // NEW - Estimated shooting end date
+            'production_end_date',   // NEW - Production end date
             'production_type',       // Type of production
             // Add contextual fields for better matching:
             'genre_production',      // Genre of the production
@@ -580,8 +582,12 @@ const hubspotAPI = {
             studio: props.distributor || null,
             releaseDate: props.release__est__date || null,
             release_date: props.release__est__date || null,
+            release__est__date: props.release__est__date || null,
             startDate: props.start_date || null,
+            start_date: props.start_date || null,
             production_start_date: props.start_date || null,
+            est__shooting_end_date: props.est__shooting_end_date || null,  // NEW
+            production_end_date: props.production_end_date || null,        // NEW
             productionType: props.production_type || null,
             production_type: props.production_type || null,
             synopsis: props.synopsis || null,
@@ -590,6 +596,8 @@ const hubspotAPI = {
             brand_name: props.brand_name || null,
             amount: props.amount || null,
             hollywood_branded_fee: props.hollywood_branded_fee || null,
+            hs_lastmodifieddate: props.hs_lastmodifieddate || null,  // Track when data was last modified
+            partnershipId: partnership.id,  // Store the partnership ID for refresh
             // Include new contextual fields
             genre: props.genre_production || null,
             genre_production: props.genre_production || null,
