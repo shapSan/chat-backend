@@ -152,10 +152,22 @@ export default async function handler(req, res) {
             lastModified: freshData.hs_lastmodifieddate
           });
           
+          // Import the normalizePartnership function from core.js
+          const { normalizePartnership } = await import('../lib/core.js');
+          
+          // Normalize the data to ensure all field variations are present
+          const normalizedData = {
+            ...freshData,
+            ...normalizePartnership(freshData),
+            // Ensure the modified date is included with current timestamp
+            hs_lastmodifieddate: freshData.hs_lastmodifieddate || new Date().toISOString(),
+            refreshedAt: new Date().toISOString()
+          };
+          
           await progressDone(sessionId, runId);
           return res.status(200).json({
             success: true,
-            data: freshData,
+            data: normalizedData,
             timestamp: new Date().toISOString()
           });
         } else {
