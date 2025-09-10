@@ -37,6 +37,7 @@ import {
   updateAirtableConversation,
   getCurrentTimeInPDT,
   progKey,
+  normalizePartnership,
 } from '../lib/core.js';
 
 export default async function handler(req, res) {
@@ -62,9 +63,30 @@ export default async function handler(req, res) {
     const { sessionId, runId } = req.query;
     if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
     const key = progKey(sessionId, runId);
-    const s = (await kv.get(key)) || { steps: [], done: false, runId: runId || null };
-    if (runId && s.runId !== runId) return res.status(200).json({ steps: [], done: false, runId });
-    return res.status(200).json(s);
+    const rawData = await kv.get(key);
+    
+    // Handle both old and new data formats
+    let responseData;
+    if (!rawData) {
+      responseData = { steps: [], done: false, runId: runId || null };
+    } else if (Array.isArray(rawData)) {
+      // Old format - plain array
+      responseData = { steps: rawData, done: false, runId: runId || null };
+    } else if (rawData.steps !== undefined) {
+      // New format with steps property
+      responseData = rawData;
+    } else {
+      // Unknown format - wrap it
+      responseData = { steps: [rawData], done: false, runId: runId || null };
+    }
+    
+    // Ensure runId consistency
+    if (runId && responseData.runId !== runId) {
+      return res.status(200).json({ steps: [], done: false, runId });
+    }
+    
+    console.log(`[Progress API] Returning ${responseData.steps?.length || 0} steps for session ${sessionId}, runId ${runId}`);
+    return res.status(200).json(responseData);
   }
 
   if (req.method !== 'POST') {
@@ -393,7 +415,13 @@ export default async function handler(req, res) {
           lastProductionContext,
           knownProjectName,
           runId,
-          (step) => progressPush(sessionId, runId, step)
+          async (step) => {
+            try {
+              await progressPush(sessionId, runId, step);
+            } catch (err) {
+              console.error('[index.js] progressPush error:', err);
+            }
+          }
         );
 
         let aiReply = '';
