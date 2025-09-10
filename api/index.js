@@ -410,7 +410,7 @@ export default async function handler(req, res) {
         
         const claudeResult = await handleClaudeSearch(
           userMessage,
-          projectId,
+          sessionId,  // Pass sessionId, not projectId
           conversationContext,
           lastProductionContext,
           knownProjectName,
