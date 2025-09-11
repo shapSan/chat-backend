@@ -30,8 +30,20 @@ export default async function handler(req, res) {
       }
     }
 
+    // Transform the raw HubSpot data to match what the panel expects
+    const transformedBrands = cached.map(brand => ({
+      id: brand.id || brand,
+      name: brand.properties?.brand_name || brand.name || 'Unknown',
+      category: brand.properties?.main_category || brand.category || 'N/A',
+      tier: brand.properties?.client_status || brand.tier || 'Unknown',
+      score: brand.properties?.partnership_count || brand.score || 0,
+      website: brand.properties?.website || brand.website || '',
+      // Include raw properties for debugging
+      _raw: brand.properties
+    }));
+
     res.status(200).json({
-      brands: Array.isArray(cached) ? cached : [],
+      brands: transformedBrands,
       cacheAge: ts ? Math.round((Date.now() - Number(ts)) / 60000) : null,
       timestamp: ts || null,
     });
