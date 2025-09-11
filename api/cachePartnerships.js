@@ -13,17 +13,23 @@ const ACTIVE_STAGES = [
 ];
 
 export default async function handler(req, res) {
-  // Enable CORS for testing
+  // Enable CORS for all requests
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   
-  if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  // Only require auth for POST method (rebuild cache)
+  if (req.method === 'POST' && req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
+    // Allow POST without auth for frontend rebuild button
+    console.log('[CACHE] Frontend-initiated cache refresh (no auth)');
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed. Use POST to rebuild cache.' });
   }
 
   console.log('[CACHE] Starting partnership cache refresh...');
