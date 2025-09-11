@@ -3,35 +3,43 @@
 import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // Read cached brands + timestamp set by /api/cacheBrands
-    const cachedBrands = (await kv.get('hubspot-brand-cache')) || [];
-    const cacheTimestamp = await kv.get('hubspot-brand-cache-timestamp');
+    // Try multiple possible KV key names to be tolerant
+    const candidates = [
+      'hubspot-brand-cache',
+      'brands-cache',
+      'brand-cache',
+      'hubspot-brands',
+      'brands',
+    ];
+    let cached = [];
+    let ts = null;
 
-    let cacheAgeMinutes = null;
-    if (cacheTimestamp) {
-      cacheAgeMinutes = Math.round((Date.now() - Number(cacheTimestamp)) / 60000);
+    for (const key of candidates) {
+      const val = await kv.get(key);
+      if (Array.isArray(val) && val.length) {
+        cached = val;
+        ts = await kv.get(`${key}-timestamp`);
+        break;
+      }
     }
 
     res.status(200).json({
-      brands: cachedBrands,
-      cacheAge: cacheAgeMinutes,
-      timestamp: cacheTimestamp,
+      brands: Array.isArray(cached) ? cached : [],
+      cacheAge: ts ? Math.round((Date.now() - Number(ts)) / 60000) : null,
+      timestamp: ts || null,
     });
-  } catch (error) {
-    console.error('[GET_BRANDS] Error:', error);
-    res.status(500).json({
-      error: 'Failed to fetch brands',
-      details: error.message,
+  } catch (err) {
+    console.error('[GET_BRANDS] Error:', err);
+    res.status(500).json({ 
+      error: 'Failed to fetch brands', 
+      details: String(err?.message || err) 
     });
   }
 }
