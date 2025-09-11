@@ -57,7 +57,8 @@ export default async function handler(req, res) {
       });
     }
 
-    // Fetch brand pool for matching (500 brands)
+    // Fetch brand pool for matching (425 brands total)
+    // Split into chunks respecting HubSpot's 200 limit
     const brandBuckets = [
       // 150 Active brands
       {
@@ -81,7 +82,7 @@ export default async function handler(req, res) {
         }],
         limit: 75
       },
-      // 275 Pending brands
+      // 200 Pending brands (respecting API limit)
       {
         filterGroups: [{
           filters: [{
@@ -90,7 +91,7 @@ export default async function handler(req, res) {
             value: 'Pending'
           }]
         }],
-        limit: 275
+        limit: 200
       }
     ];
 
