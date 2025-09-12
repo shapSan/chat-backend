@@ -35,27 +35,16 @@ export default async function handler(req, res) {
   console.log('[CACHE] Starting partnership cache refresh...');
   
   try {
-    // Calculate tomorrow's date (current date + 1 day) for filtering
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);  // Set to midnight
-    const tomorrowISO = tomorrow.toISOString().split('T')[0]; // Format: YYYY-MM-DD
-    const tomorrowTimestamp = tomorrow.getTime().toString(); // Timestamp format
+    // Calculate current date for filtering - we want partnerships AFTER today
+    const now = new Date();
+    const currentDateISO = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
     
-    console.log(`[CACHE] Using date filter: > ${tomorrowISO} (timestamp: ${tomorrowTimestamp})`);
+    console.log(`[CACHE] Using filter: dates > ${currentDateISO} (today)`);
     
-    // Fetch active partnerships with proper production stage and date filters
-    // Support pagination to get all matching partnerships
-    let allPartnerships = [];
-    let after = undefined;
-    let pageCount = 0;
-    const maxPages = 10; // Support up to 1000 partnerships since HubSpot shows 322
-    
-    // Use the EXACT filter structure from HubSpot documentation
-    // The issue might be with the date format or the field names
+    // Use exact field names and values from HubSpot
     const filterGroups = [
       {
-        // Group 1: Active production stages AND future start date
+        // Group 1: Active production stages AND future start date (after today)
         filters: [
           {
             propertyName: 'production_stage',
@@ -64,25 +53,31 @@ export default async function handler(req, res) {
           },
           {
             propertyName: 'start_date',
-            operator: 'GT',
-            value: tomorrowISO  // Format: YYYY-MM-DD
+            operator: 'GT',  // Greater than today
+            value: currentDateISO
           }
         ]
       },
       {
-        // Group 2: OR - Future release date
+        // Group 2: OR - Future release date (after today)
         filters: [
           {
             propertyName: 'release__est__date',
-            operator: 'GT',
-            value: tomorrowISO  // Format: YYYY-MM-DD
+            operator: 'GT',  // Greater than today
+            value: currentDateISO
           }
         ]
       }
     ];
     
-    console.log(`[CACHE] Using partnership filters with dates > ${tomorrowISO}`);
-    console.log('[CACHE] Requesting from HubSpot with filterGroups:', JSON.stringify(filterGroups, null, 2));
+    console.log(`[CACHE] Fetching partnerships with production/release dates after ${currentDateISO}`);
+    console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
+    
+    // Support pagination to get all matching partnerships
+    let allPartnerships = [];
+    let after = undefined;
+    let pageCount = 0;
+    const maxPages = 10; // Support up to 1000 partnerships
     
     const partnershipProperties = [
       'partnership_name',
