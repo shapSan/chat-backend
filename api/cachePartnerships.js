@@ -35,25 +35,102 @@ export default async function handler(req, res) {
   console.log('[CACHE] Starting partnership cache refresh...');
   
   try {
-    // Fetch active partnerships - using simpler approach first
-    const partnershipResult = await hubspotAPI.searchProductions({
-      limit: 200,
-      filterGroups: [{
-        filters: [] // Get all for now, we'll filter later
-      }],
-      properties: [
-        'partnership_name',
-        'hs_pipeline_stage',
-        'start_date',
-        'release__est__date',
-        'hs_lastmodifieddate',
-        'genre_production',
-        'production_type',
-        'synopsis'
-      ]
-    });
+    // Calculate tomorrow's date (current date + 1 day) for filtering
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowISO = tomorrow.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+    
+    console.log(`[CACHE] Using date filter: > ${tomorrowISO}`);
+    
+    // Fetch active partnerships with proper production stage and date filters
+    // Support pagination to get all matching partnerships
+    let allPartnerships = [];
+    let after = undefined;
+    let pageCount = 0;
+    const maxPages = 5; // Support up to 500 partnerships
+    
+    const filterGroups = [
+      {
+        // Group 1: Active production stages AND future start date
+        filters: [
+          {
+            propertyName: 'production_stage',
+            operator: 'IN',
+            values: ['Pre-Production', 'Production', 'Development', 'Greenlit']
+          },
+          {
+            propertyName: 'production_start_date',
+            operator: 'GT',
+            value: tomorrowISO
+          }
+        ]
+      },
+      {
+        // Group 2: Future release date (OR with Group 1)
+        filters: [
+          {
+            propertyName: 'release_est_date',
+            operator: 'GT',
+            value: tomorrowISO
+          }
+        ]
+      }
+    ];
+    
+    const partnershipProperties = [
+      'partnership_name',
+      'hs_pipeline_stage',
+      'production_stage',         // Add production_stage to properties
+      'production_start_date',    // Add proper field name
+      'start_date',               // Keep legacy field
+      'release_est_date',         // Proper field name
+      'release__est__date',       // Keep legacy field for compatibility
+      'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
+      'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
+      'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
+      'rating',                   // Generic rating field fallback
+      'hs_lastmodifieddate',
+      'genre_production',
+      'production_type',
+      'synopsis'
+    ];
+    
+    do {
+      try {
+        // Add delay between requests to avoid rate limits
+        if (pageCount > 0) {
+          await new Promise(resolve => setTimeout(resolve, 150));
+        }
+        
+        const searchParams = {
+          limit: 100,
+          filterGroups,
+          properties: partnershipProperties
+        };
+        
+        if (after) {
+          searchParams.after = after;
+        }
+        
+        console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
+        const result = await hubspotAPI.searchProductions(searchParams);
+        
+        if (result.results && result.results.length > 0) {
+          allPartnerships = [...allPartnerships, ...result.results];
+          console.log(`[CACHE] Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
+        }
+        
+        after = result.paging?.next?.after;
+        pageCount++;
+        
+      } catch (pageError) {
+        console.error(`[CACHE] Error fetching partnerships page ${pageCount + 1}:`, pageError);
+        break;
+      }
+    } while (after && pageCount < maxPages);
 
-    const partnerships = partnershipResult.results || [];
+    const partnerships = allPartnerships;
+    console.log(`[CACHE] Total partnerships fetched: ${partnerships.length} in ${pageCount} pages`);
     
     if (partnerships.length === 0) {
       return res.status(200).json({ 
@@ -178,15 +255,37 @@ export default async function handler(req, res) {
       scoredBrands.sort((a, b) => b.score - a.score);
       const topBrands = scoredBrands.slice(0, 30);
       
+      // Get the appropriate rating
+      const getRating = () => {
+        // Check movie rating first
+        if (props.movie_rating && props.movie_rating !== null && props.movie_rating !== '') {
+          return props.movie_rating;
+        }
+        // If no movie rating, check TV rating
+        if (props.tv_ratings && props.tv_ratings !== null && props.tv_ratings !== '') {
+          return props.tv_ratings;
+        }
+        // Check generic rating field as fallback
+        if (props.rating && props.rating !== null && props.rating !== '') {
+          return props.rating;
+        }
+        // If none exist, return TBD
+        return 'TBD';
+      };
+      
       return {
         id: partnership.id,
         name: props.partnership_name || 'Untitled Project',
         genre: props.genre_production || 'General',
-        rating: 'TBD',  // Simplified since these fields might not exist
-        releaseDate: props.release__est__date || props.start_date || null,
-        startDate: props.start_date || null,
+        rating: getRating(),
+        releaseDate: props.release_est_date || props.release__est__date || null,
+        startDate: props.production_start_date || props.start_date || null,
+        productionStage: props.production_stage || '',
+        pipelineStage: props.hs_pipeline_stage || '',
         synopsis: props.synopsis || '',
-        stage: props.hs_pipeline_stage || '',
+        stage: props.production_stage || props.hs_pipeline_stage || '',
+        // Include sub-ratings if available for TV content
+        subRatings: props.sub_ratings_for_tv_content || null,
         matchedBrands: topBrands
       };
     });
