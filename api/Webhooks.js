@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     
     const HUBSPOT_API_KEY = process.env.HUBSPOT_API_KEY;
     const APP_ID = process.env.HUBSPOT_APP_ID;
-    const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://chat-backend-vert.vercel.app/api/brandWebhook';
+    const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://chat-backend-vert.vercel.app/api/Webhooks';
     
     if (!APP_ID) {
       return res.status(400).json({ error: 'HUBSPOT_APP_ID not configured in environment variables' });
