@@ -144,6 +144,12 @@ const hubspotAPI = {
         }]
       };
 
+      // Add pagination support
+      if (filters.after) {
+        searchBody.after = filters.after;
+        console.log('[DEBUG searchBrands] Paginating with after:', filters.after);
+      }
+      
       // Check if explicit filterGroups are provided (from bucket searches)
       if (filters.filterGroups && filters.filterGroups.length > 0) {
         console.log('[DEBUG searchBrands] Using provided filterGroups:', JSON.stringify(filters.filterGroups));
