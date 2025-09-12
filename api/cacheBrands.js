@@ -100,7 +100,41 @@ export default async function handler(req, res) {
               'hs_lastmodifieddate', 
               'one_sheet_link'
             ],
-            // Don't pass filterGroups here - let hubspotAPI.searchBrands apply the default
+            // Explicitly pass filterGroups to ensure correct filtering
+            filterGroups: [
+              {
+                // Group 1: ALL conditions must be met (AND)
+                filters: [
+                  {
+                    propertyName: 'client_status',
+                    operator: 'IN',
+                    values: ['Active', 'Pending (Prospect)']
+                  },
+                  {
+                    propertyName: 'new_product_main_category',
+                    operator: 'HAS_PROPERTY'
+                  },
+                  {
+                    propertyName: 'hubspot_owner_id',
+                    operator: 'HAS_PROPERTY'
+                  }
+                ]
+              },
+              {
+                // Group 2: Partner Agency Client (OR with Group 1)
+                filters: [
+                  {
+                    propertyName: 'relationship_type',
+                    operator: 'EQ',
+                    value: 'Partner Agency Client'
+                  }
+                ]
+              }
+            ],
+            sorts: [{
+              propertyName: 'hs_lastmodifieddate',
+              direction: 'DESCENDING'
+            }]
           };
           
           if (after) {
@@ -111,28 +145,9 @@ export default async function handler(req, res) {
           const result = await hubspotAPI.searchBrands(searchParams);
           
           if (result.results && result.results.length > 0) {
-            // Additional validation: ensure brands match our criteria
-            const validBrands = result.results.filter(brand => {
-              const props = brand.properties;
-              
-              // Check Group 1: Active/Pending with category and owner
-              const matchesGroup1 = 
-                ['Active', 'Pending (Prospect)'].includes(props.client_status) &&
-                props.new_product_main_category !== null && 
-                props.new_product_main_category !== undefined &&
-                props.new_product_main_category !== '' &&
-                props.hubspot_owner_id !== null && 
-                props.hubspot_owner_id !== undefined &&
-                props.hubspot_owner_id !== '';
-              
-              // Check Group 2: Partner Agency Client
-              const matchesGroup2 = props.relationship_type === 'Partner Agency Client';
-              
-              return matchesGroup1 || matchesGroup2;
-            });
-            
-            allBrands = [...allBrands, ...validBrands];
-            console.log(`[CACHE] Fetched ${result.results.length} brands, ${validBrands.length} valid (total valid: ${allBrands.length})`);
+            // No need for additional validation since we're using proper API filters
+            allBrands = [...allBrands, ...result.results];
+            console.log(`[CACHE] Fetched ${result.results.length} brands (total: ${allBrands.length})`);
           }
           
           after = result.paging?.next?.after;
