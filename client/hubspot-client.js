@@ -102,14 +102,16 @@ const hubspotAPI = {
     }
     
     try {
-      // Default properties to request - ALWAYS include owner IDs
-      // Try multiple variations of owner field names to handle HubSpot inconsistencies
+      // Default properties to request - include new filter fields
       const defaultProperties = [
         'id',
         'brand_name',
         'client_status',
         'client_type',
         'main_category',
+        'new_product_main_category',  // NEW: Required for filtering
+        'relationship_type',           // NEW: Required for filtering
+        'partner_agency_id',           // NEW: For partner agency tracking
         'product_sub_category__multi_',
         'partnership_count',
         'deals_count',
@@ -117,7 +119,7 @@ const hubspotAPI = {
         'target_geography',
         'hs_lastmodifieddate',
         'one_sheet_link',  // Brand one-sheet document
-        // Try multiple owner field variations
+        // Owner field variations
         'secondary_owner',  // Client Team Lead
         'secondaryowner',   // Alternative naming
         'secondary_owner_id',
@@ -127,7 +129,7 @@ const hubspotAPI = {
         'partnerships_lead', // Partnerships Lead
         'partnershipslead',  // Alternative naming
         'partnerships_lead_id',
-        'hubspot_owner_id',  // Primary Owner
+        'hubspot_owner_id',  // Primary Owner - REQUIRED for filtering
         'hubspot_owner',
         'hs_owner_id',
         'owner'  // Generic owner field
@@ -222,22 +224,44 @@ const hubspotAPI = {
         }];
         
       } else {
-        // Default: Get low hanging fruit - active brands with high activity
-        searchBody.filterGroups = [{
-          filters: [{
-            propertyName: 'client_status',
-            operator: 'IN',
-            values: ['Active', 'Contract']
-          }, {
-            propertyName: 'partnership_count',
-            operator: 'GTE',
-            value: '5'
-          }]
-        }];
+        // Default: New filter logic for brand cache
+        // Matches if EITHER group is true:
+        // Group 1: Active/Pending with category and owner
+        // Group 2: Partner Agency Client
+        searchBody.filterGroups = [
+          {
+            // Group 1: ALL conditions must be met
+            filters: [
+              {
+                propertyName: 'client_status',
+                operator: 'IN',
+                values: ['Active', 'Pending (Prospect)']
+              },
+              {
+                propertyName: 'new_product_main_category',
+                operator: 'HAS_PROPERTY'
+              },
+              {
+                propertyName: 'hubspot_owner_id',
+                operator: 'HAS_PROPERTY'
+              }
+            ]
+          },
+          {
+            // Group 2: Partner Agency Client
+            filters: [
+              {
+                propertyName: 'relationship_type',
+                operator: 'EQ',
+                value: 'Partner Agency Client'
+              }
+            ]
+          }
+        ];
 
-        // Sort by deals count for commercial opportunities
+        // Sort by last modified to get most recent first
         searchBody.sorts = [{
-          propertyName: 'deals_count',
+          propertyName: 'hs_lastmodifieddate',
           direction: 'DESCENDING'
         }];
       }
