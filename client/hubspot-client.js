@@ -474,10 +474,11 @@ const hubspotAPI = {
           filterGroups: filters.filterGroups || [{
             filters: []
           }],
-          properties: [
+          properties: filters.properties || [
             'partnership_name',      // Primary name field
             'partnership_status',
             'hs_pipeline_stage',
+            'production_stage',      // Production stage (Pre-Production, Production, etc.)
             'synopsis',
             'content_type',
             'distributor',
@@ -489,11 +490,18 @@ const hubspotAPI = {
             'num_associated_contacts',
             'hubspot_owner_id',
             'hs_lastmodifieddate',
-            'release__est__date',    // Release date
-            'start_date',            // Production start date
-            'est__shooting_end_date', // NEW - Estimated shooting end date
-            'production_end_date',   // NEW - Production end date
+            'release_est_date',      // Standard release date field
+            'release__est__date',    // Legacy release date field
+            'production_start_date', // Standard production start date
+            'start_date',            // Legacy production start date
+            'est__shooting_end_date', // Estimated shooting end date
+            'production_end_date',   // Production end date
             'production_type',       // Type of production
+            // Rating fields
+            'movie_rating',          // MPAA movie ratings (G, PG, PG-13, R, NC-17)
+            'tv_ratings',            // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
+            'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
+            'rating',                // Generic rating field fallback
             // Add contextual fields for better matching:
             'genre_production',      // Genre of the production
             'time_period',           // Era/time period setting
@@ -502,7 +510,7 @@ const hubspotAPI = {
             'audience_segment'       // Target audience
           ],
           limit: filters.limit || 30,
-          sorts: [{
+          sorts: filters.sorts || [{
             propertyName: 'hs_lastmodifieddate',
             direction: 'DESCENDING'
           }]
@@ -610,17 +618,25 @@ const hubspotAPI = {
           return {
             distributor: props.distributor || null,
             studio: props.distributor || null,
-            releaseDate: props.release__est__date || null,
-            release_date: props.release__est__date || null,
+            // Release date fields
+            releaseDate: props.release_est_date || props.release__est__date || null,
+            release_date: props.release_est_date || props.release__est__date || null,
+            release_est_date: props.release_est_date || null,
             release__est__date: props.release__est__date || null,
-            startDate: props.start_date || null,
-            start_date: props.start_date || null,
-            productionStartDate: props.start_date || null,
-            production_start_date: props.start_date || null,
-            est__shooting_end_date: props.est__shooting_end_date || null,  // NEW
-            estimatedShootingEndDate: props.est__shooting_end_date || null, // Alternative naming
-            production_end_date: props.production_end_date || null,        // NEW
-            productionEndDate: props.production_end_date || null,          // Alternative naming
+            // Production start date fields
+            startDate: props.production_start_date || props.start_date || null,
+            start_date: props.production_start_date || props.start_date || null,
+            productionStartDate: props.production_start_date || props.start_date || null,
+            production_start_date: props.production_start_date || null,
+            // Production stage
+            productionStage: props.production_stage || null,
+            production_stage: props.production_stage || null,
+            // Other production dates
+            est__shooting_end_date: props.est__shooting_end_date || null,
+            estimatedShootingEndDate: props.est__shooting_end_date || null,
+            production_end_date: props.production_end_date || null,
+            productionEndDate: props.production_end_date || null,
+            // Production details
             productionType: props.production_type || null,
             production_type: props.production_type || null,
             synopsis: props.synopsis || null,
@@ -629,9 +645,9 @@ const hubspotAPI = {
             brand_name: props.brand_name || null,
             amount: props.amount || null,
             hollywood_branded_fee: props.hollywood_branded_fee || null,
-            hs_lastmodifieddate: props.hs_lastmodifieddate || null,  // Track when data was last modified
-            partnershipId: partnership.id,  // Store the partnership ID for refresh
-            // Include new contextual fields
+            hs_lastmodifieddate: props.hs_lastmodifieddate || null,
+            partnershipId: partnership.id,
+            // Contextual fields
             genre: props.genre_production || null,
             genre_production: props.genre_production || null,
             timePeriod: props.time_period || null,
