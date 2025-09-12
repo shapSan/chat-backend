@@ -539,11 +539,26 @@ Formatting:
               : null,
         });
       } catch (error) {
+        // Log the full error for debugging
+        console.error('[index.js TEXT MESSAGE] CRITICAL ERROR:', error);
+        console.error('[index.js TEXT MESSAGE] Error name:', error.name);
+        console.error('[index.js TEXT MESSAGE] Error message:', error.message);
+        console.error('[index.js TEXT MESSAGE] Error stack:', error.stack);
+        
         await progressDone(sessionId, runId);
         return res.status(500).json({
           error: 'Internal server error',
           details: error.message,
           stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+          // Add more context for debugging
+          context: {
+            sessionId,
+            runId,
+            projectId,
+            hasUserMessage: !!userMessage,
+            messageLength: userMessage?.length,
+            errorLocation: 'text_message_handler'
+          }
         });
       }
     }
