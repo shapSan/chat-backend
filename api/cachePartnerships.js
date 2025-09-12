@@ -49,7 +49,7 @@ export default async function handler(req, res) {
     let pageCount = 0;
     const maxPages = 10; // Support up to 1000 partnerships since HubSpot shows 322
     
-    // Use exact field names from HubSpot UI
+    // Use exact field names and values from HubSpot
     const filterGroups = [
       {
         // Group 1: Active production stages AND future start date
@@ -60,7 +60,7 @@ export default async function handler(req, res) {
             values: ['Pre-Production', 'Production', 'Development', 'Greenlit']
           },
           {
-            propertyName: 'start_date',  // CORRECTED: Use start_date, not production_start_date
+            propertyName: 'start_date',
             operator: 'GT',
             value: tomorrowISO
           }
@@ -70,7 +70,7 @@ export default async function handler(req, res) {
         // Group 2: Future release date (OR with Group 1)
         filters: [
           {
-            propertyName: 'release__est__date',  // Correct: double underscores
+            propertyName: 'release__est__date',
             operator: 'GT',
             value: tomorrowISO
           }
@@ -78,7 +78,8 @@ export default async function handler(req, res) {
       }
     ];
     
-    console.log(`[CACHE] Using production filters with date > ${tomorrowISO}`);
+    console.log(`[CACHE] Using exact HubSpot filters with date > ${tomorrowISO}`);
+    console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
     const partnershipProperties = [
       'partnership_name',
@@ -97,6 +98,43 @@ export default async function handler(req, res) {
       'production_type',
       'synopsis'
     ];
+    
+    // First, let's test if we get results with just date filters (no production_stage)
+    const testFilterGroups = [
+      {
+        filters: [
+          {
+            propertyName: 'start_date',
+            operator: 'GT',
+            value: tomorrowISO
+          }
+        ]
+      },
+      {
+        filters: [
+          {
+            propertyName: 'release__est__date',
+            operator: 'GT',
+            value: tomorrowISO
+          }
+        ]
+      }
+    ];
+    
+    console.log('[CACHE] Testing with date-only filters first...');
+    const testResult = await hubspotAPI.searchProductions({
+      limit: 10,
+      filterGroups: testFilterGroups,
+      properties: partnershipProperties
+    });
+    
+    if (testResult.results && testResult.results.length > 0) {
+      console.log(`[CACHE] Date-only filters returned ${testResult.results.length} results`);
+      console.log('[CACHE] Sample production_stage values:', 
+        testResult.results.slice(0, 3).map(r => r.properties.production_stage));
+    } else {
+      console.log('[CACHE] WARNING: Even date-only filters returned 0 results!');
+    }
     
     do {
       try {
