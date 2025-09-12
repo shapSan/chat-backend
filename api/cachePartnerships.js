@@ -47,8 +47,9 @@ export default async function handler(req, res) {
     let allPartnerships = [];
     let after = undefined;
     let pageCount = 0;
-    const maxPages = 5; // Support up to 500 partnerships
+    const maxPages = 10; // Support up to 1000 partnerships since HubSpot shows 322
     
+    // Use exact field names from HubSpot UI
     const filterGroups = [
       {
         // Group 1: Active production stages AND future start date
@@ -59,7 +60,7 @@ export default async function handler(req, res) {
             values: ['Pre-Production', 'Production', 'Development', 'Greenlit']
           },
           {
-            propertyName: 'production_start_date',
+            propertyName: 'start_date',  // CORRECTED: Use start_date, not production_start_date
             operator: 'GT',
             value: tomorrowISO
           }
@@ -69,7 +70,7 @@ export default async function handler(req, res) {
         // Group 2: Future release date (OR with Group 1)
         filters: [
           {
-            propertyName: 'release_est_date',
+            propertyName: 'release__est__date',  // Correct: double underscores
             operator: 'GT',
             value: tomorrowISO
           }
@@ -77,14 +78,16 @@ export default async function handler(req, res) {
       }
     ];
     
+    console.log(`[CACHE] Using production filters with date > ${tomorrowISO}`);
+    
     const partnershipProperties = [
       'partnership_name',
       'hs_pipeline_stage',
-      'production_stage',         // Add production_stage to properties
-      'production_start_date',    // Add proper field name
-      'start_date',               // Keep legacy field
-      'release_est_date',         // Proper field name
-      'release__est__date',       // Keep legacy field for compatibility
+      'production_stage',         // Production stage field
+      'start_date',               // CORRECTED: Primary start date field
+      'production_start_date',    // Keep as fallback
+      'release__est__date',       // Primary release field with double underscores
+      'release_est_date',         // Keep as fallback
       'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
       'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
       'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
@@ -114,6 +117,16 @@ export default async function handler(req, res) {
         
         console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
         const result = await hubspotAPI.searchProductions(searchParams);
+        
+        // Debug: log what we're getting back
+        if (pageCount === 0) {
+          console.log('[CACHE] First page response sample:', {
+            hasResults: !!(result.results && result.results.length > 0),
+            count: result.results?.length || 0,
+            hasPaging: !!result.paging,
+            sample: result.results?.[0]?.properties ? Object.keys(result.results[0].properties) : 'no properties'
+          });
+        }
         
         if (result.results && result.results.length > 0) {
           allPartnerships = [...allPartnerships, ...result.results];
@@ -278,8 +291,8 @@ export default async function handler(req, res) {
         name: props.partnership_name || 'Untitled Project',
         genre: props.genre_production || 'General',
         rating: getRating(),
-        releaseDate: props.release_est_date || props.release__est__date || null,
-        startDate: props.production_start_date || props.start_date || null,
+        releaseDate: props.release__est__date || props.release_est_date || null,  // Prioritize double underscore version
+        startDate: props.start_date || props.production_start_date || null,  // Prioritize start_date
         productionStage: props.production_stage || '',
         pipelineStage: props.hs_pipeline_stage || '',
         synopsis: props.synopsis || '',
