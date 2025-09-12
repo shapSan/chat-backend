@@ -38,9 +38,11 @@ export default async function handler(req, res) {
     // Calculate tomorrow's date (current date + 1 day) for filtering
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);  // Set to midnight
     const tomorrowISO = tomorrow.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+    const tomorrowTimestamp = tomorrow.getTime().toString(); // Timestamp format
     
-    console.log(`[CACHE] Using date filter: > ${tomorrowISO}`);
+    console.log(`[CACHE] Using date filter: > ${tomorrowISO} (timestamp: ${tomorrowTimestamp})`);
     
     // Fetch active partnerships with proper production stage and date filters
     // Support pagination to get all matching partnerships
@@ -49,7 +51,8 @@ export default async function handler(req, res) {
     let pageCount = 0;
     const maxPages = 10; // Support up to 1000 partnerships since HubSpot shows 322
     
-    // Use exact field names and values from HubSpot
+    // Use the EXACT filter structure from HubSpot documentation
+    // The issue might be with the date format or the field names
     const filterGroups = [
       {
         // Group 1: Active production stages AND future start date
@@ -62,24 +65,24 @@ export default async function handler(req, res) {
           {
             propertyName: 'start_date',
             operator: 'GT',
-            value: tomorrowISO
+            value: tomorrowISO  // Format: YYYY-MM-DD
           }
         ]
       },
       {
-        // Group 2: Future release date (OR with Group 1)
+        // Group 2: OR - Future release date
         filters: [
           {
             propertyName: 'release__est__date',
             operator: 'GT',
-            value: tomorrowISO
+            value: tomorrowISO  // Format: YYYY-MM-DD
           }
         ]
       }
     ];
     
-    console.log(`[CACHE] Using exact HubSpot filters with date > ${tomorrowISO}`);
-    console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
+    console.log(`[CACHE] Using partnership filters with dates > ${tomorrowISO}`);
+    console.log('[CACHE] Requesting from HubSpot with filterGroups:', JSON.stringify(filterGroups, null, 2));
     
     const partnershipProperties = [
       'partnership_name',
@@ -98,43 +101,6 @@ export default async function handler(req, res) {
       'production_type',
       'synopsis'
     ];
-    
-    // First, let's test if we get results with just date filters (no production_stage)
-    const testFilterGroups = [
-      {
-        filters: [
-          {
-            propertyName: 'start_date',
-            operator: 'GT',
-            value: tomorrowISO
-          }
-        ]
-      },
-      {
-        filters: [
-          {
-            propertyName: 'release__est__date',
-            operator: 'GT',
-            value: tomorrowISO
-          }
-        ]
-      }
-    ];
-    
-    console.log('[CACHE] Testing with date-only filters first...');
-    const testResult = await hubspotAPI.searchProductions({
-      limit: 10,
-      filterGroups: testFilterGroups,
-      properties: partnershipProperties
-    });
-    
-    if (testResult.results && testResult.results.length > 0) {
-      console.log(`[CACHE] Date-only filters returned ${testResult.results.length} results`);
-      console.log('[CACHE] Sample production_stage values:', 
-        testResult.results.slice(0, 3).map(r => r.properties.production_stage));
-    } else {
-      console.log('[CACHE] WARNING: Even date-only filters returned 0 results!');
-    }
     
     do {
       try {
@@ -155,16 +121,6 @@ export default async function handler(req, res) {
         
         console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
         const result = await hubspotAPI.searchProductions(searchParams);
-        
-        // Debug: log what we're getting back
-        if (pageCount === 0) {
-          console.log('[CACHE] First page response sample:', {
-            hasResults: !!(result.results && result.results.length > 0),
-            count: result.results?.length || 0,
-            hasPaging: !!result.paging,
-            sample: result.results?.[0]?.properties ? Object.keys(result.results[0].properties) : 'no properties'
-          });
-        }
         
         if (result.results && result.results.length > 0) {
           allPartnerships = [...allPartnerships, ...result.results];
