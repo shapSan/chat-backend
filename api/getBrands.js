@@ -34,10 +34,12 @@ export default async function handler(req, res) {
     const transformedBrands = cached.map(brand => ({
       id: brand.id || brand,
       name: brand.properties?.brand_name || brand.name || 'Unknown',
-      category: brand.properties?.main_category || brand.category || 'N/A',
+      category: brand.properties?.new_product_main_category || brand.properties?.main_category || brand.category || 'N/A',
       tier: brand.properties?.client_status || brand.tier || 'Unknown',
+      relationshipType: brand.properties?.relationship_type || '',
       score: brand.properties?.partnership_count || brand.score || 0,
       website: brand.properties?.website || brand.website || '',
+      hasOwner: !!brand.properties?.hubspot_owner_id,
       // Include raw properties for debugging
       _raw: brand.properties
     }));
