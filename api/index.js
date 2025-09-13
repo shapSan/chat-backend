@@ -103,7 +103,7 @@ export default async function handler(req, res) {
 
   try {
     // Common + progress setup
-    let { userMessage, sessionId, audioData, projectId, knownProjectName, runId: clientRunId } = req.body;
+    let { userMessage, sessionId, audioData, projectId, knownProjectName, knownPartnershipData, runId: clientRunId } = req.body;
     const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     res.setHeader('x-run-id', runId);
     res.setHeader('Cache-Control', 'no-store');
@@ -473,7 +473,8 @@ export default async function handler(req, res) {
             } catch (err) {
               console.error('[index.js] progressPush error:', err);
             }
-          }
+          },
+          knownPartnershipData  // Pass the partnership data
         );
 
         let aiReply = '';
