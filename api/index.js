@@ -397,6 +397,51 @@ export default async function handler(req, res) {
     }
 
     /* =========================
+     * VIBE CONVERSION (Internal utility)
+     * ======================= */
+    if (userMessage && userMessage.startsWith('Convert this synopsis into a short vibe description')) {
+      // This is an internal vibe conversion request, not a user message
+      try {
+        const synopsisMatch = userMessage.match(/"([^"]+)"/);  
+        const synopsis = synopsisMatch ? synopsisMatch[1] : '';
+        
+        if (!synopsis) {
+          await progressDone(sessionId, runId);
+          return res.json({ reply: 'Action thriller', usedMCP: false });
+        }
+        
+        // Quick AI call for genre extraction
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIApiKey}` },
+          body: JSON.stringify({
+            model: MODELS.openai.chatMini,
+            messages: [
+              { role: 'system', content: 'Extract genre/mood in 10 words max. Be concise.' },
+              { role: 'user', content: `Genre for: ${synopsis}` }
+            ],
+            temperature: 0.3,
+            max_tokens: 20
+          })
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          const vibe = data.choices?.[0]?.message?.content?.trim() || 'Action thriller';
+          await progressDone(sessionId, runId);
+          return res.json({ reply: vibe, usedMCP: false });
+        } else {
+          await progressDone(sessionId, runId);
+          return res.json({ reply: 'Crime thriller', usedMCP: false });
+        }
+      } catch (error) {
+        console.error('[Vibe conversion] Error:', error.message);
+        await progressDone(sessionId, runId);
+        return res.json({ reply: 'Action thriller', usedMCP: false });
+      }
+    }
+    
+    /* =========================
      * TEXT USER MESSAGE
      * ======================= */
     if (userMessage) {
