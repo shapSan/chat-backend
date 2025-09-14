@@ -77,42 +77,89 @@ export default async function handler(req, res) {
       'synopsis'
     ];
     
-    do {
-      try {
-        // Add delay between requests to avoid rate limits
-        if (pageCount > 0) {
-          await new Promise(resolve => setTimeout(resolve, 150));
-        }
-        
-        const searchParams = {
-          limit: 100,
-          filterGroups,
-          properties: partnershipProperties
-        };
-        
-        if (after) {
-          searchParams.after = after;
-        }
-        
-        console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
-        const result = await hubspotAPI.searchProductions(searchParams);
-        
-        if (result.results && result.results.length > 0) {
-          allPartnerships = [...allPartnerships, ...result.results];
-          console.log(`[CACHE] Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
-        }
-        
-        after = result.paging?.next?.after;
-        pageCount++;
-        
-      } catch (pageError) {
-        console.error(`[CACHE] Error fetching partnerships page ${pageCount + 1}:`, pageError);
-        break;
+    // Fetch first page to see if pagination is even needed
+    try {
+      const firstPageParams = {
+        limit: 100,
+        filterGroups,
+        properties: partnershipProperties
+      };
+      
+      console.log(`[CACHE] Fetching partnerships page 1...`);
+      const firstResult = await hubspotAPI.searchProductions(firstPageParams);
+      
+      if (firstResult.results && firstResult.results.length > 0) {
+        allPartnerships = [...firstResult.results];
+        console.log(`[CACHE] Page 1: ${firstResult.results.length} partnerships`);
       }
-    } while (after && pageCount < maxPages);
+      
+      // Only continue pagination if there's actually a next page cursor
+      after = firstResult.paging?.next?.after;
+      pageCount = 1;
+      
+      // Continue fetching additional pages ONLY if after cursor exists
+      while (after && pageCount < maxPages) {
+        try {
+          // Add delay between requests to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 200));
+          
+          const nextPageParams = {
+            limit: 100,
+            filterGroups,
+            properties: partnershipProperties,
+            after: after  // Always include the after cursor
+          };
+          
+          console.log(`[CACHE] Fetching page ${pageCount + 1} with cursor: ${after.substring(0, 20)}...`);
+          const result = await hubspotAPI.searchProductions(nextPageParams);
+          
+          if (result.results && result.results.length > 0) {
+            // Check if we're getting new results or duplicates
+            const newResults = result.results.filter(p => 
+              !allPartnerships.some(existing => existing.id === p.id)
+            );
+            
+            if (newResults.length === 0) {
+              console.log(`[CACHE] Page ${pageCount + 1}: All ${result.results.length} items were duplicates. Stopping pagination.`);
+              break;
+            }
+            
+            allPartnerships = [...allPartnerships, ...newResults];
+            console.log(`[CACHE] Page ${pageCount + 1}: ${newResults.length} new, ${result.results.length - newResults.length} duplicates (total: ${allPartnerships.length})`);
+          } else {
+            console.log(`[CACHE] Page ${pageCount + 1}: No results. Stopping pagination.`);
+            break;
+          }
+          
+          // Check if there's a next page
+          if (!result.paging?.next?.after || result.paging.next.after === after) {
+            console.log(`[CACHE] No more pages or same cursor returned. Stopping.`);
+            break;
+          }
+          
+          after = result.paging.next.after;
+          pageCount++;
+          
+        } catch (pageError) {
+          console.error(`[CACHE] Error fetching page ${pageCount + 1}:`, pageError);
+          break;
+        }
+      }
+    } catch (error) {
+      console.error('[CACHE] Error fetching first page:', error);
+      throw error;
+    }
 
-    const partnerships = allPartnerships;
-    console.log(`[CACHE] Total partnerships fetched: ${partnerships.length} in ${pageCount} pages`);
+    // Deduplicate partnerships by ID (in case of pagination issues)
+    const uniquePartnerships = new Map();
+    allPartnerships.forEach(partnership => {
+      if (partnership.id && !uniquePartnerships.has(partnership.id)) {
+        uniquePartnerships.set(partnership.id, partnership);
+      }
+    });
+    
+    const partnerships = Array.from(uniquePartnerships.values());
+    console.log(`[CACHE] Total unique partnerships: ${partnerships.length} (from ${allPartnerships.length} total, ${pageCount} pages)`);
     
     if (partnerships.length === 0) {
       return res.status(200).json({ 
