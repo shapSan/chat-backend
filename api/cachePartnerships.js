@@ -71,7 +71,7 @@ export default async function handler(req, res) {
       'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
       'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
       'rating',                   // Generic rating field fallback
-      'hs_lastmodifieddate',
+      'hs_lastmodifieddate',      // Object last modified date/time - CRITICAL FOR SORTING
       'genre_production',
       'production_type',
       'synopsis'
@@ -192,6 +192,13 @@ export default async function handler(req, res) {
     const matchedPartnerships = partnerships.map(partnership => {
       const props = partnership.properties;
       
+      // Debug log to see what fields we're getting
+      console.log('[CACHE] Sample partnership properties:', {
+        name: props.partnership_name,
+        hs_lastmodifieddate: props.hs_lastmodifieddate,
+        all_keys: Object.keys(props)
+      });
+      
       // Score each brand for this partnership
       const scoredBrands = allBrands.map(brand => {
         const brandProps = brand.properties;
@@ -259,6 +266,11 @@ export default async function handler(req, res) {
         // If none exist, return TBD
         return 'TBD';
       };
+      
+      // Debug: Log first partnership to verify lastModified is present
+      if (partnership === partnerships[0]) {
+        console.log('[CACHE] First partnership lastModified value:', props.hs_lastmodifieddate);
+      }
       
       return {
         id: partnership.id,
