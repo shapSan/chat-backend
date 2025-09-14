@@ -33,34 +33,10 @@ export default async function handler(req, res) {
     
     console.log(`[CACHE] Using filter: dates from ${currentDateISO} (today) onwards`);
     
-    // Simple date-based filters only - including today
-    const filterGroups = [
-      {
-        // Group 1: Production Start Date from today onwards
-        filters: [
-          {
-            propertyName: 'start_date',  // CORRECT FIELD NAME
-            operator: 'GTE',  // Greater than or equal to (includes today)
-            value: currentDateISO
-          }
-        ]
-      },
-      {
-        // Group 2: OR - Release date from today onwards  
-        filters: [
-          {
-            propertyName: 'release__est__date',  // CORRECT FIELD NAME WITH DOUBLE UNDERSCORE
-            operator: 'GTE',  // Greater than or equal to (includes today)
-            value: currentDateISO
-          }
-        ]
-      }
-    ];
+    // TEMPORARY: Remove filters to debug
+    const filterGroups = [];
     
-    console.log('[CACHE] Fetching partnerships with filters:');
-    console.log(`  - Group 1: start_date >= ${currentDateISO}`);
-    console.log(`  - Group 2: OR release__est__date >= ${currentDateISO}`);
-    console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
+    console.log('[CACHE] TEMPORARY: Fetching ALL partnerships without date filters for debugging');
     
     // Fetch ALL partnerships matching the filter criteria (up to 400)
     let allPartnerships = [];
@@ -106,6 +82,7 @@ export default async function handler(req, res) {
         
         if (after) {
           searchParams.after = after;
+          console.log(`[CACHE] Using pagination cursor: ${after}`);
         }
         
         console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
@@ -114,9 +91,19 @@ export default async function handler(req, res) {
         if (result.results && result.results.length > 0) {
           allPartnerships = [...allPartnerships, ...result.results];
           console.log(`[CACHE] Page ${pageCount + 1}: Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
+        } else {
+          console.log(`[CACHE] Page ${pageCount + 1}: No results returned`);
         }
         
-        after = result.paging?.next?.after;
+        // Log pagination info
+        if (result.paging?.next?.after) {
+          console.log(`[CACHE] Next page cursor available: ${result.paging.next.after}`);
+          after = result.paging.next.after;
+        } else {
+          console.log(`[CACHE] No next page cursor - this is the last page`);
+          after = undefined;
+        }
+        
         pageCount++;
         
       } catch (pageError) {
