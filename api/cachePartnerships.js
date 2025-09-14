@@ -66,7 +66,7 @@ export default async function handler(req, res) {
     let allPartnerships = [];
     let after = undefined;
     let pageCount = 0;
-    const maxPages = 10; // Support up to 1000 partnerships
+    const maxPages = 4; // Support up to 400 partnerships (100 per page x 4 pages)
     
     const partnershipProperties = [
       'partnership_name',
@@ -90,7 +90,7 @@ export default async function handler(req, res) {
     // Fetch first page to see if pagination is even needed
     try {
       const firstPageParams = {
-        limit: 100,
+        limit: 100,  // HubSpot max per page
         filterGroups,
         properties: partnershipProperties
       };
