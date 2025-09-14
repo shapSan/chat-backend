@@ -4,17 +4,6 @@ import hubspotAPI from '../client/hubspot-client.js';
 
 export const maxDuration = 300;
 
-// Active pipeline stages for partnerships (matching HubSpot's pipeline)
-const ACTIVE_STAGES = [
-  "174586263",  // Development (Productions)
-  "2945449",    // Announced (Productions)
-  "174586264",  // Pre-Production (Productions)  
-  "174531873",  // In Production (Productions)
-  "17158113",   // Ongoing/Evergreen (Productions)
-  "28074522",   // Priority Development (Productions)
-  "28074523"    // TBA (Productions)
-];
-
 export default async function handler(req, res) {
   // Enable CORS for all requests
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -44,16 +33,11 @@ export default async function handler(req, res) {
     
     console.log(`[CACHE] Using filter: dates after ${currentDateISO} (today)`);
     
-    // Match the exact filter structure from the screenshot
+    // Simple date-based filters only
     const filterGroups = [
       {
-        // Group 1: Active pipeline stages AND future start date
+        // Group 1: Future start date
         filters: [
-          {
-            propertyName: 'hs_pipeline_stage',
-            operator: 'IN',
-            values: ACTIVE_STAGES  // Use the constant defined at the top
-          },
           {
             propertyName: 'start_date',
             operator: 'GT',  // Greater than (after) today
@@ -74,7 +58,7 @@ export default async function handler(req, res) {
     ];
     
     console.log('[CACHE] Fetching partnerships with filters:');
-    console.log('  - Group 1: Pipeline stages (Development, Announced, Pre-Production, In Production, Ongoing/Evergreen, Priority Development, TBA) AND start_date > today');
+    console.log('  - Group 1: start_date > today');
     console.log('  - Group 2: OR release__est__date > today');
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
