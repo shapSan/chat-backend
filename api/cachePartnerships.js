@@ -27,30 +27,30 @@ export default async function handler(req, res) {
   console.log('[CACHE] Starting partnership cache refresh...');
   
   try {
-    // Get current date for filtering - we want partnerships starting or releasing after today
+    // Get current date for filtering - we want partnerships starting or releasing from today onwards
     const now = new Date();
     const currentDateISO = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
     
-    console.log(`[CACHE] Using filter: dates after ${currentDateISO} (today)`);
+    console.log(`[CACHE] Using filter: dates from ${currentDateISO} (today) onwards`);
     
-    // Simple date-based filters only
+    // Simple date-based filters only - including today
     const filterGroups = [
       {
-        // Group 1: Future start date
+        // Group 1: Start date from today onwards
         filters: [
           {
             propertyName: 'start_date',
-            operator: 'GT',  // Greater than (after) today
+            operator: 'GTE',  // Greater than or equal to (includes today)
             value: currentDateISO
           }
         ]
       },
       {
-        // Group 2: OR - Future release date
+        // Group 2: OR - Release date from today onwards
         filters: [
           {
             propertyName: 'release__est__date',
-            operator: 'GT',  // Greater than (after) today
+            operator: 'GTE',  // Greater than or equal to (includes today)
             value: currentDateISO
           }
         ]
@@ -58,8 +58,8 @@ export default async function handler(req, res) {
     ];
     
     console.log('[CACHE] Fetching partnerships with filters:');
-    console.log('  - Group 1: start_date > today');
-    console.log('  - Group 2: OR release__est__date > today');
+    console.log(`  - Group 1: start_date >= ${currentDateISO}`);
+    console.log(`  - Group 2: OR release__est__date >= ${currentDateISO}`);
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
     // Support pagination to get all matching partnerships
