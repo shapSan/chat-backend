@@ -62,113 +62,85 @@ export default async function handler(req, res) {
     console.log(`  - Group 2: OR release__est__date >= ${currentDateISO}`);
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
-    // Support pagination to get all matching partnerships
+    // Fetch ALL partnerships up to 400 limit
     let allPartnerships = [];
     let after = undefined;
-    let pageCount = 0;
-    const maxPages = 4; // Support up to 400 partnerships (100 per page x 4 pages)
-    const targetTotal = 400; // Target number of partnerships
+    let totalFetched = 0;
+    const LIMIT_PER_PAGE = 100;
+    const MAX_TOTAL = 400;
     
+    console.log(`[CACHE] Starting to fetch up to ${MAX_TOTAL} partnerships...`);
+    
+    // Properties to fetch for each partnership
     const partnershipProperties = [
       'partnership_name',
       'hs_pipeline_stage',
-      'production_stage',         // Production stage field
-      'start_date',               // Primary start date field
-      'production_start_date',    // Alternative start date field
-      'release__est__date',       // Primary release field with double underscores
-      'release_est_date',         // Alternative release field
-      'est__shooting_start_date', // Another possible start date field
-      'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
-      'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
-      'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
-      'rating',                   // Generic rating field fallback
+      'production_stage',
+      'start_date',
+      'production_start_date',
+      'release__est__date',
+      'release_est_date',
+      'movie_rating',
+      'tv_ratings',
+      'sub_ratings_for_tv_content',
+      'rating',
       'hs_lastmodifieddate',
       'genre_production',
       'production_type',
       'synopsis'
     ];
     
-    // Fetch first page to see if pagination is even needed
-    try {
-      const firstPageParams = {
-        limit: 100,  // HubSpot max per page
-        filterGroups,
-        properties: partnershipProperties
-      };
-      
-      console.log(`[CACHE] Fetching partnerships page 1...`);
-      const firstResult = await hubspotAPI.searchProductions(firstPageParams);
-      
-      // Debug: Log what we're getting back
-      console.log(`[CACHE] API Response - Total results: ${firstResult.total || 0}`);
-      if (firstResult.results && firstResult.results.length > 0) {
-        // Log sample data to see what fields are populated
-        const sample = firstResult.results[0];
-        console.log('[CACHE] Sample partnership data:');
-        console.log(`  - ID: ${sample.id}`);
-        console.log(`  - Name: ${sample.properties?.partnership_name}`);
-        console.log(`  - start_date: ${sample.properties?.start_date || 'NOT SET'}`);
-        console.log(`  - production_start_date: ${sample.properties?.production_start_date || 'NOT SET'}`);
-        console.log(`  - release__est__date: ${sample.properties?.release__est__date || 'NOT SET'}`);
-        console.log(`  - hs_pipeline_stage: ${sample.properties?.hs_pipeline_stage || 'NOT SET'}`);
+    // Keep fetching until we have 400 or no more data
+    while (totalFetched < MAX_TOTAL) {
+      try {
+        // Add small delay between requests
+        if (totalFetched > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
         
-        allPartnerships = [...firstResult.results];
-        console.log(`[CACHE] Page 1: ${firstResult.results.length} partnerships`);
-      } else {
-        console.log('[CACHE] No results returned from API');
-      }
-      
-      // Only continue pagination if there's actually a next page cursor
-      after = firstResult.paging?.next?.after;
-      pageCount = 1;
-      
-      // Continue fetching additional pages until we reach 400 or run out of data
-      while (after && pageCount < maxPages && allPartnerships.length < targetTotal) {
-        try {
-          // Add delay between requests to avoid rate limits
-          await new Promise(resolve => setTimeout(resolve, 200));
-          
-          const nextPageParams = {
-            limit: 100,
-            filterGroups,
-            properties: partnershipProperties,
-            after: after  // Always include the after cursor
-          };
-          
-          console.log(`[CACHE] Fetching page ${pageCount + 1} with cursor: ${after.substring(0, 20)}... (current total: ${allPartnerships.length})`);
-          const result = await hubspotAPI.searchProductions(nextPageParams);
-          
-          if (result.results && result.results.length > 0) {
-            // Add ALL results, we'll deduplicate later
-            allPartnerships = [...allPartnerships, ...result.results];
-            console.log(`[CACHE] Page ${pageCount + 1}: Added ${result.results.length} partnerships (new total: ${allPartnerships.length})`);
-          } else {
-            console.log(`[CACHE] Page ${pageCount + 1}: No results. Stopping pagination.`);
-            break;
-          }
-          
-          // Check if there's a next page
-          if (!result.paging?.next?.after) {
-            console.log(`[CACHE] No more pages available. Total fetched: ${allPartnerships.length}`);
-            break;
-          }
-          
-          after = result.paging.next.after;
-          pageCount++;
-          
-        } catch (pageError) {
-          console.error(`[CACHE] Error fetching page ${pageCount + 1}:`, pageError);
+        const searchParams = {
+          limit: LIMIT_PER_PAGE,
+          filterGroups,
+          properties: partnershipProperties
+        };
+        
+        // Add pagination cursor if we have one
+        if (after) {
+          searchParams.after = after;
+        }
+        
+        const pageNum = Math.floor(totalFetched / LIMIT_PER_PAGE) + 1;
+        console.log(`[CACHE] Fetching page ${pageNum}...`);
+        
+        const result = await hubspotAPI.searchProductions(searchParams);
+        
+        if (!result || !result.results || result.results.length === 0) {
+          console.log(`[CACHE] No more results. Total fetched: ${totalFetched}`);
           break;
         }
+        
+        // Add the results
+        allPartnerships = [...allPartnerships, ...result.results];
+        totalFetched += result.results.length;
+        
+        console.log(`[CACHE] Page ${pageNum}: Got ${result.results.length} items. Total so far: ${totalFetched}`);
+        
+        // Check if there's more data
+        if (!result.paging?.next?.after) {
+          console.log(`[CACHE] No more pages. Final total: ${totalFetched}`);
+          break;
+        }
+        
+        // Update cursor for next page
+        after = result.paging.next.after;
+        
+      } catch (error) {
+        console.error('[CACHE] Error fetching partnerships:', error);
+        break;
       }
-      
-      if (allPartnerships.length >= targetTotal) {
-        console.log(`[CACHE] Reached target of ${targetTotal} partnerships`);
-      }
-    } catch (error) {
-      console.error('[CACHE] Error fetching first page:', error);
-      throw error;
     }
+    
+    console.log(`[CACHE] Fetch complete. Total partnerships: ${allPartnerships.length}`);
 
     // Deduplicate partnerships by ID (in case of pagination issues)
     const uniquePartnerships = new Map();
