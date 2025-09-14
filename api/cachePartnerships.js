@@ -35,22 +35,36 @@ export default async function handler(req, res) {
   console.log('[CACHE] Starting partnership cache refresh...');
   
   try {
-    // Use the defined pipeline stages for active partnerships
-    // No date filtering - we want ALL partnerships in active stages
+    // Get today's date in ISO format for filtering
+    const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+    
+    // Filter for partnerships with either:
+    // - Production start date after today OR
+    // - Release date after today
     const filterGroups = [
       {
-        // Filter by active pipeline stages using the IDs
+        // Filter group 1: Future production start date
         filters: [
           {
-            propertyName: 'hs_pipeline_stage',
-            operator: 'IN',
-            values: ACTIVE_STAGES  // Use the defined stage IDs
+            propertyName: 'start_date',
+            operator: 'GT',  // Greater than (after) today
+            value: today
+          }
+        ]
+      },
+      {
+        // Filter group 2: Future release date
+        filters: [
+          {
+            propertyName: 'release__est__date',
+            operator: 'GT',  // Greater than (after) today
+            value: today
           }
         ]
       }
     ];
     
-    console.log('[CACHE] Fetching partnerships in active stages:', ACTIVE_STAGES);
+    console.log('[CACHE] Fetching partnerships with future dates after:', today);
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
     // Support pagination to get all matching partnerships
