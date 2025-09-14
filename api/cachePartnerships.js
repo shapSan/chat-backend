@@ -87,7 +87,12 @@ export default async function handler(req, res) {
         const searchParams = {
           limit: 100,
           filterGroups,
-          properties: partnershipProperties
+          properties: partnershipProperties,
+          // Add explicit sorting for stable pagination
+          sorts: [{
+            propertyName: 'hs_lastmodifieddate',
+            direction: 'DESCENDING'
+          }]
         };
         
         if (after) {
