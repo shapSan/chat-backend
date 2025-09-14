@@ -464,57 +464,68 @@ const hubspotAPI = {
     }
     
     try {
+      // Build the request body
+      const requestBody = {
+        filterGroups: filters.filterGroups || [{
+          filters: []
+        }],
+        properties: filters.properties || [
+          'partnership_name',      // Primary name field
+          'partnership_status',
+          'hs_pipeline_stage',
+          'production_stage',      // Production stage (Pre-Production, Production, etc.)
+          'synopsis',
+          'content_type',
+          'distributor',
+          'brand_name',
+          'amount',
+          'hollywood_branded_fee',
+          'closedate',
+          'contract_sent_date',
+          'num_associated_contacts',
+          'hubspot_owner_id',
+          'hs_lastmodifieddate',
+          'release_est_date',      // Standard release date field
+          'release__est__date',    // Legacy release date field
+          'production_start_date', // Standard production start date
+          'start_date',            // Legacy production start date
+          'est__shooting_end_date', // Estimated shooting end date
+          'production_end_date',   // Production end date
+          'production_type',       // Type of production
+          // Rating fields
+          'movie_rating',          // MPAA movie ratings (G, PG, PG-13, R, NC-17)
+          'tv_ratings',            // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
+          'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
+          'rating',                // Generic rating field fallback
+          // Add contextual fields for better matching:
+          'genre_production',      // Genre of the production
+          'time_period',           // Era/time period setting
+          'plot_location',         // Where the story takes place
+          'storyline_location__city_',  // Specific city location
+          'audience_segment'       // Target audience
+        ],
+        limit: filters.limit || 30,
+        sorts: filters.sorts || [{
+          propertyName: 'hs_lastmodifieddate',
+          direction: 'DESCENDING'
+        }]
+      };
+      
+      // CRITICAL FIX: Add the 'after' parameter for pagination if provided
+      if (filters.after) {
+        requestBody.after = filters.after;
+        console.log('[DEBUG searchProductions] Paginating with after:', filters.after);
+      }
+      
+      console.log('[DEBUG searchProductions] Making request with body:', JSON.stringify(requestBody, null, 2));
+      
       const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.PARTNERSHIPS}/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          filterGroups: filters.filterGroups || [{
-            filters: []
-          }],
-          properties: filters.properties || [
-            'partnership_name',      // Primary name field
-            'partnership_status',
-            'hs_pipeline_stage',
-            'production_stage',      // Production stage (Pre-Production, Production, etc.)
-            'synopsis',
-            'content_type',
-            'distributor',
-            'brand_name',
-            'amount',
-            'hollywood_branded_fee',
-            'closedate',
-            'contract_sent_date',
-            'num_associated_contacts',
-            'hubspot_owner_id',
-            'hs_lastmodifieddate',
-            'release_est_date',      // Standard release date field
-            'release__est__date',    // Legacy release date field
-            'production_start_date', // Standard production start date
-            'start_date',            // Legacy production start date
-            'est__shooting_end_date', // Estimated shooting end date
-            'production_end_date',   // Production end date
-            'production_type',       // Type of production
-            // Rating fields
-            'movie_rating',          // MPAA movie ratings (G, PG, PG-13, R, NC-17)
-            'tv_ratings',            // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
-            'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
-            'rating',                // Generic rating field fallback
-            // Add contextual fields for better matching:
-            'genre_production',      // Genre of the production
-            'time_period',           // Era/time period setting
-            'plot_location',         // Where the story takes place
-            'storyline_location__city_',  // Specific city location
-            'audience_segment'       // Target audience
-          ],
-          limit: filters.limit || 30,
-          sorts: filters.sorts || [{
-            propertyName: 'hs_lastmodifieddate',
-            direction: 'DESCENDING'
-          }]
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
