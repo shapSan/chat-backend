@@ -108,7 +108,7 @@ export default async function handler(req, res) {
                   {
                     propertyName: 'client_status',
                     operator: 'IN',
-                    values: ['Active', 'Pending (Prospect)']
+                    values: ['Active', 'Pending (Prospect)', 'Pending']  // Include both Pending variations
                   },
                   {
                     propertyName: 'new_product_main_category',
