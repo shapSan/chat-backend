@@ -277,10 +277,8 @@ export default async function handler(req, res) {
       };
     });
 
-    // Cache the results
-    await kv.set('hubspot-partnership-matches', matchedPartnerships, {
-      ex: 300 // 5 minute TTL
-    });
+    // Cache the results (no TTL - persistent like brands cache)
+    await kv.set('hubspot-partnership-matches', matchedPartnerships);
     
     // Also cache timestamp
     await kv.set('hubspot-partnership-matches-timestamp', Date.now());
