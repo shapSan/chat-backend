@@ -35,7 +35,7 @@ const hubspotLimiter = new RateLimiter(8);
 
 const hubspotAPI = {
   baseUrl: 'https://api.hubapi.com',
-  portalId: '2944980',
+  portalId: '442891', // Updated to correct portal ID
   isInitialized: false,
   initializationPromise: null,
 
