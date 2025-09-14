@@ -36,20 +36,20 @@ export default async function handler(req, res) {
     // Simple date-based filters only - including today
     const filterGroups = [
       {
-        // Group 1: Start date from today onwards
+        // Group 1: Production Start Date from today onwards
         filters: [
           {
-            propertyName: 'start_date',
+            propertyName: 'start_date',  // CORRECT FIELD NAME
             operator: 'GTE',  // Greater than or equal to (includes today)
             value: currentDateISO
           }
         ]
       },
       {
-        // Group 2: OR - Release date from today onwards
+        // Group 2: OR - Release date from today onwards  
         filters: [
           {
-            propertyName: 'release__est__date',
+            propertyName: 'release__est__date',  // CORRECT FIELD NAME WITH DOUBLE UNDERSCORE
             operator: 'GTE',  // Greater than or equal to (includes today)
             value: currentDateISO
           }
@@ -72,10 +72,11 @@ export default async function handler(req, res) {
       'partnership_name',
       'hs_pipeline_stage',
       'production_stage',         // Production stage field
-      'start_date',               // CORRECTED: Primary start date field
-      'production_start_date',    // Keep as fallback
+      'start_date',               // Primary start date field
+      'production_start_date',    // Alternative start date field
       'release__est__date',       // Primary release field with double underscores
-      'release_est_date',         // Keep as fallback
+      'release_est_date',         // Alternative release field
+      'est__shooting_start_date', // Another possible start date field
       'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
       'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
       'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
@@ -97,9 +98,23 @@ export default async function handler(req, res) {
       console.log(`[CACHE] Fetching partnerships page 1...`);
       const firstResult = await hubspotAPI.searchProductions(firstPageParams);
       
+      // Debug: Log what we're getting back
+      console.log(`[CACHE] API Response - Total results: ${firstResult.total || 0}`);
       if (firstResult.results && firstResult.results.length > 0) {
+        // Log sample data to see what fields are populated
+        const sample = firstResult.results[0];
+        console.log('[CACHE] Sample partnership data:');
+        console.log(`  - ID: ${sample.id}`);
+        console.log(`  - Name: ${sample.properties?.partnership_name}`);
+        console.log(`  - start_date: ${sample.properties?.start_date || 'NOT SET'}`);
+        console.log(`  - production_start_date: ${sample.properties?.production_start_date || 'NOT SET'}`);
+        console.log(`  - release__est__date: ${sample.properties?.release__est__date || 'NOT SET'}`);
+        console.log(`  - hs_pipeline_stage: ${sample.properties?.hs_pipeline_stage || 'NOT SET'}`);
+        
         allPartnerships = [...firstResult.results];
         console.log(`[CACHE] Page 1: ${firstResult.results.length} partnerships`);
+      } else {
+        console.log('[CACHE] No results returned from API');
       }
       
       // Only continue pagination if there's actually a next page cursor
@@ -167,8 +182,38 @@ export default async function handler(req, res) {
       }
     });
     
-    const partnerships = Array.from(uniquePartnerships.values());
+    let partnerships = Array.from(uniquePartnerships.values());
     console.log(`[CACHE] Total unique partnerships: ${partnerships.length} (from ${allPartnerships.length} total, ${pageCount} pages)`);
+    
+    // If no results with date filters, try without filters as fallback
+    if (partnerships.length === 0) {
+      console.log('[CACHE] No partnerships found with date filters. Trying without filters...');
+      
+      try {
+        const fallbackParams = {
+          limit: 100,
+          properties: partnershipProperties,
+          sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
+        };
+        
+        const fallbackResult = await hubspotAPI.searchProductions(fallbackParams);
+        
+        if (fallbackResult.results && fallbackResult.results.length > 0) {
+          partnerships = fallbackResult.results;
+          console.log(`[CACHE] Fallback: Found ${partnerships.length} partnerships without filters`);
+          
+          // Log why they might not match the date filters
+          const sample = partnerships[0];
+          console.log('[CACHE] Sample partnership (no filters):');
+          console.log(`  - Name: ${sample.properties?.partnership_name}`);
+          console.log(`  - start_date: ${sample.properties?.start_date || 'NOT SET'}`);
+          console.log(`  - production_start_date: ${sample.properties?.production_start_date || 'NOT SET'}`);
+          console.log(`  - release__est__date: ${sample.properties?.release__est__date || 'NOT SET'}`);
+        }
+      } catch (fallbackError) {
+        console.error('[CACHE] Fallback query also failed:', fallbackError);
+      }
+    }
     
     if (partnerships.length === 0) {
       return res.status(200).json({ 
