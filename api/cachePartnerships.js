@@ -67,6 +67,7 @@ export default async function handler(req, res) {
       'production_start_date',    // Keep as fallback
       'release__est__date',       // Primary release field with double underscores
       'release_est_date',         // Keep as fallback
+      'content_type',             // Content type field (Film - Theatrical, etc.)
       'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
       'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
       'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
@@ -276,6 +277,7 @@ export default async function handler(req, res) {
         id: partnership.id,
         name: props.partnership_name || 'Untitled Project',
         genre: props.genre_production || 'General',
+        contentType: props.content_type || '',  // Add content type
         rating: getRating(),
         releaseDate: props.release__est__date || props.release_est_date || null,  // Prioritize double underscore version
         startDate: props.start_date || props.production_start_date || null,  // Prioritize start_date
