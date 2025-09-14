@@ -67,6 +67,7 @@ export default async function handler(req, res) {
     let after = undefined;
     let pageCount = 0;
     const maxPages = 4; // Support up to 400 partnerships (100 per page x 4 pages)
+    const targetTotal = 400; // Target number of partnerships
     
     const partnershipProperties = [
       'partnership_name',
@@ -121,8 +122,8 @@ export default async function handler(req, res) {
       after = firstResult.paging?.next?.after;
       pageCount = 1;
       
-      // Continue fetching additional pages ONLY if after cursor exists
-      while (after && pageCount < maxPages) {
+      // Continue fetching additional pages until we reach 400 or run out of data
+      while (after && pageCount < maxPages && allPartnerships.length < targetTotal) {
         try {
           // Add delay between requests to avoid rate limits
           await new Promise(resolve => setTimeout(resolve, 200));
@@ -134,30 +135,21 @@ export default async function handler(req, res) {
             after: after  // Always include the after cursor
           };
           
-          console.log(`[CACHE] Fetching page ${pageCount + 1} with cursor: ${after.substring(0, 20)}...`);
+          console.log(`[CACHE] Fetching page ${pageCount + 1} with cursor: ${after.substring(0, 20)}... (current total: ${allPartnerships.length})`);
           const result = await hubspotAPI.searchProductions(nextPageParams);
           
           if (result.results && result.results.length > 0) {
-            // Check if we're getting new results or duplicates
-            const newResults = result.results.filter(p => 
-              !allPartnerships.some(existing => existing.id === p.id)
-            );
-            
-            if (newResults.length === 0) {
-              console.log(`[CACHE] Page ${pageCount + 1}: All ${result.results.length} items were duplicates. Stopping pagination.`);
-              break;
-            }
-            
-            allPartnerships = [...allPartnerships, ...newResults];
-            console.log(`[CACHE] Page ${pageCount + 1}: ${newResults.length} new, ${result.results.length - newResults.length} duplicates (total: ${allPartnerships.length})`);
+            // Add ALL results, we'll deduplicate later
+            allPartnerships = [...allPartnerships, ...result.results];
+            console.log(`[CACHE] Page ${pageCount + 1}: Added ${result.results.length} partnerships (new total: ${allPartnerships.length})`);
           } else {
             console.log(`[CACHE] Page ${pageCount + 1}: No results. Stopping pagination.`);
             break;
           }
           
           // Check if there's a next page
-          if (!result.paging?.next?.after || result.paging.next.after === after) {
-            console.log(`[CACHE] No more pages or same cursor returned. Stopping.`);
+          if (!result.paging?.next?.after) {
+            console.log(`[CACHE] No more pages available. Total fetched: ${allPartnerships.length}`);
             break;
           }
           
@@ -168,6 +160,10 @@ export default async function handler(req, res) {
           console.error(`[CACHE] Error fetching page ${pageCount + 1}:`, pageError);
           break;
         }
+      }
+      
+      if (allPartnerships.length >= targetTotal) {
+        console.log(`[CACHE] Reached target of ${targetTotal} partnerships`);
       }
     } catch (error) {
       console.error('[CACHE] Error fetching first page:', error);
