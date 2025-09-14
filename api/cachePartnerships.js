@@ -271,6 +271,7 @@ export default async function handler(req, res) {
         pipelineStage: props.hs_pipeline_stage || '',
         synopsis: props.synopsis || '',
         stage: props.production_stage || props.hs_pipeline_stage || '',
+        lastModified: props.hs_lastmodifieddate || null,  // Add last modified date
         // Include sub-ratings if available for TV content
         subRatings: props.sub_ratings_for_tv_content || null,
         matchedBrands: topBrands
