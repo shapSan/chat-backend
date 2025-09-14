@@ -35,42 +35,40 @@ export default async function handler(req, res) {
   console.log('[CACHE] Starting partnership cache refresh...');
   
   try {
-    // Use the defined pipeline stages for active partnerships
-    // No date filtering - we want ALL partnerships in active stages
+    // Use pipeline stage IDs to get active partnerships
     const filterGroups = [
       {
-        // Filter by active pipeline stages using the IDs
         filters: [
           {
             propertyName: 'hs_pipeline_stage',
             operator: 'IN',
-            values: ACTIVE_STAGES  // Use the defined stage IDs
+            values: ACTIVE_STAGES
           }
         ]
       }
     ];
     
-    console.log('[CACHE] Fetching partnerships in active stages:', ACTIVE_STAGES);
+    console.log('[CACHE] Fetching partnerships in active pipeline stages:', ACTIVE_STAGES);
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
-    // Support pagination to get all matching partnerships
-    let allPartnerships = [];
+    // Fetch partnerships with deduplication built-in
+    const uniquePartnerships = new Map(); // Use Map to prevent duplicates from the start
     let after = undefined;
     let pageCount = 0;
-    const maxPages = 10; // Support up to 1000 partnerships
+    const maxPages = 10;
     
     const partnershipProperties = [
       'partnership_name',
       'hs_pipeline_stage',
-      'production_stage',         // Production stage field
-      'start_date',               // CORRECTED: Primary start date field
-      'production_start_date',    // Keep as fallback
-      'release__est__date',       // Primary release field with double underscores
-      'release_est_date',         // Keep as fallback
-      'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
-      'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
-      'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
-      'rating',                   // Generic rating field fallback
+      'production_stage',
+      'start_date',
+      'production_start_date',
+      'release__est__date',
+      'release_est_date',
+      'movie_rating',
+      'tv_ratings',
+      'sub_ratings_for_tv_content',
+      'rating',
       'hs_lastmodifieddate',
       'genre_production',
       'production_type',
@@ -81,38 +79,55 @@ export default async function handler(req, res) {
       try {
         // Add delay between requests to avoid rate limits
         if (pageCount > 0) {
-          await new Promise(resolve => setTimeout(resolve, 150));
+          await new Promise(resolve => setTimeout(resolve, 200));
         }
         
         const searchParams = {
           limit: 100,
-          filterGroups,
-          properties: partnershipProperties
+          properties: partnershipProperties,
+          filterGroups: filterGroups,
+          sorts: [{
+            propertyName: 'hs_lastmodifieddate',
+            direction: 'DESCENDING'
+          }]
         };
         
         if (after) {
           searchParams.after = after;
         }
         
-        console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
+        console.log(`[CACHE] Fetching page ${pageCount + 1}...`);
         const result = await hubspotAPI.searchProductions(searchParams);
         
         if (result.results && result.results.length > 0) {
-          allPartnerships = [...allPartnerships, ...result.results];
-          console.log(`[CACHE] Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
+          // Add to Map to automatically handle duplicates
+          let newCount = 0;
+          result.results.forEach(partnership => {
+            if (partnership.id && !uniquePartnerships.has(partnership.id)) {
+              uniquePartnerships.set(partnership.id, partnership);
+              newCount++;
+            }
+          });
+          console.log(`[CACHE] Page ${pageCount + 1}: ${result.results.length} items, ${newCount} new unique (total unique: ${uniquePartnerships.size})`);
         }
         
         after = result.paging?.next?.after;
         pageCount++;
         
       } catch (pageError) {
-        console.error(`[CACHE] Error fetching partnerships page ${pageCount + 1}:`, pageError);
-        break;
+        console.error(`[CACHE] Error fetching page ${pageCount + 1}:`, pageError);
+        if (pageError.message?.includes('429') || pageError.message?.includes('rate')) {
+          console.log('[CACHE] Rate limit hit, waiting 2 seconds...');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } else {
+          break;
+        }
       }
     } while (after && pageCount < maxPages);
+    
+    const partnerships = Array.from(uniquePartnerships.values());
+    console.log(`[CACHE] Final: ${partnerships.length} unique partnerships from ${pageCount} pages`);
 
-    const partnerships = allPartnerships;
-    console.log(`[CACHE] Total partnerships fetched: ${partnerships.length} in ${pageCount} pages`);
     
     if (partnerships.length === 0) {
       return res.status(200).json({ 
