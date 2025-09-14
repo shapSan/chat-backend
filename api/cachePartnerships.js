@@ -27,30 +27,30 @@ export default async function handler(req, res) {
   console.log('[CACHE] Starting partnership cache refresh...');
   
   try {
-    // Get current date for filtering - we want partnerships starting or releasing from today onwards
+    // Get current date for filtering - we want partnerships starting or releasing after today
     const now = new Date();
     const currentDateISO = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
     
-    console.log(`[CACHE] Using filter: dates from ${currentDateISO} (today) onwards`);
+    console.log(`[CACHE] Using filter: dates after ${currentDateISO} (today)`);
     
-    // Simple date-based filters only - including today
+    // Simple date-based filters only
     const filterGroups = [
       {
-        // Group 1: Production Start Date from today onwards
+        // Group 1: Future start date
         filters: [
           {
-            propertyName: 'start_date',  // CORRECT FIELD NAME
-            operator: 'GTE',  // Greater than or equal to (includes today)
+            propertyName: 'start_date',
+            operator: 'GT',  // Greater than (after) today
             value: currentDateISO
           }
         ]
       },
       {
-        // Group 2: OR - Release date from today onwards  
+        // Group 2: OR - Future release date
         filters: [
           {
-            propertyName: 'release__est__date',  // CORRECT FIELD NAME WITH DOUBLE UNDERSCORE
-            operator: 'GTE',  // Greater than or equal to (includes today)
+            propertyName: 'release__est__date',
+            operator: 'GT',  // Greater than (after) today
             value: currentDateISO
           }
         ]
@@ -58,75 +58,106 @@ export default async function handler(req, res) {
     ];
     
     console.log('[CACHE] Fetching partnerships with filters:');
-    console.log(`  - Group 1: start_date >= ${currentDateISO}`);
-    console.log(`  - Group 2: OR release__est__date >= ${currentDateISO}`);
+    console.log('  - Group 1: start_date > today');
+    console.log('  - Group 2: OR release__est__date > today');
+    console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
-    // Fetch ALL partnerships matching the filter criteria (up to 400)
+    // Support pagination to get all matching partnerships
     let allPartnerships = [];
     let after = undefined;
     let pageCount = 0;
-    const maxPages = 10; // Allow up to 10 pages to ensure we get all data
+    const maxPages = 10; // Support up to 1000 partnerships
     
-    do {
-      try {
-        // Add delay between requests to avoid rate limits
-        if (pageCount > 0) {
-          await new Promise(resolve => setTimeout(resolve, 150));
-        }
-        
-        const searchParams = {
-          limit: 100,
-          properties: [
-            'partnership_name',
-            'hs_pipeline_stage',
-            'production_stage',
-            'start_date',
-            'production_start_date',
-            'release__est__date',
-            'release_est_date',
-            'movie_rating',
-            'tv_ratings',
-            'sub_ratings_for_tv_content',
-            'rating',
-            'hs_lastmodifieddate',
-            'genre_production',
-            'production_type',
-            'synopsis'
-          ],
-          filterGroups: filterGroups,
-          sorts: [{
-            propertyName: 'hs_lastmodifieddate',
-            direction: 'DESCENDING'
-          }]
-        };
-        
-        if (after) {
-          searchParams.after = after;
-        }
-        
-        console.log(`[CACHE] Fetching page ${pageCount + 1}...`);
-        const result = await hubspotAPI.searchProductions(searchParams);
-        
-        if (result.results && result.results.length > 0) {
-          allPartnerships = [...allPartnerships, ...result.results];
-          console.log(`[CACHE] Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
-        }
-        
-        after = result.paging?.next?.after;
-        pageCount++;
-        
-      } catch (pageError) {
-        console.error(`[CACHE] Error fetching page ${pageCount + 1}:`, pageError);
-        if (pageError.message?.includes('429') || pageError.message?.includes('rate')) {
-          console.log('[CACHE] Rate limit hit, waiting 2 seconds...');
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        } else {
+    const partnershipProperties = [
+      'partnership_name',
+      'hs_pipeline_stage',
+      'production_stage',         // Production stage field
+      'start_date',               // CORRECTED: Primary start date field
+      'production_start_date',    // Keep as fallback
+      'release__est__date',       // Primary release field with double underscores
+      'release_est_date',         // Keep as fallback
+      'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
+      'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
+      'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
+      'rating',                   // Generic rating field fallback
+      'hs_lastmodifieddate',
+      'genre_production',
+      'production_type',
+      'synopsis'
+    ];
+    
+    // Fetch first page to see if pagination is even needed
+    try {
+      const firstPageParams = {
+        limit: 100,
+        filterGroups,
+        properties: partnershipProperties
+      };
+      
+      console.log(`[CACHE] Fetching partnerships page 1...`);
+      const firstResult = await hubspotAPI.searchProductions(firstPageParams);
+      
+      if (firstResult.results && firstResult.results.length > 0) {
+        allPartnerships = [...firstResult.results];
+        console.log(`[CACHE] Page 1: ${firstResult.results.length} partnerships`);
+      }
+      
+      // Only continue pagination if there's actually a next page cursor
+      after = firstResult.paging?.next?.after;
+      pageCount = 1;
+      
+      // Continue fetching additional pages ONLY if after cursor exists
+      while (after && pageCount < maxPages) {
+        try {
+          // Add delay between requests to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 200));
+          
+          const nextPageParams = {
+            limit: 100,
+            filterGroups,
+            properties: partnershipProperties,
+            after: after  // Always include the after cursor
+          };
+          
+          console.log(`[CACHE] Fetching page ${pageCount + 1} with cursor: ${after.substring(0, 20)}...`);
+          const result = await hubspotAPI.searchProductions(nextPageParams);
+          
+          if (result.results && result.results.length > 0) {
+            // Check if we're getting new results or duplicates
+            const newResults = result.results.filter(p => 
+              !allPartnerships.some(existing => existing.id === p.id)
+            );
+            
+            if (newResults.length === 0) {
+              console.log(`[CACHE] Page ${pageCount + 1}: All ${result.results.length} items were duplicates. Stopping pagination.`);
+              break;
+            }
+            
+            allPartnerships = [...allPartnerships, ...newResults];
+            console.log(`[CACHE] Page ${pageCount + 1}: ${newResults.length} new, ${result.results.length - newResults.length} duplicates (total: ${allPartnerships.length})`);
+          } else {
+            console.log(`[CACHE] Page ${pageCount + 1}: No results. Stopping pagination.`);
+            break;
+          }
+          
+          // Check if there's a next page
+          if (!result.paging?.next?.after || result.paging.next.after === after) {
+            console.log(`[CACHE] No more pages or same cursor returned. Stopping.`);
+            break;
+          }
+          
+          after = result.paging.next.after;
+          pageCount++;
+          
+        } catch (pageError) {
+          console.error(`[CACHE] Error fetching page ${pageCount + 1}:`, pageError);
           break;
         }
       }
-    } while (after && pageCount < maxPages);
-    
-    console.log(`[CACHE] Fetched ${allPartnerships.length} total partnerships in ${pageCount} pages`);
+    } catch (error) {
+      console.error('[CACHE] Error fetching first page:', error);
+      throw error;
+    }
 
     // Deduplicate partnerships by ID (in case of pagination issues)
     const uniquePartnerships = new Map();
@@ -136,38 +167,8 @@ export default async function handler(req, res) {
       }
     });
     
-    let partnerships = Array.from(uniquePartnerships.values());
+    const partnerships = Array.from(uniquePartnerships.values());
     console.log(`[CACHE] Total unique partnerships: ${partnerships.length} (from ${allPartnerships.length} total, ${pageCount} pages)`);
-    
-    // If no results with date filters, try without filters as fallback
-    if (partnerships.length === 0) {
-      console.log('[CACHE] No partnerships found with date filters. Trying without filters...');
-      
-      try {
-        const fallbackParams = {
-          limit: 100,
-          properties: partnershipProperties,
-          sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
-        };
-        
-        const fallbackResult = await hubspotAPI.searchProductions(fallbackParams);
-        
-        if (fallbackResult.results && fallbackResult.results.length > 0) {
-          partnerships = fallbackResult.results;
-          console.log(`[CACHE] Fallback: Found ${partnerships.length} partnerships without filters`);
-          
-          // Log why they might not match the date filters
-          const sample = partnerships[0];
-          console.log('[CACHE] Sample partnership (no filters):');
-          console.log(`  - Name: ${sample.properties?.partnership_name}`);
-          console.log(`  - start_date: ${sample.properties?.start_date || 'NOT SET'}`);
-          console.log(`  - production_start_date: ${sample.properties?.production_start_date || 'NOT SET'}`);
-          console.log(`  - release__est__date: ${sample.properties?.release__est__date || 'NOT SET'}`);
-        }
-      } catch (fallbackError) {
-        console.error('[CACHE] Fallback query also failed:', fallbackError);
-      }
-    }
     
     if (partnerships.length === 0) {
       return res.status(200).json({ 
