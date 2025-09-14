@@ -39,25 +39,33 @@ export default async function handler(req, res) {
     const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
     
     // Filter for partnerships with either:
-    // - Production start date after today OR
-    // - Release date after today
+    // - Production start date EXISTS AND is after today OR
+    // - Release date EXISTS AND is after today
     const filterGroups = [
       {
-        // Filter group 1: Future production start date
+        // Filter group 1: Has future production start date
         filters: [
           {
             propertyName: 'start_date',
-            operator: 'GT',  // Greater than (after) today
+            operator: 'HAS_PROPERTY'  // First check it exists
+          },
+          {
+            propertyName: 'start_date',
+            operator: 'GT',  // Then check it's after today
             value: today
           }
         ]
       },
       {
-        // Filter group 2: Future release date
+        // Filter group 2: Has future release date
         filters: [
           {
             propertyName: 'release__est__date',
-            operator: 'GT',  // Greater than (after) today
+            operator: 'HAS_PROPERTY'  // First check it exists
+          },
+          {
+            propertyName: 'release__est__date',
+            operator: 'GT',  // Then check it's after today
             value: today
           }
         ]
