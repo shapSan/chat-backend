@@ -35,42 +35,22 @@ export default async function handler(req, res) {
   console.log('[CACHE] Starting partnership cache refresh...');
   
   try {
-    // Calculate current date for filtering - we want partnerships AFTER today
-    const now = new Date();
-    const currentDateISO = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
-    
-    console.log(`[CACHE] Using filter: dates > ${currentDateISO} (today)`);
-    
-    // Use exact field names and values from HubSpot
+    // Use the defined pipeline stages for active partnerships
+    // No date filtering - we want ALL partnerships in active stages
     const filterGroups = [
       {
-        // Group 1: Active production stages AND future start date (after today)
+        // Filter by active pipeline stages using the IDs
         filters: [
           {
-            propertyName: 'production_stage',
+            propertyName: 'hs_pipeline_stage',
             operator: 'IN',
-            values: ['Pre-Production', 'Production', 'Development', 'Greenlit']
-          },
-          {
-            propertyName: 'start_date',
-            operator: 'GT',  // Greater than today
-            value: currentDateISO
-          }
-        ]
-      },
-      {
-        // Group 2: OR - Future release date (after today)
-        filters: [
-          {
-            propertyName: 'release__est__date',
-            operator: 'GT',  // Greater than today
-            value: currentDateISO
+            values: ACTIVE_STAGES  // Use the defined stage IDs
           }
         ]
       }
     ];
     
-    console.log(`[CACHE] Fetching partnerships with production/release dates after ${currentDateISO}`);
+    console.log('[CACHE] Fetching partnerships in active stages:', ACTIVE_STAGES);
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
     // Support pagination to get all matching partnerships
