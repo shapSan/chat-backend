@@ -71,23 +71,54 @@ export default async function handler(req) {
       "contact_type"
     ];
 
-    // Search for Growth Partners by contact_type
-    const searchResults = await searchHubSpotContacts(
-      [{
-        filters: [
-          {
-            propertyName: "contact_type",
-            operator: "EQ",
-            value: "Growth Partner"
-          }
-        ]
-      }],
-      properties,
-      100
-    );
+    // First, try to get ALL contacts to debug
+    console.log('[cacheGrowthPartners] Fetching contacts to check contact_type values...');
+    
+    // Search for Growth Partners - try different variations
+    let searchResults;
+    
+    try {
+      // Try with "Growth Partner"
+      searchResults = await searchHubSpotContacts(
+        [{
+          filters: [
+            {
+              propertyName: "contact_type",
+              operator: "EQ",
+              value: "Growth Partner"
+            }
+          ]
+        }],
+        properties,
+        100
+      );
+      console.log(`[cacheGrowthPartners] Found ${searchResults.results?.length || 0} with 'Growth Partner'`);
+    } catch (e) {
+      console.log('[cacheGrowthPartners] Error with "Growth Partner":', e.message);
+    }
+    
+    // If no results, try without filter to see what values exist
+    if (!searchResults?.results?.length) {
+      console.log('[cacheGrowthPartners] No results with filter, trying to get sample contacts...');
+      try {
+        const sampleResponse = await fetch(`${HUBSPOT_BASE_URL}/crm/v3/objects/contacts?limit=10&properties=contact_type,firstname,lastname,email`, {
+          headers: {
+            'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
+          },
+        });
+        
+        if (sampleResponse.ok) {
+          const sampleData = await sampleResponse.json();
+          const contactTypes = sampleData.results?.map(c => c.properties?.contact_type).filter(Boolean);
+          console.log('[cacheGrowthPartners] Sample contact_type values found:', contactTypes);
+        }
+      } catch (e) {
+        console.log('[cacheGrowthPartners] Could not fetch sample:', e.message);
+      }
+    }
 
     // Transform the results to our format
-    const allPartners = searchResults.results?.map(contact => ({
+    const allPartners = searchResults?.results?.map(contact => ({
       id: contact.id,
       firstname: contact.properties?.firstname || null,
       lastname: contact.properties?.lastname || null,
@@ -97,6 +128,9 @@ export default async function handler(req) {
       phone: contact.properties?.phone || null,
       contactType: contact.properties?.contact_type || null
     })) || [];
+    
+    // Log what we're storing
+    console.log(`[cacheGrowthPartners] Storing ${allPartners.length} partners in cache`);
 
     console.log(`[cacheGrowthPartners] Found ${allPartners.length} growth partners`);
 
