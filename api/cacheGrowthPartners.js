@@ -65,57 +65,28 @@ export default async function handler(req) {
       "lastname", 
       "email",
       "company",
-      "jobtitle",
-      "phone",
-      "hs_object_id",
+      "freelancer_board_id",
+      "freelancer_board_url",
+      "freelancer_dashboard",
       "contact_type"
     ];
 
-    // First, try to get ALL contacts to debug
-    console.log('[cacheGrowthPartners] Fetching contacts to check contact_type values...');
+    // Search for Freelance Salespersons (Growth Partners)
+    console.log('[cacheGrowthPartners] Searching for Freelance Salesperson contacts...');
     
-    // Search for Growth Partners - try different variations
-    let searchResults;
-    
-    try {
-      // Try with "Growth Partner"
-      searchResults = await searchHubSpotContacts(
-        [{
-          filters: [
-            {
-              propertyName: "contact_type",
-              operator: "EQ",
-              value: "Growth Partner"
-            }
-          ]
-        }],
-        properties,
-        100
-      );
-      console.log(`[cacheGrowthPartners] Found ${searchResults.results?.length || 0} with 'Growth Partner'`);
-    } catch (e) {
-      console.log('[cacheGrowthPartners] Error with "Growth Partner":', e.message);
-    }
-    
-    // If no results, try without filter to see what values exist
-    if (!searchResults?.results?.length) {
-      console.log('[cacheGrowthPartners] No results with filter, trying to get sample contacts...');
-      try {
-        const sampleResponse = await fetch(`${HUBSPOT_BASE_URL}/crm/v3/objects/contacts?limit=10&properties=contact_type,firstname,lastname,email`, {
-          headers: {
-            'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
-          },
-        });
-        
-        if (sampleResponse.ok) {
-          const sampleData = await sampleResponse.json();
-          const contactTypes = sampleData.results?.map(c => c.properties?.contact_type).filter(Boolean);
-          console.log('[cacheGrowthPartners] Sample contact_type values found:', contactTypes);
-        }
-      } catch (e) {
-        console.log('[cacheGrowthPartners] Could not fetch sample:', e.message);
-      }
-    }
+    const searchResults = await searchHubSpotContacts(
+      [{
+        filters: [
+          {
+            propertyName: "contact_type",
+            operator: "EQ",
+            value: "Freelance Salesperson"  // The correct value!
+          }
+        ]
+      }],
+      properties,
+      100
+    );
 
     // Transform the results to our format
     const allPartners = searchResults?.results?.map(contact => ({
@@ -124,8 +95,9 @@ export default async function handler(req) {
       lastname: contact.properties?.lastname || null,
       email: contact.properties?.email || null,
       company: contact.properties?.company || null,
-      jobtitle: contact.properties?.jobtitle || null,
-      phone: contact.properties?.phone || null,
+      freelancer_board_id: contact.properties?.freelancer_board_id || null,
+      freelancer_board_url: contact.properties?.freelancer_board_url || null,
+      freelancer_dashboard: contact.properties?.freelancer_dashboard || null,
       contactType: contact.properties?.contact_type || null
     })) || [];
     
