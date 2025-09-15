@@ -1,13 +1,36 @@
 // api/cacheGrowthPartners.js
 import { kv } from '@vercel/kv';
 
-// Import the HubSpot client
-import hubspotAPI from '../client/hubspot-client.js';
-
 export const config = {
   runtime: 'edge',
   maxDuration: 30, // Allow up to 30 seconds for this operation
 };
+
+// HubSpot API configuration
+const HUBSPOT_API_KEY = process.env.HUBSPOT_API_KEY;
+const HUBSPOT_BASE_URL = 'https://api.hubapi.com';
+
+async function searchHubSpotContacts(filterGroups, properties, limit = 100) {
+  const response = await fetch(`${HUBSPOT_BASE_URL}/crm/v3/objects/contacts/search`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${HUBSPOT_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      filterGroups,
+      properties,
+      limit,
+      sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }]
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`HubSpot API error: ${response.status} ${response.statusText}`);
+  }
+
+  return await response.json();
+}
 
 export default async function handler(req) {
   // CORS
@@ -33,10 +56,25 @@ export default async function handler(req) {
   try {
     console.log('[cacheGrowthPartners] Starting cache rebuild...');
     
-    // Search for Growth Partners in HubSpot
-    const searchResults = await hubspotAPI.searchObjects({
-      objectType: "contacts",
-      filterGroups: [{
+    if (!HUBSPOT_API_KEY) {
+      throw new Error('HUBSPOT_API_KEY environment variable is not configured');
+    }
+    
+    const properties = [
+      "firstname",
+      "lastname", 
+      "email",
+      "company",
+      "freelancer_board_url",
+      "freelancer_dashboard",
+      "growth_partner_invite_link",
+      "hs_lastmodifieddate",
+      "contact_type"
+    ];
+
+    // Search for Growth Partners by newsletter subscription
+    const searchResults = await searchHubSpotContacts(
+      [{
         filters: [
           {
             propertyName: "blog_growth_partner_newsletter_195515316647_subscription",
@@ -45,19 +83,9 @@ export default async function handler(req) {
           }
         ]
       }],
-      properties: [
-        "firstname",
-        "lastname", 
-        "email",
-        "company",
-        "freelancer_board_url",
-        "freelancer_dashboard",
-        "growth_partner_invite_link",
-        "hs_lastmodifieddate",
-        "contact_type"
-      ],
-      limit: 100 // Adjust as needed
-    });
+      properties,
+      100
+    );
 
     // Transform the results to our format
     const partners = searchResults.results?.map(contact => ({
@@ -76,9 +104,8 @@ export default async function handler(req) {
     // Also try searching by contact_type if it exists
     let additionalPartners = [];
     try {
-      const typeSearchResults = await hubspotAPI.searchObjects({
-        objectType: "contacts",
-        filterGroups: [{
+      const typeSearchResults = await searchHubSpotContacts(
+        [{
           filters: [
             {
               propertyName: "contact_type",
@@ -87,19 +114,9 @@ export default async function handler(req) {
             }
           ]
         }],
-        properties: [
-          "firstname",
-          "lastname", 
-          "email",
-          "company",
-          "freelancer_board_url",
-          "freelancer_dashboard",
-          "growth_partner_invite_link",
-          "hs_lastmodifieddate",
-          "contact_type"
-        ],
-        limit: 100
-      });
+        properties,
+        100
+      );
 
       additionalPartners = typeSearchResults.results?.map(contact => ({
         id: contact.id,
