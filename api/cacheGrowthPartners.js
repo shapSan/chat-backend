@@ -65,21 +65,20 @@ export default async function handler(req) {
       "lastname", 
       "email",
       "company",
-      "freelancer_board_url",
-      "freelancer_dashboard",
-      "growth_partner_invite_link",
-      "hs_lastmodifieddate",
+      "jobtitle",
+      "phone",
+      "hs_object_id",
       "contact_type"
     ];
 
-    // Search for Growth Partners by newsletter subscription
+    // Search for Growth Partners by contact_type
     const searchResults = await searchHubSpotContacts(
       [{
         filters: [
           {
-            propertyName: "blog_growth_partner_newsletter_195515316647_subscription",
+            propertyName: "contact_type",
             operator: "EQ",
-            value: "true"  // Subscribed to Growth Partner Newsletter
+            value: "Growth Partner"
           }
         ]
       }],
@@ -88,61 +87,16 @@ export default async function handler(req) {
     );
 
     // Transform the results to our format
-    const partners = searchResults.results?.map(contact => ({
+    const allPartners = searchResults.results?.map(contact => ({
       id: contact.id,
       firstname: contact.properties?.firstname || null,
       lastname: contact.properties?.lastname || null,
       email: contact.properties?.email || null,
       company: contact.properties?.company || null,
-      freelancer_board_url: contact.properties?.freelancer_board_url || null,
-      freelancer_dashboard: contact.properties?.freelancer_dashboard || null,
-      growth_partner_invite_link: contact.properties?.growth_partner_invite_link || null,
-      lastModified: contact.properties?.hs_lastmodifieddate || null,
+      jobtitle: contact.properties?.jobtitle || null,
+      phone: contact.properties?.phone || null,
       contactType: contact.properties?.contact_type || null
     })) || [];
-
-    // Also try searching by contact_type if it exists
-    let additionalPartners = [];
-    try {
-      const typeSearchResults = await searchHubSpotContacts(
-        [{
-          filters: [
-            {
-              propertyName: "contact_type",
-              operator: "EQ", 
-              value: "Growth Partner"
-            }
-          ]
-        }],
-        properties,
-        100
-      );
-
-      additionalPartners = typeSearchResults.results?.map(contact => ({
-        id: contact.id,
-        firstname: contact.properties?.firstname || null,
-        lastname: contact.properties?.lastname || null,
-        email: contact.properties?.email || null,
-        company: contact.properties?.company || null,
-        freelancer_board_url: contact.properties?.freelancer_board_url || null,
-        freelancer_dashboard: contact.properties?.freelancer_dashboard || null,
-        growth_partner_invite_link: contact.properties?.growth_partner_invite_link || null,
-        lastModified: contact.properties?.hs_lastmodifieddate || null,
-        contactType: contact.properties?.contact_type || null
-      })) || [];
-    } catch (e) {
-      console.log('[cacheGrowthPartners] Could not search by contact_type:', e.message);
-    }
-
-    // Merge and deduplicate partners
-    const allPartners = [...partners];
-    const existingIds = new Set(partners.map(p => p.id));
-    
-    for (const partner of additionalPartners) {
-      if (!existingIds.has(partner.id)) {
-        allPartners.push(partner);
-      }
-    }
 
     console.log(`[cacheGrowthPartners] Found ${allPartners.length} growth partners`);
 
