@@ -44,10 +44,13 @@ export default async function handler(req, res) {
       const token = isUpdate && existingToken ? existingToken : crypto.randomBytes(16).toString('hex');
       const timestamp = Date.now();
       
-      // Store main HTML
+      console.log('[publishSlide] Processing:', { isUpdate, existingToken, token });
+      
+      // Store main HTML (overwrite if updating)
       const htmlBlob = await put(`slides/${token}/index.html`, html, {
         access: 'public',
         contentType: 'text/html',
+        addRandomSuffix: false, // Don't add random suffix to maintain same URL
       });
 
       // Store any assets
@@ -76,17 +79,23 @@ export default async function handler(req, res) {
         // Update existing slide
         const existingDoc = await kv.get(`slide:${existingToken}`);
         if (!existingDoc) {
-          return res.status(404).json({ error: 'Original slide not found' });
+          console.warn('[publishSlide] Original slide not found in KV, will still update blob');
+          // Continue anyway - the HTML blob was already updated above
         }
         
+        // Update or create KV entry
         await kv.set(`slide:${existingToken}`, {
-          ...existingDoc,
+          ...(existingDoc || {}),
+          token: existingToken,
           slides,
           brandName,
           projectName,
           brandData,
           partnershipData,
           templateId,
+          editPassword: existingDoc?.editPassword || (editPassword ? await bcrypt.hash(editPassword, 10) : null),
+          isPublic: true,
+          createdAt: existingDoc?.createdAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           uploadedAssets: slides.map(s => s.image).filter(Boolean)
         });
@@ -131,8 +140,21 @@ export default async function handler(req, res) {
         });
       }
     } catch (error) {
-      console.error('Error publishing slide:', error);
-      return res.status(500).json({ error: 'Failed to publish slide' });
+      console.error('[publishSlide] Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
+      
+      // Return the actual error for debugging
+      return res.status(500).json({ 
+        success: false,
+        error: 'Failed to publish slide',
+        details: error.message,
+        errorName: error.name,
+        // Include stack trace in development
+        ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+      });
     }
   }
 
