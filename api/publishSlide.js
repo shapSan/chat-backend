@@ -45,6 +45,15 @@ export default async function handler(req, res) {
       const timestamp = Date.now();
       
       console.log('[publishSlide] Processing:', { isUpdate, existingToken, token });
+      console.log('[publishSlide] Data to save:', { 
+        brandName, 
+        projectName, 
+        templateId,
+        'brandData type': typeof brandData,
+        'brandData keys': brandData ? Object.keys(brandData) : 'null',
+        'partnershipData type': typeof partnershipData,
+        'partnershipData keys': partnershipData ? Object.keys(partnershipData) : 'null'
+      });
       
       // If updating, delete the old blob first to avoid conflicts
       if (isUpdate && existingToken) {
