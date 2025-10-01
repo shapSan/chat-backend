@@ -46,11 +46,21 @@ export default async function handler(req, res) {
       
       console.log('[publishSlide] Processing:', { isUpdate, existingToken, token });
       
-      // Store main HTML (overwrite if updating)
+      // If updating, delete the old blob first to avoid conflicts
+      if (isUpdate && existingToken) {
+        try {
+          const oldBlobUrl = `https://w24qls9w8lqauhdf.public.blob.vercel-storage.com/slides/${existingToken}/index.html`;
+          await del(oldBlobUrl);
+          console.log('[publishSlide] Deleted old blob:', oldBlobUrl);
+        } catch (delError) {
+          console.warn('[publishSlide] Could not delete old blob (might not exist):', delError.message);
+        }
+      }
+      
+      // Store main HTML
       const htmlBlob = await put(`slides/${token}/index.html`, html, {
         access: 'public',
         contentType: 'text/html',
-        addRandomSuffix: false, // Don't add random suffix to maintain same URL
       });
 
       // Store any assets
