@@ -1,5 +1,7 @@
 import { put, list, del } from '@vercel/blob';
+import { kv } from '@vercel/kv';
 import crypto from 'crypto';
+import bcrypt from 'bcrypt';
 
 // Set max duration for Vercel functions
 export const maxDuration = 30; // 30 seconds for slide operations
@@ -27,14 +29,19 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { html, assets = [] } = req.body;
+      const { html, assets = [], slides, brandName, projectName, brandData, partnershipData, templateId, isUpdate, token: existingToken } = req.body;
+      
+      // Validate required fields for structured storage
+      if (!slides || !Array.isArray(slides)) {
+        return res.status(400).json({ error: 'Slides array is required' });
+      }
       
       if (!html) {
         return res.status(400).json({ error: 'HTML content is required' });
       }
 
-      // Generate unique token for this slide
-      const token = crypto.randomBytes(16).toString('hex');
+      // Determine token (reuse or create new)
+      const token = isUpdate && existingToken ? existingToken : crypto.randomBytes(16).toString('hex');
       const timestamp = Date.now();
       
       // Store main HTML
@@ -59,18 +66,70 @@ export default async function handler(req, res) {
         }
       }
 
-      // Return the publication details with the correct frontend URL
-      const frontendUrl = 'https://www.selfrun.ai/agentpitch/published';
+      // Store structured data in KV
+      const editPassword = process.env.SLIDES_EDIT_PASSWORD;
+      if (!editPassword) {
+        console.warn('[publishSlide] SLIDES_EDIT_PASSWORD not set, slides will not be editable');
+      }
       
-      return res.status(200).json({
-        success: true,
-        token,
-        url: `${frontendUrl}?token=${token}`,
-        blobUrl: htmlBlob.url,
-        viewUrl: `${process.env.NEXT_PUBLIC_BASE_URL || ''}/view/${token}`,
-        assets: assetUrls,
-        timestamp,
-      });
+      if (isUpdate && existingToken) {
+        // Update existing slide
+        const existingDoc = await kv.get(`slide:${existingToken}`);
+        if (!existingDoc) {
+          return res.status(404).json({ error: 'Original slide not found' });
+        }
+        
+        await kv.set(`slide:${existingToken}`, {
+          ...existingDoc,
+          slides,
+          brandName,
+          projectName,
+          brandData,
+          partnershipData,
+          templateId,
+          updatedAt: new Date().toISOString(),
+          uploadedAssets: slides.map(s => s.image).filter(Boolean)
+        });
+        
+        return res.status(200).json({
+          success: true,
+          token: existingToken,
+          message: 'Slide updated successfully',
+          url: `https://www.selfrun.ai/agentpitch/published?token=${existingToken}`,
+          editUrl: editPassword ? `https://www.selfrun.ai/agentpitch/edit?token=${existingToken}` : null,
+          blobUrl: htmlBlob.url,
+          timestamp,
+        });
+      } else {
+        // Create new slide
+        await kv.set(`slide:${token}`, {
+          token,
+          slides,
+          templateId,
+          brandName,
+          projectName,
+          brandData,
+          partnershipData,
+          editPassword: editPassword ? await bcrypt.hash(editPassword, 10) : null,
+          isPublic: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          uploadedAssets: slides.map(s => s.image).filter(Boolean)
+        });
+        
+        const frontendUrl = 'https://www.selfrun.ai/agentpitch/published';
+        
+        return res.status(200).json({
+          success: true,
+          token,
+          url: `${frontendUrl}?token=${token}`,
+          editUrl: editPassword ? `https://www.selfrun.ai/agentpitch/edit?token=${token}` : null,
+          blobUrl: htmlBlob.url,
+          viewUrl: `${process.env.NEXT_PUBLIC_BASE_URL || ''}/view/${token}`,
+          assets: assetUrls,
+          timestamp,
+        });
+      }
     } catch (error) {
       console.error('Error publishing slide:', error);
       return res.status(500).json({ error: 'Failed to publish slide' });
