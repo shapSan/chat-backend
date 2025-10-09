@@ -61,15 +61,12 @@ export default async function handler(req, res) {
   if (req.method === 'GET' && req.query.progress === 'true') {
     res.setHeader('Cache-Control', 'no-store');
     const { sessionId, runId } = req.query;
-    console.log('[Progress API] GET request - sessionId:', sessionId, 'runId:', runId);
     
     if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
     
     const key = progKey(sessionId, runId);
-    console.log('[Progress API] Reading from key:', key);
     
     const rawData = await kv.get(key);
-    console.log('[Progress API] Raw data from KV:', JSON.stringify(rawData));
     
     // Handle both old and new data formats
     let responseData;
@@ -92,7 +89,6 @@ export default async function handler(req, res) {
       return res.status(200).json({ steps: [], done: false, runId });
     }
     
-    console.log(`[Progress API] Returning ${responseData.steps?.length || 0} steps for session ${sessionId}, runId ${runId}`);
     return res.status(200).json(responseData);
   }
 
