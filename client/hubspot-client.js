@@ -1,6 +1,7 @@
 //client/hubspot-client.js
 
 import fetch from 'node-fetch';
+import { kv } from '@vercel/kv';
 
 export const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 
@@ -543,8 +544,23 @@ const hubspotAPI = {
   },
 
   async getPartnershipForProject(projectName) {
-    // Search for partnership data related to the project
     if (!projectName) return null;
+    
+    // --- Cache check first ---
+    const cleanProjectName = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 100);
+    const cacheKey = `partnership-data:${cleanProjectName}`;
+    
+    try {
+      const cachedData = await kv.get(cacheKey);
+      if (cachedData) {
+        console.log(`[getPartnershipForProject] Cache HIT for: "${projectName}"`);
+        return cachedData;
+      }
+      console.log(`[getPartnershipForProject] Cache MISS for: "${projectName}"`);
+    } catch (e) {
+      console.error('[getPartnershipForProject] KV cache check failed:', e.message);
+    }
+    // --- End cache check ---
     
     // Acquire rate limit token first
     await hubspotLimiter.acquire();
@@ -626,7 +642,7 @@ const hubspotAPI = {
           const props = partnership.properties;
           console.log('[getPartnershipForProject] Found partnership data (score:', partnership.score, '):', props.partnership_name);
           
-          return {
+          const partnershipResult = {
             distributor: props.distributor || null,
             studio: props.distributor || null,
             // Release date fields
@@ -670,6 +686,17 @@ const hubspotAPI = {
             audienceSegment: props.audience_segment || null,
             audience_segment: props.audience_segment || null
           };
+          
+          // --- Save to cache (1 hour TTL) ---
+          try {
+            await kv.set(cacheKey, partnershipResult, { ex: 3600 });
+            console.log(`[getPartnershipForProject] Saved to cache: "${cacheKey}"`);
+          } catch (e) {
+            console.error('[getPartnershipForProject] KV cache set failed:', e.message);
+          }
+          // --- End cache save ---
+          
+          return partnershipResult;
         }
       }
     } catch (error) {
