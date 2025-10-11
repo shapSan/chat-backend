@@ -503,7 +503,9 @@ const hubspotAPI = {
           'time_period',           // Era/time period setting
           'plot_location',         // Where the story takes place
           'storyline_location__city_',  // Specific city location
-          'audience_segment'       // Target audience
+          'audience_segment',      // Target audience
+          'main_cast',             // Main cast members
+          'partnership_setting'    // Partnership setting/location
         ],
         limit: filters.limit || 30,
         sorts: filters.sorts || [{
