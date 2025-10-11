@@ -1,6 +1,7 @@
 // api/cachePartnerships.js
 import { kv } from '@vercel/kv';
 import hubspotAPI from '../client/hubspot-client.js';
+import { normalizePartnership } from '../lib/core.js';
 
 export const maxDuration = 300;
 
@@ -209,6 +210,9 @@ export default async function handler(req, res) {
     const matchedPartnerships = partnerships.map(partnership => {
       const props = partnership.properties;
       
+      // Normalize the raw partnership data to get clean, consistent fields
+      const normalized = normalizePartnership(props);
+      
       // Debug log to see what fields we're getting
       console.log('[CACHE] Sample partnership properties:', {
         name: props.partnership_name,
@@ -292,9 +296,14 @@ export default async function handler(req, res) {
       }
       
       return {
+        // Use normalized fields for consistency
+        ...normalized,
+        // Keep the ID from HubSpot
         id: partnership.id,
+        // Keep the raw name fields for compatibility
         name: props.partnership_name || 'Untitled Project',
         partnership_name: props.partnership_name || 'Untitled Project',
+        // Keep genre fields (normalized.vibe handles this but keep originals too)
         genre: props.genre_production || 'General',
         genre_production: props.genre_production || null,
         production_type: props.production_type || '',
@@ -302,25 +311,30 @@ export default async function handler(req, res) {
         movie_rating: props.movie_rating || null,
         tv_ratings: props.tv_ratings || null,
         sub_ratings_for_tv_content: props.sub_ratings_for_tv_content || null,
-        releaseDate: props.release__est__date || props.release_est_date || null,
+        // Use normalized date fields but keep originals for compatibility
+        releaseDate: normalized.releaseDate || props.release__est__date || props.release_est_date || null,
         release__est__date: props.release__est__date || null,
         release_est_date: props.release_est_date || null,
-        startDate: props.start_date || props.production_start_date || null,
+        startDate: normalized.productionStartDate || props.start_date || props.production_start_date || null,
         start_date: props.start_date || null,
         production_start_date: props.production_start_date || null,
         productionStage: props.production_stage || '',
         production_stage: props.production_stage || null,
         pipelineStage: props.hs_pipeline_stage || '',
         hs_pipeline_stage: props.hs_pipeline_stage || null,
-        synopsis: props.synopsis || '',
+        synopsis: normalized.synopsis || props.synopsis || '',
         stage: props.production_stage || props.hs_pipeline_stage || '',
         lastModified: props.hs_lastmodifieddate || null,
         hs_lastmodifieddate: props.hs_lastmodifieddate || null,
         content_type: props.content_type || null,
-        // NEW FIELDS
+        // Normalized fields are already spread above, but explicitly set key ones
+        location: normalized.location,
+        cast: normalized.cast,
+        vibe: normalized.vibe || normalized.genre_production,
+        distributor: normalized.distributor,
+        // Keep all the other raw fields
         main_cast: props.main_cast || null,
         partnership_status: props.partnership_status || null,
-        distributor: props.distributor || null,
         brand_name: props.brand_name || null,
         amount: props.amount || null,
         hollywood_branded_fee: props.hollywood_branded_fee || null,
