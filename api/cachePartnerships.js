@@ -291,14 +291,30 @@ export default async function handler(req, res) {
         console.log('[CACHE] First partnership lastModified value:', props.hs_lastmodifieddate);
       }
       
-      return {
+      const finalObject = {
         // Spread all raw properties from HubSpot exactly as-is
         ...props,
         // Add the HubSpot ID
         id: partnership.id,
+        // Add the 'name' property for the panel to use
+        name: props.partnership_name || 'Untitled Project',
         // Add matched brands
         matchedBrands: topBrands
       };
+      
+      // Verification log - only log first partnership to avoid spam
+      if (partnership === partnerships[0]) {
+        console.log('[CACHE-BUILD] Verifying final object structure:', {
+          hasName: !!finalObject.name,
+          name: finalObject.name,
+          hasId: !!finalObject.id,
+          hasMainCast: !!finalObject.main_cast,
+          hasPartnershipName: !!finalObject.partnership_name,
+          sampleKeys: Object.keys(finalObject).slice(0, 10)
+        });
+      }
+      
+      return finalObject;
     });
 
     // Cache the results (no TTL - persistent like brands cache)
