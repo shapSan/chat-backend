@@ -1,7 +1,6 @@
 // api/cachePartnerships.js
 import { kv } from '@vercel/kv';
 import hubspotAPI from '../client/hubspot-client.js';
-import { normalizePartnership } from '../lib/core.js';
 
 export const maxDuration = 300;
 
@@ -210,9 +209,6 @@ export default async function handler(req, res) {
     const matchedPartnerships = partnerships.map(partnership => {
       const props = partnership.properties;
       
-      // Normalize the raw partnership data to get clean, consistent fields
-      const normalized = normalizePartnership(props);
-      
       // Debug log to see what fields we're getting
       console.log('[CACHE] Sample partnership properties:', {
         name: props.partnership_name,
@@ -296,58 +292,11 @@ export default async function handler(req, res) {
       }
       
       return {
-        // Use normalized fields for consistency
-        ...normalized,
-        // Keep the ID from HubSpot
+        // Spread all raw properties from HubSpot exactly as-is
+        ...props,
+        // Add the HubSpot ID
         id: partnership.id,
-        // Keep the raw name fields for compatibility
-        name: props.partnership_name || 'Untitled Project',
-        partnership_name: props.partnership_name || 'Untitled Project',
-        // Keep genre fields (normalized.vibe handles this but keep originals too)
-        genre: props.genre_production || 'General',
-        genre_production: props.genre_production || null,
-        production_type: props.production_type || '',
-        rating: getRating(),
-        movie_rating: props.movie_rating || null,
-        tv_ratings: props.tv_ratings || null,
-        sub_ratings_for_tv_content: props.sub_ratings_for_tv_content || null,
-        // Use normalized date fields but keep originals for compatibility
-        releaseDate: normalized.releaseDate || props.release__est__date || props.release_est_date || null,
-        release__est__date: props.release__est__date || null,
-        release_est_date: props.release_est_date || null,
-        startDate: normalized.productionStartDate || props.start_date || props.production_start_date || null,
-        start_date: props.start_date || null,
-        production_start_date: props.production_start_date || null,
-        productionStage: props.production_stage || '',
-        production_stage: props.production_stage || null,
-        pipelineStage: props.hs_pipeline_stage || '',
-        hs_pipeline_stage: props.hs_pipeline_stage || null,
-        synopsis: normalized.synopsis || props.synopsis || '',
-        stage: props.production_stage || props.hs_pipeline_stage || '',
-        lastModified: props.hs_lastmodifieddate || null,
-        hs_lastmodifieddate: props.hs_lastmodifieddate || null,
-        content_type: props.content_type || null,
-        // Normalized fields are already spread above, but explicitly set key ones
-        location: normalized.location,
-        cast: normalized.cast,
-        vibe: normalized.vibe || normalized.genre_production,
-        distributor: normalized.distributor,
-        // Keep all the other raw fields
-        main_cast: props.main_cast || null,
-        partnership_status: props.partnership_status || null,
-        brand_name: props.brand_name || null,
-        amount: props.amount || null,
-        hollywood_branded_fee: props.hollywood_branded_fee || null,
-        closedate: props.closedate || null,
-        contract_sent_date: props.contract_sent_date || null,
-        num_associated_contacts: props.num_associated_contacts || null,
-        est__shooting_end_date: props.est__shooting_end_date || null,
-        production_end_date: props.production_end_date || null,
-        time_period: props.time_period || null,
-        plot_location: props.plot_location || null,
-        storyline_location__city_: props.storyline_location__city_ || null,
-        audience_segment: props.audience_segment || null,
-        partnership_setting: props.partnership_setting || null,
+        // Add matched brands
         matchedBrands: topBrands
       };
     });
