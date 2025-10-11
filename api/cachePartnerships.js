@@ -90,7 +90,8 @@ export default async function handler(req, res) {
       'time_period',              // Time period
       'plot_location',            // Plot location
       'storyline_location__city_',// Storyline city
-      'audience_segment'          // Audience segment
+      'audience_segment',         // Audience segment
+      'partnership_setting'       // Partnership setting
     ];
     
     do {
@@ -332,6 +333,7 @@ export default async function handler(req, res) {
         plot_location: props.plot_location || null,
         storyline_location__city_: props.storyline_location__city_ || null,
         audience_segment: props.audience_segment || null,
+        partnership_setting: props.partnership_setting || null,
         matchedBrands: topBrands
       };
     });
