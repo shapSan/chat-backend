@@ -75,7 +75,22 @@ export default async function handler(req, res) {
       'hs_lastmodifieddate',      // Object last modified date/time - CRITICAL FOR SORTING
       'genre_production',
       'production_type',
-      'synopsis'
+      'synopsis',
+      'main_cast',                // Main cast members
+      'partnership_status',       // Partnership status
+      'distributor',              // Distributor
+      'brand_name',               // Brand name
+      'amount',                   // Deal amount
+      'hollywood_branded_fee',    // HB fee
+      'closedate',                // Close date
+      'contract_sent_date',       // Contract sent date
+      'num_associated_contacts',  // Number of contacts
+      'est__shooting_end_date',   // Shooting end date
+      'production_end_date',      // Production end date
+      'time_period',              // Time period
+      'plot_location',            // Plot location
+      'storyline_location__city_',// Storyline city
+      'audience_segment'          // Audience segment
     ];
     
     do {
@@ -196,6 +211,8 @@ export default async function handler(req, res) {
       // Debug log to see what fields we're getting
       console.log('[CACHE] Sample partnership properties:', {
         name: props.partnership_name,
+        genre_production: props.genre_production,
+        main_cast: props.main_cast,
         hs_lastmodifieddate: props.hs_lastmodifieddate,
         all_keys: Object.keys(props)
       });
@@ -276,18 +293,45 @@ export default async function handler(req, res) {
       return {
         id: partnership.id,
         name: props.partnership_name || 'Untitled Project',
+        partnership_name: props.partnership_name || 'Untitled Project',
         genre: props.genre_production || 'General',
-        production_type: props.production_type || '',  // Add production type
+        genre_production: props.genre_production || null,
+        production_type: props.production_type || '',
         rating: getRating(),
-        releaseDate: props.release__est__date || props.release_est_date || null,  // Prioritize double underscore version
-        startDate: props.start_date || props.production_start_date || null,  // Prioritize start_date
+        movie_rating: props.movie_rating || null,
+        tv_ratings: props.tv_ratings || null,
+        sub_ratings_for_tv_content: props.sub_ratings_for_tv_content || null,
+        releaseDate: props.release__est__date || props.release_est_date || null,
+        release__est__date: props.release__est__date || null,
+        release_est_date: props.release_est_date || null,
+        startDate: props.start_date || props.production_start_date || null,
+        start_date: props.start_date || null,
+        production_start_date: props.production_start_date || null,
         productionStage: props.production_stage || '',
+        production_stage: props.production_stage || null,
         pipelineStage: props.hs_pipeline_stage || '',
+        hs_pipeline_stage: props.hs_pipeline_stage || null,
         synopsis: props.synopsis || '',
         stage: props.production_stage || props.hs_pipeline_stage || '',
-        lastModified: props.hs_lastmodifieddate || null,  // Add last modified date
-        // Include sub-ratings if available for TV content
-        subRatings: props.sub_ratings_for_tv_content || null,
+        lastModified: props.hs_lastmodifieddate || null,
+        hs_lastmodifieddate: props.hs_lastmodifieddate || null,
+        content_type: props.content_type || null,
+        // NEW FIELDS
+        main_cast: props.main_cast || null,
+        partnership_status: props.partnership_status || null,
+        distributor: props.distributor || null,
+        brand_name: props.brand_name || null,
+        amount: props.amount || null,
+        hollywood_branded_fee: props.hollywood_branded_fee || null,
+        closedate: props.closedate || null,
+        contract_sent_date: props.contract_sent_date || null,
+        num_associated_contacts: props.num_associated_contacts || null,
+        est__shooting_end_date: props.est__shooting_end_date || null,
+        production_end_date: props.production_end_date || null,
+        time_period: props.time_period || null,
+        plot_location: props.plot_location || null,
+        storyline_location__city_: props.storyline_location__city_ || null,
+        audience_segment: props.audience_segment || null,
         matchedBrands: topBrands
       };
     });
