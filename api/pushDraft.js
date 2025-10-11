@@ -703,12 +703,14 @@ export default async function handler(req, res) {
 
     // Extract production data from the payload
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
-    const projectName = cleanProjectName(body.projectName ?? pd.projectName ?? "Project");
-    const cast = body.cast ?? pd.cast ?? "";
-    const location = body.location ?? pd.location ?? "";
-    const vibe = body.vibe ?? pd.vibe ?? "";
-    const notes = body.notes ?? pd.notes ?? "";
-    const synopsis = pd.synopsis ?? "";
+    
+    // Prioritize raw HubSpot fields, with fallbacks to old normalized names
+    const projectName = cleanProjectName(pd.partnership_name || body.projectName || pd.projectName || "Project");
+    const cast = pd.main_cast || pd.cast || body.cast || "";
+    const location = pd.plot_location || pd.storyline_location__city_ || pd.location || body.location || "";
+    const vibe = pd.genre_production || pd.vibe || body.vibe || "";
+    const notes = body.notes || pd.notes || "";
+    const synopsis = pd.synopsis || "";
     
     // Log received production data for debugging
     console.log('[pushDraft] Received production data:', pd);
