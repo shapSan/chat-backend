@@ -686,7 +686,10 @@ const hubspotAPI = {
             storylineCity: props.storyline_location__city_ || null,
             storyline_location__city_: props.storyline_location__city_ || null,
             audienceSegment: props.audience_segment || null,
-            audience_segment: props.audience_segment || null
+            audience_segment: props.audience_segment || null,
+            // Partnership setting
+            partnership_setting: props.partnership_setting || null,
+            setting: props.partnership_setting || props.setting || null
           };
           
           // --- Save to cache (1 hour TTL) ---
