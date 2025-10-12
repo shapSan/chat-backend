@@ -667,9 +667,9 @@ function getRotatingSubject(projectName, brandName, isInSystem = false) {
   if (isInSystem) {
     // VERSION 2 - Brand already in system subject lines
     const formats = [
-      `Sample Opportunity for ${brandName}: ${projectName}`,
-      `Radar Preview: ${projectName} for ${brandName}`,
-      `Next Step: Turning ${projectName} Into ${brandName}'s Hollywood Platform`
+      `[Agent Pitch] Sample Opportunity for ${brandName}: ${projectName}`,
+      `[Agent Pitch] Radar Preview: ${projectName} for ${brandName}`,
+      `[Agent Pitch] Next Step: Turning ${projectName} Into ${brandName}'s Hollywood Platform`
     ];
     const subject = formats[subjectCounter % 3];
     subjectCounter++;
@@ -677,9 +677,9 @@ function getRotatingSubject(projectName, brandName, isInSystem = false) {
   } else {
     // VERSION 1 - Brand not in system subject lines
     const formats = [
-      `Hollywood Opportunity: ${projectName} x ${brandName}`,
-      `Idea Starter: ${projectName} for ${brandName}`,
-      `Entertainment Partnership Opportunity for ${brandName}`
+      `[Agent Pitch] Hollywood Opportunity: ${projectName} x ${brandName}`,
+      `[Agent Pitch] Idea Starter: ${projectName} for ${brandName}`,
+      `[Agent Pitch] Entertainment Partnership Opportunity for ${brandName}`
     ];
     const subject = formats[subjectCounter % 3];
     subjectCounter++;
