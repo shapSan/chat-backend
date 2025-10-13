@@ -972,11 +972,11 @@ export default async function handler(req, res) {
         const deleteSection = `
 <p style="margin:0 0 4px 0;font-size:13px;color:#999;">———————— ! DELETE BEFORE SENDING ! ————————</p>
 <p style="margin:0 0 12px 0;font-size:16px;font-weight:600;color:#10b981;">New Agent Pitch: ${esc(b.name)} x ${esc(projectName)}</p>
-<p style="margin:0 0 8px 0;"><strong>Action needed:</strong> Review and customize the email and ${b.assets?.some(a => a.type === 'link' && a.title?.toLowerCase().includes('slide')) ? 'slide deck' : 'attached materials'} before sending.</p>
+<p style="margin:0 0 8px 0;"><strong>Action needed:</strong> Please review and edit the email & slides before sending.</p>
 <p style="margin:0 0 4px 0;">📎 <strong>HubSpot links:</strong></p>
 <p style="margin:0 0 2px 0;padding-left:20px;">${brandHubSpotUrl ? `<a href="${brandHubSpotUrl}" target="_blank" style="color:#2563eb;text-decoration:none;">${esc(b.name)}</a>` : esc(b.name)}</p>
 <p style="margin:0 0 8px 0;padding-left:20px;">${partnershipHubSpotUrl ? `<a href="${partnershipHubSpotUrl}" target="_blank" style="color:#2563eb;text-decoration:none;">${esc(projectName)}</a>` : esc(projectName)}</p>
-<p style="margin:0 0 8px 0;font-size:13px;color:#6c757d;">⏰ This email is tracked for 24-hour response time. Please review and send promptly.</p>
+<p style="margin:0 0 8px 0;font-size:13px;color:#ff8c00;font-weight:600;">⏰ This email is tracked for 24-hour response time. Please review and send promptly.</p>
 <p style="margin:0 0 16px 0;font-size:13px;color:#999;">——————————————————————————————</p>
 `.trim();
         
