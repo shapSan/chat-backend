@@ -133,8 +133,8 @@ export default async function handler(req, res) {
           success: true,
           token: existingToken,
           message: 'Slide updated successfully',
-          url: `https://www.hollywoodbranded.com/agentpitch/published?token=${existingToken}`,
-          editUrl: editPassword ? `https://www.hollywoodbranded.com/agentpitch/edit?token=${existingToken}` : null,
+          url: `https://www.selfrun.ai/agentpitch/published?token=${existingToken}`,
+          editUrl: editPassword ? `https://www.selfrun.ai/agentpitch/edit?token=${existingToken}` : null,
           blobUrl: htmlBlob.url,
           timestamp,
         });
@@ -155,13 +155,13 @@ export default async function handler(req, res) {
           uploadedAssets: slides.map(s => s.image).filter(Boolean)
         });
         
-        const frontendUrl = 'https://www.hollywoodbranded.com/agentpitch/published';
+        const frontendUrl = 'https://www.selfrun.ai/agentpitch/published';
         
         return res.status(200).json({
           success: true,
           token,
           url: `${frontendUrl}?token=${token}`,
-          editUrl: editPassword ? `https://www.hollywoodbranded.com/agentpitch/edit?token=${token}` : null,
+          editUrl: editPassword ? `https://www.selfrun.ai/agentpitch/edit?token=${token}` : null,
           blobUrl: htmlBlob.url,
           viewUrl: `${process.env.NEXT_PUBLIC_BASE_URL || ''}/view/${token}`,
           assets: assetUrls,
