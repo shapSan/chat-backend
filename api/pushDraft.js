@@ -960,21 +960,23 @@ export default async function handler(req, res) {
         const ownerName = accountOwner?.firstName || '';
         const ownerGreeting = ownerName ? `Hi ${ownerName}` : 'Hi';
         
-        // Get HubSpot links
-        // Use provided URLs first, otherwise construct from IDs
-        const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID || '45827226'; // Default to your portal ID
-        const brandHubSpotUrl = b.hubspotUrl || (b.id ? `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/2-${b.id}` : null);
-        const partnershipHubSpotUrl = pd.hubspotUrl || pd.partnershipUrl || null;
+        // Get HubSpot links using the CORRECT format from your other files
+        const PORTAL_ID = '442891';
+        const BRAND_OBJECT_TYPE = '2-26628489';
+        const PARTNERSHIP_OBJECT_TYPE = '2-27025032';
+        
+        const brandHubSpotUrl = b.id ? `https://app.hubspot.com/contacts/${PORTAL_ID}/record/${BRAND_OBJECT_TYPE}/${b.id}` : null;
+        const partnershipHubSpotUrl = pd.id ? `https://app.hubspot.com/contacts/${PORTAL_ID}/record/${PARTNERSHIP_OBJECT_TYPE}/${pd.id}` : null;
         
         const deleteSection = `
-<div style="background-color:#fff3cd;border:2px solid #ff0000;border-radius:8px;padding:16px;margin-bottom:24px;">
-  <p style="margin:0 0 12px 0;color:#ff0000;font-weight:bold;font-size:16px;">⚠️ DELETE THIS SECTION BEFORE SENDING ⚠️</p>
+<div style="background-color:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:16px;margin-bottom:24px;">
+  <p style="margin:0 0 8px 0;font-weight:600;font-size:14px;">New Agent Pitch</p>
   <p style="margin:0 0 8px 0;">${ownerGreeting},</p>
   <p style="margin:0 0 8px 0;">New proposal ready for your review: <strong>${esc(b.name)}</strong></p>
   <p style="margin:0 0 8px 0;"><strong>Action needed:</strong> Review and customize the email and ${b.assets?.some(a => a.type === 'link' && a.title?.toLowerCase().includes('slide')) ? 'slide deck' : 'attached materials'} before sending.</p>
-  ${brandHubSpotUrl ? `<p style="margin:0 0 4px 0;">📎 <a href="${brandHubSpotUrl}" target="_blank" style="color:#2563eb;">View Brand in HubSpot</a></p>` : ''}
-  ${partnershipHubSpotUrl ? `<p style="margin:0 0 8px 0;">📎 <a href="${partnershipHubSpotUrl}" target="_blank" style="color:#2563eb;">View Partnership in HubSpot</a></p>` : ''}
-  <p style="margin:8px 0 0 0;font-size:13px;color:#856404;"><strong>⏰ This email is tracked for 24-hour response time.</strong> Please review and send promptly.</p>
+  ${brandHubSpotUrl ? `<p style="margin:0 0 4px 0;">📎 <a href="${brandHubSpotUrl}" target="_blank" style="color:#2563eb;">Open in HubSpot</a></p>` : ''}
+  ${partnershipHubSpotUrl ? `<p style="margin:0 0 8px 0;">🎬 <a href="${partnershipHubSpotUrl}" target="_blank" style="color:#2563eb;">${esc(projectName)}</a></p>` : ''}
+  <p style="margin:8px 0 0 0;font-size:13px;color:#6c757d;">⏰ This email is tracked for 24-hour response time. Please review and send promptly.</p>
 </div>`.trim();
         
         const htmlBody = `
