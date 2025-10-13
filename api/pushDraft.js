@@ -955,8 +955,31 @@ export default async function handler(req, res) {
           return `<p style="margin:${topMargin} 0 16px 0;">${formatted}</p>`;
         }).join('');
 
+        // Build DELETE BEFORE SENDING section
+        const accountOwner = internalTeam.hubspotOwner || internalTeam.secondaryOwner || internalTeam.partnershipsLead;
+        const ownerName = accountOwner?.firstName || '';
+        const ownerGreeting = ownerName ? `Hi ${ownerName}` : 'Hi';
+        
+        // Get HubSpot links
+        // Use provided URLs first, otherwise construct from IDs
+        const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID || '45827226'; // Default to your portal ID
+        const brandHubSpotUrl = b.hubspotUrl || (b.id ? `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/2-${b.id}` : null);
+        const partnershipHubSpotUrl = pd.hubspotUrl || pd.partnershipUrl || null;
+        
+        const deleteSection = `
+<div style="background-color:#fff3cd;border:2px solid #ff0000;border-radius:8px;padding:16px;margin-bottom:24px;">
+  <p style="margin:0 0 12px 0;color:#ff0000;font-weight:bold;font-size:16px;">⚠️ DELETE THIS SECTION BEFORE SENDING ⚠️</p>
+  <p style="margin:0 0 8px 0;">${ownerGreeting},</p>
+  <p style="margin:0 0 8px 0;">New proposal ready for your review: <strong>${esc(b.name)}</strong></p>
+  <p style="margin:0 0 8px 0;"><strong>Action needed:</strong> Review and customize the email and ${b.assets?.some(a => a.type === 'link' && a.title?.toLowerCase().includes('slide')) ? 'slide deck' : 'attached materials'} before sending.</p>
+  ${brandHubSpotUrl ? `<p style="margin:0 0 4px 0;">📎 <a href="${brandHubSpotUrl}" target="_blank" style="color:#2563eb;">View Brand in HubSpot</a></p>` : ''}
+  ${partnershipHubSpotUrl ? `<p style="margin:0 0 8px 0;">📎 <a href="${partnershipHubSpotUrl}" target="_blank" style="color:#2563eb;">View Partnership in HubSpot</a></p>` : ''}
+  <p style="margin:8px 0 0 0;font-size:13px;color:#856404;"><strong>⏰ This email is tracked for 24-hour response time.</strong> Please review and send promptly.</p>
+</div>`.trim();
+        
         const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;max-width:720px;">
+  ${deleteSection}
   ${paragraphsProcessed}
 </div>`.trim();
 
