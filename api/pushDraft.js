@@ -966,18 +966,19 @@ export default async function handler(req, res) {
         const PARTNERSHIP_OBJECT_TYPE = '2-27025032';
         
         const brandHubSpotUrl = b.id ? `https://app.hubspot.com/contacts/${PORTAL_ID}/record/${BRAND_OBJECT_TYPE}/${b.id}` : null;
-        const partnershipHubSpotUrl = pd.id ? `https://app.hubspot.com/contacts/${PORTAL_ID}/record/${PARTNERSHIP_OBJECT_TYPE}/${pd.id}` : null;
+        const partnershipHubSpotUrl = (pd.id || pd.partnership_id || pd.partnershipId || body.partnershipId) ? 
+          `https://app.hubspot.com/contacts/${PORTAL_ID}/record/${PARTNERSHIP_OBJECT_TYPE}/${pd.id || pd.partnership_id || pd.partnershipId || body.partnershipId}` : null;
         
         const deleteSection = `
-<div style="background-color:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:16px;margin-bottom:24px;">
-  <p style="margin:0 0 8px 0;font-weight:600;font-size:14px;">New Agent Pitch</p>
-  <p style="margin:0 0 8px 0;">${ownerGreeting},</p>
-  <p style="margin:0 0 8px 0;">New proposal ready for your review: <strong>${esc(b.name)}</strong></p>
-  <p style="margin:0 0 8px 0;"><strong>Action needed:</strong> Review and customize the email and ${b.assets?.some(a => a.type === 'link' && a.title?.toLowerCase().includes('slide')) ? 'slide deck' : 'attached materials'} before sending.</p>
-  ${brandHubSpotUrl ? `<p style="margin:0 0 4px 0;">📎 <a href="${brandHubSpotUrl}" target="_blank" style="color:#2563eb;">Open in HubSpot</a></p>` : ''}
-  ${partnershipHubSpotUrl ? `<p style="margin:0 0 8px 0;">🎬 <a href="${partnershipHubSpotUrl}" target="_blank" style="color:#2563eb;">${esc(projectName)}</a></p>` : ''}
-  <p style="margin:8px 0 0 0;font-size:13px;color:#6c757d;">⏰ This email is tracked for 24-hour response time. Please review and send promptly.</p>
-</div>`.trim();
+<p style="margin:0 0 4px 0;font-size:13px;color:#999;">———————— ! DELETE BEFORE SENDING ! ————————</p>
+<p style="margin:0 0 12px 0;font-size:16px;font-weight:600;color:#10b981;">New Agent Pitch: ${esc(b.name)} x ${esc(projectName)}</p>
+<p style="margin:0 0 8px 0;"><strong>Action needed:</strong> Review and customize the email and ${b.assets?.some(a => a.type === 'link' && a.title?.toLowerCase().includes('slide')) ? 'slide deck' : 'attached materials'} before sending.</p>
+<p style="margin:0 0 4px 0;">📎 <strong>HubSpot links:</strong></p>
+<p style="margin:0 0 2px 0;padding-left:20px;">${brandHubSpotUrl ? `<a href="${brandHubSpotUrl}" target="_blank" style="color:#2563eb;text-decoration:none;">${esc(b.name)}</a>` : esc(b.name)}</p>
+<p style="margin:0 0 8px 0;padding-left:20px;">${partnershipHubSpotUrl ? `<a href="${partnershipHubSpotUrl}" target="_blank" style="color:#2563eb;text-decoration:none;">${esc(projectName)}</a>` : esc(projectName)}</p>
+<p style="margin:0 0 8px 0;font-size:13px;color:#6c757d;">⏰ This email is tracked for 24-hour response time. Please review and send promptly.</p>
+<p style="margin:0 0 16px 0;font-size:13px;color:#999;">——————————————————————————————</p>
+`.trim();
         
         const htmlBody = `
 <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;max-width:720px;">
