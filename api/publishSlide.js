@@ -103,7 +103,7 @@ export default async function handler(req, res) {
         }
         
         // Update or create KV entry
-        await kv.set(`slide:${existingToken}`, {
+        const dataToSave = {
           ...(existingDoc || {}),
           token: existingToken,
           slides,
@@ -117,14 +117,24 @@ export default async function handler(req, res) {
           createdAt: existingDoc?.createdAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           uploadedAssets: slides.map(s => s.image).filter(Boolean)
+        };
+        
+        console.log('[publishSlide] About to save to KV:', {
+          token: existingToken,
+          'has brandData': !!dataToSave.brandData,
+          'has partnershipData': !!dataToSave.partnershipData,
+          'brandData keys': dataToSave.brandData ? Object.keys(dataToSave.brandData) : 'null',
+          'partnershipData keys': dataToSave.partnershipData ? Object.keys(dataToSave.partnershipData) : 'null'
         });
+        
+        await kv.set(`slide:${existingToken}`, dataToSave);
         
         return res.status(200).json({
           success: true,
           token: existingToken,
           message: 'Slide updated successfully',
-          url: `https://www.selfrun.ai/agentpitch/published?token=${existingToken}`,
-          editUrl: editPassword ? `https://www.selfrun.ai/agentpitch/edit?token=${existingToken}` : null,
+          url: `https://www.hollywoodbranded.com/agentpitch/published?token=${existingToken}`,
+          editUrl: editPassword ? `https://www.hollywoodbranded.com/agentpitch/edit?token=${existingToken}` : null,
           blobUrl: htmlBlob.url,
           timestamp,
         });
@@ -145,13 +155,13 @@ export default async function handler(req, res) {
           uploadedAssets: slides.map(s => s.image).filter(Boolean)
         });
         
-        const frontendUrl = 'https://www.selfrun.ai/agentpitch/published';
+        const frontendUrl = 'https://www.hollywoodbranded.com/agentpitch/published';
         
         return res.status(200).json({
           success: true,
           token,
           url: `${frontendUrl}?token=${token}`,
-          editUrl: editPassword ? `https://www.selfrun.ai/agentpitch/edit?token=${token}` : null,
+          editUrl: editPassword ? `https://www.hollywoodbranded.com/agentpitch/edit?token=${token}` : null,
           blobUrl: htmlBlob.url,
           viewUrl: `${process.env.NEXT_PUBLIC_BASE_URL || ''}/view/${token}`,
           assets: assetUrls,
