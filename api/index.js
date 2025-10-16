@@ -237,11 +237,15 @@ export default async function handler(req, res) {
       if (!prompt) return res.status(400).json({ error: 'Missing required fields', details: 'prompt is required' });
 
       try {
-        const { conversationContext } = await loadContext();
-        const lastProductionContext = extractLastProduction(conversationContext);
-        const enhancedPrompt = lastProductionContext ? `Continue working on this production: ${lastProductionContext}\n\n${prompt}` : prompt;
-
-        const result = await generateOpenAIImage({ prompt, sessionId, enhancedPrompt, dimensions });
+        // CRITICAL FIX: Image generation must be STATELESS
+        // Do NOT inject session context or conversation history into the prompt
+        // The prompt from the frontend is the ONLY input to the image model
+        const result = await generateOpenAIImage({ 
+          prompt,  // Use ONLY the exact prompt from frontend
+          sessionId, 
+          enhancedPrompt: prompt,  // No enhancement - use prompt as-is
+          dimensions 
+        });
         await progressDone(sessionId, runId);
         return res.status(200).json(result);
       } catch (e) {
@@ -258,11 +262,9 @@ export default async function handler(req, res) {
       if (!promptText) return res.status(400).json({ error: 'Missing required fields', details: 'promptText is required' });
 
       try {
-        const { conversationContext } = await loadContext();
-        const lastProductionContext = extractLastProduction(conversationContext);
-        const enhancedPromptText = lastProductionContext
-          ? `Continue working on this production: ${lastProductionContext}\n\n${promptText}`
-          : promptText;
+        // CRITICAL FIX: Video generation must be STATELESS
+        // Do NOT inject session context or conversation history into the prompt
+        // The promptText from the frontend is the ONLY input to the video model
 
         let result;
         if (videoModel === 'veo3') {
@@ -276,7 +278,7 @@ export default async function handler(req, res) {
           else if (ratio === '832:1104') ar = '9:16';
           else if (ratio === '1920:1080') ar = '16:9';
 
-          result = await generateVeo3Video({ promptText: enhancedPromptText, aspectRatio: ar, duration });
+          result = await generateVeo3Video({ promptText: promptText, aspectRatio: ar, duration });
         } else {
           if (!runwayApiKey) {
             return res
@@ -292,7 +294,7 @@ export default async function handler(req, res) {
               'https://images.unsplash.com/photo-1497215842964-222b430dc094?w=1280&h=720&fit=crop';
           }
           result = await generateRunwayVideo({
-            promptText: enhancedPromptText,
+            promptText: promptText,
             promptImage: imageToUse,
             model: model || MODELS.runway.turbo,
             ratio: ratio || '1104:832',
