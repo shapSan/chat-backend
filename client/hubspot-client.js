@@ -671,6 +671,9 @@ const hubspotAPI = {
           const props = partnership.properties;
           console.log('[getPartnershipForProject] Found partnership data (score:', partnership.score, '):', props.partnership_name);
           
+          // DEBUG: Log what's in the main_cast field
+          console.log('[getPartnershipForProject] RAW main_cast from HubSpot:', props.main_cast);
+          
           // Normalize the project name to handle placeholders
           const cleanedProjectName = normalizeProjectName(props.partnership_name);
           
