@@ -214,6 +214,93 @@ export default async function handler(req, res) {
     }
 
     /* =========================
+     * GENERATE INTELLIGENT PROMPT
+     * ======================= */
+    if (req.body.generatePrompt === true) {
+      const { projectName, brandName, synopsis, cast, headline, body, dates } = req.body;
+
+      try {
+        await progressPush(sessionId, runId, { type: 'info', text: '🎬 Crafting intelligent prompt...', runId });
+        
+        // Build context for OpenAI
+        const contextParts = [];
+        if (projectName && projectName !== 'this production') contextParts.push(`Production: "${projectName}"`);
+        if (brandName && brandName !== 'the brand') contextParts.push(`Brand: ${brandName}`);
+        if (synopsis) contextParts.push(`Synopsis: ${synopsis}`);
+        if (cast) contextParts.push(`Cast: ${cast}`);
+        if (headline) contextParts.push(`Slide Headline: ${headline}`);
+        if (body) contextParts.push(`Slide Content: ${body}`);
+        if (dates) contextParts.push(`Timeline: ${dates}`);
+        
+        const context = contextParts.join('\n');
+        
+        const systemPrompt = `You are an expert at creating cinematic image generation prompts for Hollywood brand integration pitches.
+
+Your goal: Create a prompt that will generate an image that makes the brand EXCITED and helps them VISUALIZE their product naturally integrated into this production.
+
+Key principles:
+1. BE SPECIFIC - Describe an actual scene from the production
+2. NATURAL INTEGRATION - The brand should feel organic to the story, not forced
+3. CINEMATIC QUALITY - Use Hollywood production terminology
+4. AUTHENTIC MOMENTS - Show cast in genuine character moments  
+5. BRAND EXCITEMENT - Make it visually compelling so brands see the opportunity
+
+Format: Write a single, detailed image generation prompt (no preamble, no explanation, just the prompt itself).
+
+Example good prompt:
+"A tense wide shot inside a sleek, neon-lit corporate office. Callum Turner as Case hunches over a futuristic desk covered with holographic displays, while Briana Middleton as Molly stands by the window overlooking a rainy cyberpunk cityscape. A Clicks smartphone sits prominently on the desk, its unique design catching the blue neon glow, naturally integrated as their communication device for the heist. Cinematic lighting with strong rim lights, atmospheric haze, shot on ARRI Alexa, 2.39:1 aspect ratio, professional Hollywood cinematography."`;
+
+        const userPrompt = `Create an intelligent, cinematic image generation prompt for this branded entertainment opportunity:
+
+${context}
+
+Remember: Make it specific, cinematic, and show the brand naturally integrated into an authentic scene from the production. Make the brand excited to see themselves in this world!`;
+
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${openAIApiKey}`,
+          },
+          body: JSON.stringify({
+            model: MODELS.openai.chatMini,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: 0.8,
+            max_tokens: 400,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[generatePrompt] OpenAI error:', errorText);
+          throw new Error(`API request failed: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const generatedPrompt = data.choices?.[0]?.message?.content?.trim();
+
+        if (!generatedPrompt) {
+          throw new Error('No prompt generated');
+        }
+
+        console.log('✅ Intelligent prompt generated:', generatedPrompt.substring(0, 100) + '...');
+        
+        await progressDone(sessionId, runId);
+        return res.status(200).json({ 
+          prompt: generatedPrompt,
+          success: true 
+        });
+
+      } catch (e) {
+        await progressDone(sessionId, runId);
+        return res.status(500).json({ error: 'Failed to generate prompt', details: e.message });
+      }
+    }
+
+    /* =========================
      * GENERATE AUDIO
      * ======================= */
     if (req.body.generateAudio === true) {
