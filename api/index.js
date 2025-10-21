@@ -23,6 +23,7 @@ import {
   getTextResponseFromOpenAI,
   getTextResponseFromClaude,
   generateOpenAIImage,
+  generateNanoBananaImage,
   generateElevenLabsAudio,
   generateRunwayVideo,
   generateVeo3Video,
@@ -233,19 +234,36 @@ export default async function handler(req, res) {
      * GENERATE IMAGE
      * ======================= */
     if (req.body.generateImage === true) {
-      const { prompt, dimensions } = req.body;
+      const { prompt, dimensions, model, imageUrl, projectName, brandName, slideContent } = req.body;
       if (!prompt) return res.status(400).json({ error: 'Missing required fields', details: 'prompt is required' });
 
       try {
         // CRITICAL FIX: Image generation must be STATELESS
         // Do NOT inject session context or conversation history into the prompt
         // The prompt from the frontend is the ONLY input to the image model
-        const result = await generateOpenAIImage({ 
-          prompt,  // Use ONLY the exact prompt from frontend
-          sessionId, 
-          enhancedPrompt: prompt,  // No enhancement - use prompt as-is
-          dimensions 
-        });
+        
+        let result;
+        
+        // Use Nano Banana if specified
+        if (model === 'nano-banana') {
+          result = await generateNanoBananaImage({
+            prompt,
+            sessionId,
+            imageUrl, // For editing existing images
+            projectName,
+            brandName,
+            slideContent,
+          });
+        } else {
+          // Default to OpenAI
+          result = await generateOpenAIImage({ 
+            prompt,  // Use ONLY the exact prompt from frontend
+            sessionId, 
+            enhancedPrompt: prompt,  // No enhancement - use prompt as-is
+            dimensions 
+          });
+        }
+        
         await progressDone(sessionId, runId);
         return res.status(200).json(result);
       } catch (e) {
