@@ -42,6 +42,8 @@ import {
 } from '../lib/core.js';
 
 export default async function handler(req, res) {
+  console.log('[API] Request received:', req.method, req.body?.generatePrompt ? 'GENERATE_PROMPT' : req.body?.generateImage ? 'GENERATE_IMAGE' : 'OTHER');
+  
   // CORS - Properly handle credentials
   const origin = req.headers.origin;
   if (origin) {
@@ -107,7 +109,7 @@ export default async function handler(req, res) {
 
     if (userMessage && userMessage.length > 5000) userMessage = userMessage.slice(0, 5000) + '…';
     if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
-    if (!userMessage && !audioData && !req.body.pushDraft && !req.body.generateImage && !req.body.generateAudio && !req.body.generateVideo && !req.body.generatePrompt) {
+    if (!userMessage && !audioData && !req.body.pushDraft && !req.body.generateImage && !req.body.generateAudio && !req.body.generateVideo && !req.body.generatePrompt && !req.body.refreshPartnership) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
