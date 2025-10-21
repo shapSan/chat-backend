@@ -645,6 +645,10 @@ const hubspotAPI = {
           console.log('[getPartnershipForProject] Found partnership data (score:', partnership.score, '):', props.partnership_name);
           
           const partnershipResult = {
+            // CRITICAL: Include the actual project name!
+            title: props.partnership_name || projectName,
+            partnership_name: props.partnership_name || projectName,
+            name: props.partnership_name || projectName,
             distributor: props.distributor || null,
             studio: props.distributor || null,
             // Release date fields
@@ -687,6 +691,13 @@ const hubspotAPI = {
             storyline_location__city_: props.storyline_location__city_ || null,
             audienceSegment: props.audience_segment || null,
             audience_segment: props.audience_segment || null,
+            // Cast information
+            cast: props.main_cast || null,
+            main_cast: props.main_cast || null,
+            // Rating information
+            rating: props.movie_rating || props.tv_ratings || props.rating || null,
+            movie_rating: props.movie_rating || null,
+            tv_ratings: props.tv_ratings || null,
             // Partnership setting
             partnership_setting: props.partnership_setting || null,
             setting: props.partnership_setting || props.setting || null
