@@ -107,7 +107,7 @@ export default async function handler(req, res) {
 
     if (userMessage && userMessage.length > 5000) userMessage = userMessage.slice(0, 5000) + '…';
     if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
-    if (!userMessage && !audioData && !req.body.pushDraft && !req.body.generateImage && !req.body.generateAudio && !req.body.generateVideo) {
+    if (!userMessage && !audioData && !req.body.pushDraft && !req.body.generateImage && !req.body.generateAudio && !req.body.generateVideo && !req.body.generatePrompt) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
