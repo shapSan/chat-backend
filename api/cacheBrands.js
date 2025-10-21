@@ -86,19 +86,22 @@ export default async function handler(req, res) {
           const searchParams = {
             limit: 100,
             properties: [
-              'brand_name', 
+              'brand_name',
+              'brand_website_url', // ADDED for deep dive cards
               'main_category',
               'new_product_main_category',  // NEW filter field
               'relationship_type',           // NEW filter field
               'partner_agency_id',           // NEW field
-              'product_sub_category__multi_', 
-              'client_status', 
-              'client_type', 
-              'partnership_count', 
-              'deals_count', 
+              'product_sub_category__multi_',
+              'client_status',
+              'client_type',
+              'partnership_count',
+              'deals_count',
               'hubspot_owner_id',           // Required for filter
-              'hs_lastmodifieddate', 
-              'one_sheet_link'
+              'hs_lastmodifieddate',
+              'one_sheet_link',
+              'target_gen', // ADDED for deep dive cards
+              'target_age_group__multi_' // ADDED for deep dive cards
             ],
             // Explicitly pass filterGroups to ensure correct filtering
             filterGroups: [
