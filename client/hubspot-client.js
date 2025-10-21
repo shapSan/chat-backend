@@ -583,7 +583,27 @@ const hubspotAPI = {
       const cachedData = await kv.get(cacheKey);
       if (cachedData) {
         console.log(`[getPartnershipForProject] Cache HIT for: "${projectName}"`);
-        return cachedData;
+        
+        // CRITICAL: Validate cached cast data to fix any previously cached corrupt data
+        if (cachedData.cast && typeof cachedData.cast === 'string') {
+          const castLower = cachedData.cast.toLowerCase();
+          // Check if the cached cast is actually synopsis text
+          if (castLower.startsWith('of characters') || 
+              castLower.includes('ensemble cast') ||
+              castLower.includes('confront') ||
+              castLower.includes('re-emergence')) {
+            console.log('[getPartnershipForProject] FIXING corrupt cached cast data:', cachedData.cast.substring(0, 100));
+            cachedData.cast = null;
+            cachedData.main_cast = null;
+            // Don't return yet - let it re-save the fixed data below
+          } else {
+            // Good cache, return it
+            return cachedData;
+          }
+        } else {
+          // No cast or cast is already null, cache is fine
+          return cachedData;
+        }
       }
       console.log(`[getPartnershipForProject] Cache MISS for: "${projectName}"`);
     } catch (e) {
@@ -671,8 +691,15 @@ const hubspotAPI = {
           const props = partnership.properties;
           console.log('[getPartnershipForProject] Found partnership data (score:', partnership.score, '):', props.partnership_name);
           
-          // DEBUG: Log what's in the main_cast field
-          console.log('[getPartnershipForProject] RAW main_cast from HubSpot:', props.main_cast);
+          // DEBUG: Log ALL relevant fields to find where the corrupt data is
+          console.log('[getPartnershipForProject] DEBUG - ALL FIELDS:');
+          console.log('  synopsis:', props.synopsis?.substring(0, 200));
+          console.log('  main_cast:', props.main_cast?.substring(0, 200));
+          console.log('  cast:', props.cast?.substring(0, 200));
+          console.log('  stars:', props.stars?.substring(0, 200));
+          console.log('  talent:', props.talent?.substring(0, 200));
+          console.log('  logline:', props.logline?.substring(0, 200));
+          console.log('  description:', props.description?.substring(0, 200));
           
           // Normalize the project name to handle placeholders
           const cleanedProjectName = normalizeProjectName(props.partnership_name);
@@ -724,7 +751,7 @@ const hubspotAPI = {
             storyline_location__city_: props.storyline_location__city_ || null,
             audienceSegment: props.audience_segment || null,
             audience_segment: props.audience_segment || null,
-            // Cast information
+            // Cast information - JUST USE WHAT HUBSPOT HAS
             cast: props.main_cast || null,
             main_cast: props.main_cast || null,
             // Rating information
