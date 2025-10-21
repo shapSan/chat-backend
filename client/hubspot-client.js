@@ -5,6 +5,33 @@ import { kv } from '@vercel/kv';
 
 export const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 
+// Normalize placeholder project names to null
+function normalizeProjectName(name) {
+  if (!name || typeof name !== 'string') return null;
+  
+  const cleaned = name.trim().toUpperCase();
+  
+  // Common placeholder patterns
+  const placeholders = [
+    'UNTITLED',
+    'TBD',
+    'TO BE DETERMINED',
+    'PENDING',
+    'N/A',
+    'NONE',
+    'NO TITLE',
+    'NO NAME'
+  ];
+  
+  // Check if it's just a placeholder
+  if (placeholders.some(p => cleaned === p || cleaned.startsWith(p + ' '))) {
+    return null;
+  }
+  
+  // Return the original name if it's valid
+  return name.trim();
+}
+
 // Rate limiter class for HubSpot API
 class RateLimiter {
   constructor(requestsPerSecond) {
@@ -644,11 +671,14 @@ const hubspotAPI = {
           const props = partnership.properties;
           console.log('[getPartnershipForProject] Found partnership data (score:', partnership.score, '):', props.partnership_name);
           
+          // Normalize the project name to handle placeholders
+          const cleanedProjectName = normalizeProjectName(props.partnership_name);
+          
           const partnershipResult = {
             // CRITICAL: Include the actual project name!
-            title: props.partnership_name || projectName,
-            partnership_name: props.partnership_name || projectName,
-            name: props.partnership_name || projectName,
+            title: cleanedProjectName || null,
+            partnership_name: cleanedProjectName || null,
+            name: cleanedProjectName || null,
             distributor: props.distributor || null,
             studio: props.distributor || null,
             // Release date fields
