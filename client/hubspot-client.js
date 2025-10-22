@@ -520,6 +520,12 @@ const hubspotAPI = {
           'est__shooting_end_date', // Estimated shooting end date
           'production_end_date',   // Production end date
           'production_type',       // Type of production
+          // CRITICAL: Cast fields that were MISSING
+          'main_cast',             // Primary cast field
+          'cast',                  // Alternative cast field
+          'stars',                 // Alternative stars field
+          'talent',                // Alternative talent field
+          'lead_actors',           // Alternative lead actors field
           // Rating fields
           'movie_rating',          // MPAA movie ratings (G, PG, PG-13, R, NC-17)
           'tv_ratings',            // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
@@ -527,11 +533,12 @@ const hubspotAPI = {
           'rating',                // Generic rating field fallback
           // Add contextual fields for better matching:
           'genre_production',      // Genre of the production
+          'vibe',                  // Alternative genre field
           'time_period',           // Era/time period setting
+          'shoot_location__city_', // CRITICAL: Actual shooting location field
+          'storyline_location__city_',  // Story setting location
           'plot_location',         // Where the story takes place
-          'storyline_location__city_',  // Specific city location
           'audience_segment',      // Target audience
-          'main_cast',             // Main cast members
           'partnership_setting'    // Partnership setting/location
         ],
         limit: filters.limit || 30,
@@ -741,8 +748,13 @@ const hubspotAPI = {
             hs_lastmodifieddate: props.hs_lastmodifieddate || null,
             partnershipId: partnership.id,
             // Contextual fields
-            genre: props.genre_production || null,
-            genre_production: props.genre_production || null,
+            genre: props.genre_production || props.vibe || null,
+            genre_production: props.genre_production || props.vibe || null,
+            vibe: props.vibe || props.genre_production || null,
+            // Location - handled exactly like synopsis
+            location: props.shoot_location__city_ || null,
+            shoot_location__city_: props.shoot_location__city_ || null,
+            // Other contextual fields
             timePeriod: props.time_period || null,
             time_period: props.time_period || null,
             plotLocation: props.plot_location || null,
@@ -751,7 +763,7 @@ const hubspotAPI = {
             storyline_location__city_: props.storyline_location__city_ || null,
             audienceSegment: props.audience_segment || null,
             audience_segment: props.audience_segment || null,
-            // Cast information - JUST USE WHAT HUBSPOT HAS
+            // Cast information - Handle exactly like other fields
             cast: props.main_cast || null,
             main_cast: props.main_cast || null,
             // Rating information
