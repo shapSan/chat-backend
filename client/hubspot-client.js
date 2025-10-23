@@ -2,6 +2,7 @@
 
 import fetch from 'node-fetch';
 import { kv } from '@vercel/kv';
+import { logStage, HB_KEYS } from '../lib/hbDebug.ts';
 
 export const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 
@@ -571,6 +572,14 @@ const hubspotAPI = {
       }
 
       const data = await response.json();
+      
+      // DEBUG: Log each raw record from HubSpot
+      if (Array.isArray(data?.results)) {
+        for (const rec of data.results) {
+          logStage('A RAW', rec, HB_KEYS);
+        }
+      }
+      
       return data;
     } catch (error) {
       return {
