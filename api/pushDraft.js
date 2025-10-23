@@ -4,7 +4,7 @@ export const maxDuration = 60; // 1 minute for email generation
 
 // Import HubSpot client for fetching associations
 import hubspotAPI from '../client/hubspot-client.js';
-import { logStage, HB_KEYS } from '../lib/hbDebug.ts';
+import { logStage, HB_KEYS } from '../lib/hbDebug.js';
 
 // ---------- CORS ----------
 const ALLOWED = [
