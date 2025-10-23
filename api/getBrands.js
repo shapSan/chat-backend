@@ -1,6 +1,7 @@
 //api/getBrands.js
 
 import { kv } from '@vercel/kv';
+import { logStage, HB_KEYS } from '../lib/hbDebug.ts';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -43,6 +44,11 @@ export default async function handler(req, res) {
       // Include raw properties for debugging
       _raw: brand.properties
     }));
+    
+    logStage('GET_BRANDS_TRANSFORM', { count: transformedBrands.length }, HB_KEYS, {
+      count: transformedBrands.length,
+      cacheAge: ts ? Math.round((Date.now() - Number(ts)) / 60000) : null
+    });
 
     res.status(200).json({
       brands: transformedBrands,
