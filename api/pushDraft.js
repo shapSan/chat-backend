@@ -4,6 +4,7 @@ export const maxDuration = 60; // 1 minute for email generation
 
 // Import HubSpot client for fetching associations
 import hubspotAPI from '../client/hubspot-client.js';
+import { logStage, HB_KEYS } from '../lib/hbDebug.ts';
 
 // ---------- CORS ----------
 const ALLOWED = [
@@ -194,6 +195,13 @@ async function resolveHubSpotUsers(brands, onStep = () => {}) {
   // --- TRACE 3.7: Log final user map ---
   console.log('[pushDraft TRACE 3.7] Final resolved user map:', userMap);
   
+  logStage('PUSH_DRAFT_RESOLVE_USERS', { userIds: Array.from(userIds) }, [], {
+    uniqueUserIds: Array.from(userIds),
+    successCount,
+    failCount,
+    resolvedUsers: Object.keys(userMap)
+  });
+  
   // Report final status
   if (successCount > 0) {
     onStep({ type: 'result', text: `✓ Resolved ${successCount} of ${userIds.size} contacts successfully.` });
@@ -293,6 +301,17 @@ function classifyAsset(item={}) {
 }
 
 function sanitizeBrand(b={}) {
+  const secondaryOwnerId = b.secondaryOwnerId || b.secondary_owner || b.properties?.secondary_owner || null;
+  const specialtyLeadId = b.specialtyLeadId || b.specialty_lead || b.properties?.specialty_lead || null;
+  
+  logStage('PUSH_DRAFT_SANITIZE', b, HB_KEYS, {
+    brandName: b.name || b.brand,
+    hasAssets: !!b.assets,
+    assetsCount: b.assets?.length || 0,
+    secondaryOwnerId: secondaryOwnerId,
+    specialtyLeadId: specialtyLeadId
+  });
+  
   console.log('[sanitizeBrand] Input brand:', {
     name: b.name || b.brand,
     hasAssets: !!b.assets,
@@ -342,8 +361,7 @@ function sanitizeBrand(b={}) {
 
   // Check for both camelCase and snake_case versions for all 4 owner fields
   // Also check in the properties object if it exists
-  const secondaryOwnerId = b.secondaryOwnerId || b.secondary_owner || b.properties?.secondary_owner || null;
-  const specialtyLeadId = b.specialtyLeadId || b.specialty_lead || b.properties?.specialty_lead || null;
+  // Note: secondaryOwnerId and specialtyLeadId already extracted at top of function
   const partnershipsLeadId = b.partnershipsLeadId || b.partnerships_lead || b.properties?.partnerships_lead || null;
   const hubspotOwnerId = b.hubspotOwnerId || b.hubspot_owner_id || b.properties?.hubspot_owner_id || null;
   
@@ -1053,6 +1071,14 @@ export default async function handler(req, res) {
         }
         */
 
+        logStage('PUSH_DRAFT_EMAIL_CREATED', { brandName: b.name, id: b.id }, HB_KEYS, {
+          subject,
+          recipients: draftRecipients,
+          ccCount: finalCCList.length,
+          sent,
+          draftId: draft.id
+        });
+        
         results.push({ brand: b.name || "Brand", subject, webLink: draft.webLink || null, sent });
       } catch (e) {
         results.push({ brand: b.name || "Brand", error: String(e?.message || e) });
