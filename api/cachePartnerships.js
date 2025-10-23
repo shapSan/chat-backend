@@ -302,7 +302,21 @@ export default async function handler(req, res) {
         // Add the 'name' property for the panel to use
         name: props.partnership_name || 'Untitled Project',
         // Add matched brands
-        matchedBrands: topBrands
+        matchedBrands: topBrands,
+        // CRITICAL: Explicitly map fields that need to be at top level
+        main_cast: props.main_cast || null,
+        cast: props.main_cast || null,
+        shoot_location__city_: props.shoot_location__city_ || null,
+        location: props.shoot_location__city_ || null,
+        audience_segment: props.audience_segment || null,
+        distributor: props.distributor || null,
+        synopsis: props.synopsis || null,
+        genre_production: props.genre_production || null,
+        vibe: props.genre_production || null,
+        productionStartDate: props.start_date || props.production_start_date || null,
+        releaseDate: props.release__est__date || props.release_est_date || null,
+        productionType: props.production_type || null,
+        partnership_setting: props.partnership_setting || null
       };
       
       // DEBUG: Log before storing to cache
