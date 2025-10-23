@@ -2,7 +2,7 @@
 
 import fetch from 'node-fetch';
 import { kv } from '@vercel/kv';
-import { logStage, HB_KEYS } from '../lib/hbDebug.ts';
+import { logStage, HB_KEYS } from '../lib/hbDebug.js';
 
 export const hubspotApiKey = process.env.HUBSPOT_API_KEY;
 
