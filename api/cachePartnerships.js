@@ -1,6 +1,7 @@
 // api/cachePartnerships.js
 import { kv } from '@vercel/kv';
 import hubspotAPI from '../client/hubspot-client.js';
+import { logStage, HB_KEYS } from '../lib/hbDebug.ts';
 
 export const maxDuration = 300;
 
@@ -301,6 +302,10 @@ export default async function handler(req, res) {
         // Add matched brands
         matchedBrands: topBrands
       };
+      
+      // DEBUG: Log before storing to cache
+      logStage('B CACHE-IN', props, HB_KEYS);
+      logStage('C CACHE-SET', finalObject, HB_KEYS);
       
       // Verification log - only log first partnership to avoid spam
       if (partnership === partnerships[0]) {
