@@ -78,6 +78,8 @@ export default async function handler(req, res) {
       'production_type',
       'synopsis',
       'main_cast',                // Main cast members
+      'shoot_location__city_',    // CRITICAL: Shooting location
+      'audience_segment',         // CRITICAL: Target audience
       'partnership_status',       // Partnership status
       'distributor',              // Distributor
       'brand_name',               // Brand name
