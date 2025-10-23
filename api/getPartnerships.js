@@ -1,6 +1,6 @@
 // api/getPartnerships.js
 import { kv } from '@vercel/kv';
-import { logStage, HB_KEYS } from '../lib/hbDebug.ts';
+import { logStage, HB_KEYS } from '../lib/hbDebug.js';
 
 export default async function handler(req, res) {
   // Enable CORS
