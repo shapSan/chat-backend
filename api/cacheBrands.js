@@ -1,7 +1,7 @@
 // api/cacheBrands.js
 import { kv } from '@vercel/kv';
 import hubspotAPI from '../client/hubspot-client.js';
-import { logStage, HB_KEYS } from '../lib/hbDebug.ts';
+import { logStage, HB_KEYS } from '../lib/hbDebug.js';
 
 export const maxDuration = 300;
 
@@ -50,7 +50,7 @@ export default async function handler(req, res) {
         console.warn(`[CACHE WARNING] Brand cache exceeds 500 limit: ${tableData.length} brands`);
       }
       
-      logStage('CACHE_BRANDS_FETCH', { count: tableData.length }, HB_KEYS, {
+      logStage(HB_KEYS.CACHE_BRANDS_FETCH, {
         count: tableData.length,
         lastUpdated: cacheTimestamp
       });
@@ -188,7 +188,7 @@ export default async function handler(req, res) {
         // Log cache update for audit trail
         console.log(`[CACHE AUDIT] Cache updated: ${allBrands.length} brands at ${new Date().toISOString()}`);
         
-        logStage('CACHE_BRANDS_REBUILD', { totalBrands: allBrands.length }, HB_KEYS, {
+        logStage(HB_KEYS.CACHE_BRANDS_REBUILD, {
           totalBrands: allBrands.length,
           pages: pageCount,
           exceeds500: allBrands.length > 500
