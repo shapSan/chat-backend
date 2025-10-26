@@ -175,6 +175,11 @@ export default async function handler(req, res) {
       
       console.log(`[CACHE] Fetched ${allBrands.length} total valid brands in ${pageCount} pages`);
       
+      // Log a sample before saving
+      if (allBrands.length > 0) {
+        logStage('CACHE_BRAND_BUILD', allBrands[0], Object.keys(allBrands[0]?.properties || {}), { action: 'Sample Brand Before Save', total: allBrands.length });
+      }
+      
       // Alert if exceeds expected threshold
       if (allBrands.length > 500) {
         console.warn(`[CACHE ALERT] Brand count exceeds 500: ${allBrands.length} brands found`);
