@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     // DEBUG: Log each item read from cache
     if (Array.isArray(cachedMatches)) {
       for (const item of cachedMatches) {
-        logStage('C2 CACHE-READ', item, HB_KEYS);
+        logStage('C2 CACHE-READ', item, HB_KEYS.PARTNERSHIP_FIELDS);
       }
     }
     
@@ -38,7 +38,7 @@ export default async function handler(req, res) {
     // DEBUG: Log items being sent to UI (D stage)
     if (Array.isArray(cachedMatches)) {
       for (const item of cachedMatches) {
-        logStage('D UI-FEED', item, HB_KEYS);
+        logStage('D UI-FEED', item, HB_KEYS.PARTNERSHIP_FIELDS);
       }
     }
     
