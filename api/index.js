@@ -40,6 +40,7 @@ import {
   progKey,
   normalizePartnership,
 } from '../lib/core.js';
+import { logStage } from '../lib/hbDebug.js';
 
 export default async function handler(req, res) {
   console.log('[API] Request received:', req.method, req.body?.generatePrompt ? 'GENERATE_PROMPT' : req.body?.generateImage ? 'GENERATE_IMAGE' : 'OTHER');
@@ -106,6 +107,11 @@ export default async function handler(req, res) {
     const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     res.setHeader('x-run-id', runId);
     res.setHeader('Cache-Control', 'no-store');
+
+    // Log received partnership data immediately
+    if (knownPartnershipData) {
+      logStage('API_RECV', knownPartnershipData, Object.keys(knownPartnershipData), { action: 'Received knownPartnershipData from frontend', runId });
+    }
 
     if (userMessage && userMessage.length > 5000) userMessage = userMessage.slice(0, 5000) + '…';
     if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
