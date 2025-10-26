@@ -103,7 +103,7 @@ export default async function handler(req, res) {
 
   try {
     // Common + progress setup
-    let { userMessage, sessionId, audioData, projectId, knownProjectName, knownPartnershipData, runId: clientRunId } = req.body;
+    let { userMessage, sessionId, audioData, projectId, knownProjectName, knownPartnershipData, selectedBrands, runId: clientRunId } = req.body;
     const runId = clientRunId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     res.setHeader('x-run-id', runId);
     res.setHeader('Cache-Control', 'no-store');
@@ -570,6 +570,7 @@ Remember: Make it specific, cinematic, and show the brand naturally integrated i
         console.log('  - projectId:', projectId);
         console.log('  - knownProjectName:', knownProjectName);
         console.log('  - lastProductionContext:', lastProductionContext);
+        console.log('  - selectedBrands:', selectedBrands ? `${selectedBrands.length} brands` : 'none');
         
         const claudeResult = await handleClaudeSearch(
           userMessage,
@@ -585,7 +586,8 @@ Remember: Make it specific, cinematic, and show the brand naturally integrated i
               console.error('[index.js] progressPush error:', err);
             }
           },
-          knownPartnershipData  // Pass the partnership data
+          knownPartnershipData,  // Pass the partnership data
+          selectedBrands  // Pass the selected brands
         );
 
         let aiReply = '';
