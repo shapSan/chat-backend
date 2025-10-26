@@ -602,12 +602,13 @@ const hubspotAPI = {
       }
       console.log('=======================================');
       
-      // DEBUG: Log each raw record from HubSpot
-      if (Array.isArray(data?.results)) {
-        for (const rec of data.results) {
-          logStage('A RAW', rec, HB_KEYS);
-        }
-      }
+      // REMOVED: Debug logging that was causing crash
+      // The logStage call was failing with "keys is not iterable"
+      // if (Array.isArray(data?.results)) {
+      //   for (const rec of data.results) {
+      //     logStage('A RAW', rec, HB_KEYS);
+      //   }
+      // }
       
       return data;
     } catch (error) {
@@ -725,15 +726,15 @@ const hubspotAPI = {
       
       // STRATEGY 2: If no exact match and has spaces, try word-by-word OR search (IMPROVED)
       if (!allResults.length && projectName.includes(' ')) {
-        // Extract ALL significant words (length > 2, not common stopwords)
+        // Extract ALL significant words (length >= 2, not common stopwords)
         const allWords = projectName.split(' ');
         console.log(`\n[Strategy 2] DEBUG: All words from split: [${allWords.join(', ')}]`);
         
         const words = allWords.filter(word => 
-          word.length > 2 && !['the', 'and', 'for', 'with', 'of'].includes(word.toLowerCase())
+          word.length >= 2 && !['the', 'and', 'for', 'with', 'of'].includes(word.toLowerCase())
         );
         
-        console.log(`[Strategy 2] DEBUG: After filtering (length>2, no stopwords): [${words.join(', ')}]`);
+        console.log(`[Strategy 2] DEBUG: After filtering (length>=2, no stopwords): [${words.join(', ')}]`);
         
         if (words.length > 0) {
           console.log(`[Strategy 2] Word-by-word OR search for ALL significant words: [${words.join(', ')}]`);
