@@ -650,34 +650,57 @@ const hubspotAPI = {
     try {
       let allResults = [];
       
-      // STRATEGY 1: Exact CONTAINS_TOKEN match
-      console.log(`\n[Strategy 1] CONTAINS_TOKEN search for: "${projectName}"`);
-      let results1 = await this.searchProductions({
+      // STRATEGY 0: Exact match with EQ operator (fastest, most reliable)
+      console.log(`\n[Strategy 0] EXACT MATCH search for: "${projectName}"`);
+      let results0 = await this.searchProductions({
         filterGroups: [{
           filters: [{
             propertyName: 'partnership_name',
-            operator: 'CONTAINS_TOKEN',
+            operator: 'EQ',
             value: projectName
           }]
         }],
-        limit: 10
+        limit: 5
       });
-      console.log(`  → Found ${results1?.results?.length || 0} results`);
-      if (results1?.results?.length) {
-        results1.results.forEach(r => {
+      console.log(`  → Found ${results0?.results?.length || 0} results`);
+      if (results0?.results?.length) {
+        results0.results.forEach(r => {
           console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
         });
-        allResults.push(...results1.results);
+        allResults.push(...results0.results);
       }
       
-      // STRATEGY 2: If no exact match and has spaces, try word-by-word OR search
+      // STRATEGY 1: CONTAINS_TOKEN match (if no exact match)
+      if (!allResults.length) {
+        console.log(`\n[Strategy 1] CONTAINS_TOKEN search for: "${projectName}"`);
+        let results1 = await this.searchProductions({
+          filterGroups: [{
+            filters: [{
+              propertyName: 'partnership_name',
+              operator: 'CONTAINS_TOKEN',
+              value: projectName
+            }]
+          }],
+          limit: 10
+        });
+        console.log(`  → Found ${results1?.results?.length || 0} results`);
+        if (results1?.results?.length) {
+          results1.results.forEach(r => {
+            console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
+          });
+          allResults.push(...results1.results);
+        }
+      }
+      
+      // STRATEGY 2: If no exact match and has spaces, try word-by-word OR search (IMPROVED)
       if (!allResults.length && projectName.includes(' ')) {
+        // Extract ALL significant words (length > 2, not common stopwords)
         const words = projectName.split(' ').filter(word => 
           word.length > 2 && !['the', 'and', 'for', 'with', 'of'].includes(word.toLowerCase())
         );
         
         if (words.length > 0) {
-          console.log(`\n[Strategy 2] Word-by-word OR search for: [${words.join(', ')}]`);
+          console.log(`\n[Strategy 2] Word-by-word OR search for ALL significant words: [${words.join(', ')}]`);
           const filterGroups = words.map(word => ({
             filters: [{
               propertyName: 'partnership_name',
@@ -688,7 +711,7 @@ const hubspotAPI = {
           
           let results2 = await this.searchProductions({
             filterGroups,
-            limit: 20
+            limit: 30 // Increased to catch more matches
           });
           console.log(`  → Found ${results2?.results?.length || 0} results`);
           if (results2?.results?.length) {
@@ -706,26 +729,68 @@ const hubspotAPI = {
       if (!allResults.length) {
         console.log(`\n[Strategy 3] Broad search + client-side filtering`);
         let results3 = await this.searchProductions({
-          limit: 50,
+          limit: 100, // Increased from 50 to get more candidates
           sorts: [{
             propertyName: 'hs_lastmodifieddate',
             direction: 'DESCENDING'
           }]
         });
         
+        console.log(`\n[Strategy 3 DEBUG] Raw HubSpot results:`);
         if (results3?.results?.length) {
+          console.log(`  Total partnerships returned: ${results3.results.length}`);
+          console.log(`  First 10 partnership names:`);
+          results3.results.slice(0, 10).forEach((r, idx) => {
+            console.log(`    ${idx + 1}. "${r.properties.partnership_name}" (ID: ${r.id})`);
+          });
+          
+          // Client-side filtering with detailed logging
           const projectLower = projectName.toLowerCase();
+          console.log(`\n  Filtering for matches with: "${projectLower}"`);
+          
           const filtered = results3.results.filter(r => {
             const prodName = (r.properties.partnership_name || '').toLowerCase();
-            return prodName.includes(projectLower) || projectLower.includes(prodName);
+            const matches = prodName.includes(projectLower) || projectLower.includes(prodName);
+            
+            if (matches) {
+              console.log(`    ✅ MATCH: "${r.properties.partnership_name}" contains "${projectName}"`);
+            }
+            
+            return matches;
           });
+          
           console.log(`  → Found ${results3.results.length} total, ${filtered.length} matched "${projectName}"`);
+          
           if (filtered.length) {
             filtered.forEach(r => {
               console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
             });
             allResults.push(...filtered);
+          } else {
+            console.log(`  ⚠️ No matches found in client-side filtering`);
+            console.log(`  🔍 Trying fuzzy matching on individual words...`);
+            
+            // Try fuzzy word matching as last resort
+            const projectWords = projectLower.split(/\s+/).filter(w => w.length > 2);
+            const fuzzyFiltered = results3.results.filter(r => {
+              const prodName = (r.properties.partnership_name || '').toLowerCase();
+              const matchCount = projectWords.filter(word => prodName.includes(word)).length;
+              const matchRatio = matchCount / projectWords.length;
+              
+              if (matchRatio >= 0.5) { // At least 50% of words match
+                console.log(`    🔍 Fuzzy match (${Math.round(matchRatio * 100)}%): "${r.properties.partnership_name}"`);
+                return true;
+              }
+              return false;
+            });
+            
+            if (fuzzyFiltered.length) {
+              console.log(`  → Fuzzy matching found ${fuzzyFiltered.length} candidates`);
+              allResults.push(...fuzzyFiltered);
+            }
           }
+        } else {
+          console.log(`  ⚠️ Broad search returned NO results at all!`);
         }
       }
       
