@@ -52,10 +52,10 @@ export default async function handler(req, res) {
       token,
       brandId,
       templateId: slideData.templateId,
-      // Only return image data from slides
+      // Return full slide data including images
       slides: slideData.slides?.map(s => ({
-        id: s.id,
-        type: s.type,
+        ...s, // Keep all slide data including id, type, content
+        // Ensure image fields are present
         image: s.image,
         imageFit: s.imageFit,
         mediaType: s.mediaType,
