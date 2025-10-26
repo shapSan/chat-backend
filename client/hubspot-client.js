@@ -555,9 +555,18 @@ const hubspotAPI = {
         console.log('[DEBUG searchProductions] Paginating with after:', filters.after);
       }
       
-      console.log('[DEBUG searchProductions] Making request with body:', JSON.stringify(requestBody, null, 2));
+      // === DETAILED API DEBUGGING ===
+      const url = `${this.baseUrl}/crm/v3/objects/${this.OBJECTS.PARTNERSHIPS}/search`;
+      const maskedApiKey = hubspotApiKey ? `${hubspotApiKey.substring(0, 8)}...${hubspotApiKey.substring(hubspotApiKey.length - 4)}` : 'NOT_SET';
       
-      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.PARTNERSHIPS}/search`, {
+      console.log('[DEBUG searchProductions] === API REQUEST DETAILS ===');
+      console.log(`  URL: ${url}`);
+      console.log(`  API Key (masked): ${maskedApiKey}`);
+      console.log(`  Request Body:`);
+      console.log(JSON.stringify(requestBody, null, 2));
+      console.log('=======================================');
+      
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -565,13 +574,33 @@ const hubspotAPI = {
         },
         body: JSON.stringify(requestBody)
       });
-
+      
+      // === LOG RAW RESPONSE ===
+      console.log('[DEBUG searchProductions] === API RESPONSE ===');
+      console.log(`  Status: ${response.status} ${response.statusText}`);
+      console.log(`  Headers:`, Object.fromEntries(response.headers.entries()));
+      
       if (!response.ok) {
         const errorBody = await response.text();
+        console.error('[DEBUG searchProductions] ❌ API ERROR:');
+        console.error(`  Status: ${response.status}`);
+        console.error(`  Error Body:`, errorBody);
+        console.log('=======================================');
         throw new Error(`HubSpot API error: ${response.status}`);
       }
-
+      
+      // Clone response to log raw text before parsing
+      const responseClone = response.clone();
+      const rawText = await responseClone.text();
+      console.log(`  Raw Response (first 500 chars): ${rawText.substring(0, 500)}...`);
+      
       const data = await response.json();
+      console.log(`  Results Count: ${data.results?.length || 0}`);
+      console.log(`  Has Paging: ${!!data.paging}`);
+      if (data.paging?.next) {
+        console.log(`  Next Page Available: ${data.paging.next.after}`);
+      }
+      console.log('=======================================');
       
       // DEBUG: Log each raw record from HubSpot
       if (Array.isArray(data?.results)) {
@@ -582,6 +611,8 @@ const hubspotAPI = {
       
       return data;
     } catch (error) {
+      console.error('[DEBUG searchProductions] Exception:', error.message);
+      console.error('[DEBUG searchProductions] Stack:', error.stack);
       return {
         results: []
       };
@@ -695,12 +726,17 @@ const hubspotAPI = {
       // STRATEGY 2: If no exact match and has spaces, try word-by-word OR search (IMPROVED)
       if (!allResults.length && projectName.includes(' ')) {
         // Extract ALL significant words (length > 2, not common stopwords)
-        const words = projectName.split(' ').filter(word => 
+        const allWords = projectName.split(' ');
+        console.log(`\n[Strategy 2] DEBUG: All words from split: [${allWords.join(', ')}]`);
+        
+        const words = allWords.filter(word => 
           word.length > 2 && !['the', 'and', 'for', 'with', 'of'].includes(word.toLowerCase())
         );
         
+        console.log(`[Strategy 2] DEBUG: After filtering (length>2, no stopwords): [${words.join(', ')}]`);
+        
         if (words.length > 0) {
-          console.log(`\n[Strategy 2] Word-by-word OR search for ALL significant words: [${words.join(', ')}]`);
+          console.log(`[Strategy 2] Word-by-word OR search for ALL significant words: [${words.join(', ')}]`);
           const filterGroups = words.map(word => ({
             filters: [{
               propertyName: 'partnership_name',
@@ -708,6 +744,9 @@ const hubspotAPI = {
               value: word
             }]
           }));
+          
+          console.log(`[Strategy 2] DEBUG: Created ${filterGroups.length} filter groups`);
+          console.log(`[Strategy 2] DEBUG: Filter groups structure:`, JSON.stringify(filterGroups, null, 2));
           
           let results2 = await this.searchProductions({
             filterGroups,
