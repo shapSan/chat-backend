@@ -659,6 +659,14 @@ Formatting:
         
         // Ensure partnership data is properly included in structuredData
         if (structuredData && structuredData.dataType === 'BRAND_RECOMMENDATIONS') {
+          // Log sample of brands being sent to frontend
+          if (structuredData.detailedBrands && structuredData.detailedBrands.length > 0) {
+            logStage('API_SEND_BRAND_DETAIL', structuredData.detailedBrands[0], Object.keys(structuredData.detailedBrands[0] || {}), { action: 'Sample Detailed Brand Sent', count: structuredData.detailedBrands.length });
+          }
+          if (structuredData.brandSuggestions && structuredData.brandSuggestions.length > 0) {
+            logStage('API_SEND_BRAND_SUGGEST', structuredData.brandSuggestions[0], Object.keys(structuredData.brandSuggestions[0] || {}), { action: 'Sample Suggestion Brand Sent', count: structuredData.brandSuggestions.length });
+          }
+          
           // Ensure all partnership fields are available at top level for frontend
           const partnershipData = structuredData.partnershipData || {};
           structuredData = {
