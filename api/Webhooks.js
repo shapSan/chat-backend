@@ -1,6 +1,7 @@
 // api/brandWebhook.js
 import { kv } from '@vercel/kv';
 import fetch from 'node-fetch';
+import { logStage, HB_KEYS } from '../lib/hbDebug.js';
 
 export const maxDuration = 60;
 
@@ -152,26 +153,19 @@ export default async function handler(req, res) {
       const currentlyInCache = brandMap.has(brandId);
       
       if (shouldBeInCache) {
+        const brandObject = {
+          id: brandId,
+          properties: {
+            ...(currentlyInCache ? brandMap.get(brandId).properties : {}),
+            ...properties,
+            hs_lastmodifieddate: Date.now()
+          }
+        };
+        brandMap.set(brandId, brandObject);
+        logStage('CACHE_BRAND_SET', brandObject, Object.keys(brandObject.properties), { action: currentlyInCache ? 'Updated' : 'Added' });
         if (currentlyInCache) {
-          // Update existing brand
-          brandMap.set(brandId, {
-            id: brandId,
-            properties: {
-              ...brandMap.get(brandId).properties,
-              ...properties,
-              hs_lastmodifieddate: Date.now()
-            }
-          });
           updatedCount++;
         } else {
-          // Add new brand to cache
-          brandMap.set(brandId, {
-            id: brandId,
-            properties: {
-              ...properties,
-              hs_lastmodifieddate: Date.now()
-            }
-          });
           addedCount++;
         }
       } else if (currentlyInCache) {
