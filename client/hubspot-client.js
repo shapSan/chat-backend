@@ -1202,6 +1202,57 @@ const hubspotAPI = {
     });
     if (!response.ok) return { results: [] };
     return response.json();
+  },
+
+  /**
+   * Get a single object by ID with specified properties
+   * @param {string} objectType - Object type (e.g., 'companies', '2-26628489' for brands)
+   * @param {string} objectId - The object ID
+   * @param {string[]} properties - Array of property names to retrieve
+   * @returns {Promise<Object>} The full HubSpot object with nested properties
+   */
+  async getObjectById(objectType, objectId, properties = []) {
+    await hubspotLimiter.acquire();
+    
+    // Map common object types to their HubSpot equivalents
+    const typeMap = {
+      'companies': this.OBJECTS.BRANDS,
+      'brands': this.OBJECTS.BRANDS,
+      'partnerships': this.OBJECTS.PARTNERSHIPS,
+      'deals': this.OBJECTS.DEALS,
+      'contacts': this.OBJECTS.CONTACTS
+    };
+    
+    const mappedType = typeMap[objectType.toLowerCase()] || objectType;
+    
+    // Build URL with properties query parameter
+    const propsQuery = properties.length > 0 
+      ? `?properties=${properties.join('&properties=')}` 
+      : '';
+    
+    const url = `${this.baseUrl}/crm/v3/objects/${mappedType}/${objectId}${propsQuery}`;
+    
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${hubspotApiKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`[getObjectById] HubSpot API error for ${objectType}/${objectId}:`, response.status, errorBody);
+        return null;
+      }
+      
+      const data = await response.json();
+      console.log(`[getObjectById] Successfully fetched ${objectType}/${objectId}`);
+      return data;
+    } catch (error) {
+      console.error(`[getObjectById] Error fetching ${objectType}/${objectId}:`, error.message);
+      return null;
+    }
   }
 };
 
