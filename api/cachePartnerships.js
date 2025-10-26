@@ -320,8 +320,8 @@ export default async function handler(req, res) {
       };
       
       // DEBUG: Log before storing to cache
-      logStage('B CACHE-IN', props, HB_KEYS);
-      logStage('C CACHE-SET', finalObject, HB_KEYS);
+      logStage('B CACHE-IN', props, HB_KEYS.PARTNERSHIP_FIELDS);
+      logStage('C CACHE-SET', finalObject, HB_KEYS.PARTNERSHIP_FIELDS);
       
       // Verification log - only log first partnership to avoid spam
       if (partnership === partnerships[0]) {
