@@ -119,6 +119,12 @@ export default async function handler(req, res) {
           uploadedAssets: slides.map(s => s.image).filter(Boolean)
         };
         
+        // If this is a Brand Radar (has brandData.id), store the brand -> token mapping
+        if (brandData?.id && templateId === 'brand-radar') {
+          await kv.set(`brand-radar-token:${brandData.id}`, existingToken);
+          console.log(`[publishSlide] Updated brand-radar-token:${brandData.id} -> ${existingToken}`);
+        }
+        
         console.log('[publishSlide] About to save to KV:', {
           token: existingToken,
           'has brandData': !!dataToSave.brandData,
@@ -154,6 +160,12 @@ export default async function handler(req, res) {
           updatedAt: new Date().toISOString(),
           uploadedAssets: slides.map(s => s.image).filter(Boolean)
         });
+        
+        // If this is a Brand Radar (has brandData.id), store the brand -> token mapping
+        if (brandData?.id && templateId === 'brand-radar') {
+          await kv.set(`brand-radar-token:${brandData.id}`, token);
+          console.log(`[publishSlide] Created brand-radar-token:${brandData.id} -> ${token}`);
+        }
         
         const frontendUrl = 'https://www.hollywoodbranded.com/agentpitch/published';
         
