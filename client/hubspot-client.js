@@ -322,9 +322,8 @@ const hubspotAPI = {
           });
 
           if (!response.ok) {
-          // Clone the response to avoid "body used already" error
-          const responseClone = response.clone();
-          const errorBody = await response.text();
+          // Clone the response BEFORE reading body to avoid "body used already" error
+          const errorBody = await response.clone().text();
           console.error(`[DEBUG searchBrands] HubSpot API error (attempt ${attempts}/${maxAttempts}):`, response.status, errorBody);
           
           // Handle rate limiting with exponential backoff
