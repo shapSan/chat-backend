@@ -591,6 +591,11 @@ const hubspotAPI = {
   async getPartnershipForProject(projectName) {
     if (!projectName) return null;
     
+    console.log(`\n========================================`);
+    console.log(`[getPartnershipForProject] STARTING SEARCH`);
+    console.log(`  Project Name: "${projectName}"`);
+    console.log(`========================================\n`);
+    
     // --- Cache check first ---
     const cleanProjectName = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 100);
     const cacheKey = `partnership-data:${cleanProjectName}`;
@@ -598,43 +603,56 @@ const hubspotAPI = {
     try {
       const cachedData = await kv.get(cacheKey);
       if (cachedData) {
-        console.log(`[getPartnershipForProject] Cache HIT for: "${projectName}"`);
+        // Check cache staleness (3 hour threshold)
+        const cacheAge = cachedData.cachedAt ? Date.now() - new Date(cachedData.cachedAt).getTime() : Infinity;
+        const CACHE_STALENESS_THRESHOLD = 3 * 60 * 60 * 1000; // 3 hours
         
-        // CRITICAL: Validate cached cast data to fix any previously cached corrupt data
-        if (cachedData.cast && typeof cachedData.cast === 'string') {
-          const castLower = cachedData.cast.toLowerCase();
-          // Check if the cached cast is actually synopsis text
-          if (castLower.startsWith('of characters') || 
-              castLower.includes('ensemble cast') ||
-              castLower.includes('confront') ||
-              castLower.includes('re-emergence')) {
-            console.log('[getPartnershipForProject] FIXING corrupt cached cast data:', cachedData.cast.substring(0, 100));
-            cachedData.cast = null;
-            cachedData.main_cast = null;
-            // Don't return yet - let it re-save the fixed data below
+        if (cacheAge < CACHE_STALENESS_THRESHOLD) {
+          console.log(`[getPartnershipForProject] ✅ Cache HIT for: "${projectName}" (age: ${Math.round(cacheAge / 60000)}min)`);
+          
+          // CRITICAL: Validate cached cast data to fix any previously cached corrupt data
+          if (cachedData.cast && typeof cachedData.cast === 'string') {
+            const castLower = cachedData.cast.toLowerCase();
+            // Check if the cached cast is actually synopsis text
+            if (castLower.startsWith('of characters') || 
+                castLower.includes('ensemble cast') ||
+                castLower.includes('confront') ||
+                castLower.includes('re-emergence')) {
+              console.log('[getPartnershipForProject] ⚠️ FIXING corrupt cached cast data');
+              cachedData.cast = null;
+              cachedData.main_cast = null;
+              // Don't return yet - let it re-save the fixed data below
+            } else {
+              // Good cache, return it
+              return cachedData;
+            }
           } else {
-            // Good cache, return it
+            // No cast or cast is already null, cache is fine
             return cachedData;
           }
         } else {
-          // No cast or cast is already null, cache is fine
-          return cachedData;
+          console.log(`[getPartnershipForProject] ⚠️ Cache STALE for: "${projectName}" (age: ${Math.round(cacheAge / 60000)}min) - refetching`);
         }
+      } else {
+        console.log(`[getPartnershipForProject] ❌ Cache MISS for: "${projectName}"`);
       }
-      console.log(`[getPartnershipForProject] Cache MISS for: "${projectName}"`);
     } catch (e) {
-      console.error('[getPartnershipForProject] KV cache check failed:', e.message);
+      console.error('[getPartnershipForProject] ⚠️ KV cache check failed:', e.message);
     }
     // --- End cache check ---
     
     // Acquire rate limit token first
     await hubspotLimiter.acquire();
     
-    console.log('[getPartnershipForProject] Searching for:', projectName);
+    console.log(`\n--- LIVE HUBSPOT SEARCH ---`);
+    console.log(`Strategy: Multi-approach search with scoring`);
     
     try {
-      // First try with CONTAINS_TOKEN for partial matching
-      let results = await this.searchProductions({
+      let allResults = [];
+      
+      // STRATEGY 1: Exact CONTAINS_TOKEN match
+      console.log(`\n[Strategy 1] CONTAINS_TOKEN search for: "${projectName}"`);
+      let results1 = await this.searchProductions({
         filterGroups: [{
           filters: [{
             propertyName: 'partnership_name',
@@ -642,20 +660,25 @@ const hubspotAPI = {
             value: projectName
           }]
         }],
-        limit: 10  // Get more results for better matching
+        limit: 10
       });
+      console.log(`  → Found ${results1?.results?.length || 0} results`);
+      if (results1?.results?.length) {
+        results1.results.forEach(r => {
+          console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
+        });
+        allResults.push(...results1.results);
+      }
       
-      // If no results, try a more relaxed search with just the main words
-      if (!results?.results?.length && projectName.includes(' ')) {
-        const mainWords = projectName.split(' ').filter(word => 
-          word.length > 3 && !['the', 'and', 'for', 'with'].includes(word.toLowerCase())
+      // STRATEGY 2: If no exact match and has spaces, try word-by-word OR search
+      if (!allResults.length && projectName.includes(' ')) {
+        const words = projectName.split(' ').filter(word => 
+          word.length > 2 && !['the', 'and', 'for', 'with', 'of'].includes(word.toLowerCase())
         );
         
-        if (mainWords.length > 0) {
-          console.log('[getPartnershipForProject] Trying with main words:', mainWords);
-          
-          // Search for any of the main words
-          const filterGroups = mainWords.map(word => ({
+        if (words.length > 0) {
+          console.log(`\n[Strategy 2] Word-by-word OR search for: [${words.join(', ')}]`);
+          const filterGroups = words.map(word => ({
             filters: [{
               propertyName: 'partnership_name',
               operator: 'CONTAINS_TOKEN',
@@ -663,45 +686,110 @@ const hubspotAPI = {
             }]
           }));
           
-          results = await this.searchProductions({
+          let results2 = await this.searchProductions({
             filterGroups,
             limit: 20
           });
+          console.log(`  → Found ${results2?.results?.length || 0} results`);
+          if (results2?.results?.length) {
+            results2.results.forEach(r => {
+              if (!allResults.find(ar => ar.id === r.id)) {
+                console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
+                allResults.push(r);
+              }
+            });
+          }
         }
       }
       
-      if (results?.results?.length > 0) {
+      // STRATEGY 3: Fallback - get recent partnerships and filter client-side
+      if (!allResults.length) {
+        console.log(`\n[Strategy 3] Broad search + client-side filtering`);
+        let results3 = await this.searchProductions({
+          limit: 50,
+          sorts: [{
+            propertyName: 'hs_lastmodifieddate',
+            direction: 'DESCENDING'
+          }]
+        });
+        
+        if (results3?.results?.length) {
+          const projectLower = projectName.toLowerCase();
+          const filtered = results3.results.filter(r => {
+            const prodName = (r.properties.partnership_name || '').toLowerCase();
+            return prodName.includes(projectLower) || projectLower.includes(prodName);
+          });
+          console.log(`  → Found ${results3.results.length} total, ${filtered.length} matched "${projectName}"`);
+          if (filtered.length) {
+            filtered.forEach(r => {
+              console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
+            });
+            allResults.push(...filtered);
+          }
+        }
+      }
+      
+      console.log(`\n--- SCORING RESULTS ---`);
+      console.log(`Total candidates: ${allResults.length}`);
+      
+      if (allResults.length > 0) {
         // Score each result based on similarity
         const projectLower = projectName.toLowerCase();
-        const scoredResults = results.results.map(r => {
+        const projectWords = projectLower.split(/\s+/).filter(w => w.length > 0);
+        
+        const scoredResults = allResults.map(r => {
           const prodName = r.properties.partnership_name?.toLowerCase() || '';
+          const prodWords = prodName.split(/\s+/).filter(w => w.length > 0);
           let score = 0;
+          let reasons = [];
           
           // Exact match gets highest score
           if (prodName === projectLower) {
             score = 100;
+            reasons.push('exact match');
           } else {
             // Count matching words
-            const projectWords = projectLower.split(/\s+/);
-            const prodWords = prodName.split(/\s+/);
-            
+            let matchedWords = 0;
             projectWords.forEach(word => {
-              if (prodWords.includes(word)) score += 10;
-              else if (prodName.includes(word)) score += 5;
+              if (prodWords.includes(word)) {
+                score += 10;
+                matchedWords++;
+              } else if (prodName.includes(word)) {
+                score += 5;
+                matchedWords++;
+              }
             });
+            
+            if (matchedWords > 0) {
+              reasons.push(`${matchedWords}/${projectWords.length} words matched`);
+            }
             
             // Bonus if starts with same word
             if (projectWords[0] && prodWords[0] === projectWords[0]) {
               score += 20;
+              reasons.push('same first word');
+            }
+            
+            // Bonus for similar length (avoids matching very short or long names)
+            const lengthDiff = Math.abs(prodWords.length - projectWords.length);
+            if (lengthDiff <= 1) {
+              score += 10;
+              reasons.push('similar length');
             }
           }
           
-          return { ...r, score };
+          console.log(`  "${r.properties.partnership_name}" → Score: ${score} (${reasons.join(', ')})`);
+          return { ...r, score, reasons };
         });
         
         // Sort by score and get best match
         scoredResults.sort((a, b) => b.score - a.score);
         const partnership = scoredResults[0];
+        
+        console.log(`\n--- BEST MATCH ---`);
+        console.log(`  Name: "${partnership.properties.partnership_name}"`);
+        console.log(`  Score: ${partnership.score}`);
+        console.log(`  Reasons: ${partnership.reasons.join(', ')}`);
         
         if (partnership && partnership.score > 0) {
           const props = partnership.properties;
@@ -784,13 +872,18 @@ const hubspotAPI = {
             setting: props.partnership_setting || props.setting || null
           };
           
-          // --- Save to cache (1 hour TTL) ---
+          // --- Save to cache with timestamp (3 hour TTL) ---
           try {
-            await kv.set(cacheKey, partnershipResult, { ex: 3600 });
-            console.log(`[getPartnershipForProject] Saved to cache: "${cacheKey}"`);
+            const cacheData = {
+              ...partnershipResult,
+              cachedAt: new Date().toISOString()
+            };
+            await kv.set(cacheKey, cacheData, { ex: 10800 }); // 3 hours
+            console.log(`\n[getPartnershipForProject] ✅ Saved to cache: "${cacheKey}" (3hr TTL)`);
           } catch (e) {
-            console.error('[getPartnershipForProject] KV cache set failed:', e.message);
+            console.error('[getPartnershipForProject] ⚠️ KV cache set failed:', e.message);
           }
+          console.log(`========================================\n`);
           // --- End cache save ---
           
           return partnershipResult;
