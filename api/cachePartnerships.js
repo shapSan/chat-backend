@@ -212,17 +212,16 @@ async function rebuildCacheBackground() {
     
     console.log('[CACHE] ✅ Formatted ${matchedPartnerships.length} partnerships');
 
-    // TEMPORARY: Limit to 200 to avoid response size issues
-    const limitedPartnerships = matchedPartnerships.slice(0, 200);
-    console.log(`[CACHE] ⚠️ Limiting to ${limitedPartnerships.length} partnerships due to response size constraints`);
+    // Cache ALL the results - no limit needed since we're not returning in response
+    console.log(`[CACHE] Caching all ${matchedPartnerships.length} partnerships to KV...`);
 
     // Cache the results
-    await kv.set('hubspot-partnership-matches', limitedPartnerships);
+    await kv.set('hubspot-partnership-matches', matchedPartnerships);
     
     // Also cache timestamp
     await kv.set('hubspot-partnership-matches-timestamp', Date.now());
 
-    console.log('[CACHE] ✅ Cache rebuild complete!', limitedPartnerships.length, 'partnerships cached');
+    console.log('[CACHE] ✅ Cache rebuild complete!', matchedPartnerships.length, 'partnerships cached');
     
   } catch (error) {
     console.error('[CACHE] Fatal error during partnership cache refresh:', error);
