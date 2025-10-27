@@ -22,65 +22,20 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-
-  // GET method - return cached partnerships
-  if (req.method === 'GET') {
-    try {
-      // Get cached partnership matches
-      const cachedMatches = await kv.get('hubspot-partnership-matches');
-      const cacheTimestamp = await kv.get('hubspot-partnership-matches-timestamp');
-      
-      if (!cachedMatches) {
-        return res.status(404).json({ 
-          error: 'No cached partnerships found', 
-          message: 'Please run the cache refresh first' 
-        });
-      }
-      
-      // DEBUG: Log each item read from cache
-      if (Array.isArray(cachedMatches)) {
-        for (const item of cachedMatches) {
-          logStage('C2 CACHE-READ', item, HB_KEYS.PARTNERSHIP_FIELDS);
-        }
-      }
-      
-      // Calculate cache age
-      const cacheAge = cacheTimestamp ? Date.now() - cacheTimestamp : null;
-      const cacheAgeMinutes = cacheAge ? Math.floor(cacheAge / 60000) : null;
-      
-      // DEBUG: Log items being sent to UI (D stage)
-      if (Array.isArray(cachedMatches)) {
-        for (const item of cachedMatches) {
-          logStage('D UI-FEED', item, HB_KEYS.PARTNERSHIP_FIELDS);
-        }
-      }
-      
-      return res.status(200).json({ 
-        partnerships: cachedMatches,
-        cacheAge: cacheAgeMinutes,
-        timestamp: cacheTimestamp
-      });
-      
-    } catch (error) {
-      console.error('[GET_PARTNERSHIPS] Error:', error);
-      return res.status(500).json({ 
-        error: 'Failed to fetch partnerships', 
-        details: error.message 
-      });
-    }
-  }
   
-  // POST method - rebuild cache
-  if (req.method === 'POST') {
-    // Only require auth for POST method (rebuild cache)
-    if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
-      // Allow POST without auth for frontend rebuild button
-      console.log('[CACHE] Frontend-initiated cache refresh (no auth)');
-    }
+  // Only require auth for POST method (rebuild cache)
+  if (req.method === 'POST' && req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
+    // Allow POST without auth for frontend rebuild button
+    console.log('[CACHE] Frontend-initiated cache refresh (no auth)');
+  }
 
-    console.log('[CACHE] Starting partnership cache refresh...');
-    
-    try {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed. Use POST to rebuild cache.' });
+  }
+
+  console.log('[CACHE] Starting partnership cache refresh...');
+  
+  try {
     // Use the defined pipeline stages for active partnerships
     // No date filtering - we want ALL partnerships in active stages
     const filterGroups = [
@@ -391,8 +346,7 @@ export default async function handler(req, res) {
 
     res.status(200).json({ 
       status: 'ok', 
-      partnerships: matchedPartnerships, // Return the actual data
-      count: matchedPartnerships.length,
+      partnerships: matchedPartnerships.length,
       message: `Cached ${matchedPartnerships.length} partnerships with brand matches`
     });
     
@@ -403,8 +357,4 @@ export default async function handler(req, res) {
       details: error.message 
     });
   }
-  } // End POST handler
-  
-  // Method not allowed
-  return res.status(405).json({ error: 'Method not allowed. Use GET to fetch or POST to rebuild cache.' });
 }
