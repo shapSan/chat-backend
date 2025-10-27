@@ -35,8 +35,7 @@
     },
     {
       "path": "/api/cachePartnerships",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }
-
