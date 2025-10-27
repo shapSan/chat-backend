@@ -18,10 +18,30 @@ export default async function handler(req, res) {
   }
   
   try {
-    const { token } = req.query;
+    const { token, brandId } = req.query;
     
+    // Mode 1: Get token by brandId (for Brand Radar)
+    if (brandId && !token) {
+      const radarToken = await kv.get(`brand-radar-token:${brandId}`);
+      
+      if (!radarToken) {
+        return res.status(200).json({ 
+          success: true,
+          hasRadar: false,
+          token: null 
+        });
+      }
+      
+      return res.status(200).json({
+        success: true,
+        hasRadar: true,
+        token: radarToken
+      });
+    }
+    
+    // Mode 2: Get slides by token (existing functionality)
     if (!token) {
-      return res.status(400).json({ error: 'Token required' });
+      return res.status(400).json({ error: 'Token or brandId required' });
     }
     
     // Fetch from KV
