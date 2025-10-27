@@ -140,12 +140,16 @@ export default async function handler(req, res) {
     console.log(`[CACHE] Total partnerships fetched: ${partnerships.length} in ${pageCount} pages`);
     
     if (partnerships.length === 0) {
+      console.log('[CACHE] No partnerships found, returning empty response');
       return res.status(200).json({ 
         status: 'warning', 
         message: 'No active partnerships found',
-        partnerships: 0
+        partnerships: [],
+        count: 0
       });
     }
+
+    console.log('[CACHE] Starting brand fetching for matching...');
 
     // Fetch brand pool for matching (425 brands total)
     // Split into chunks respecting HubSpot's 200 limit
@@ -187,26 +191,35 @@ export default async function handler(req, res) {
 
     let allBrands = [];
     
+    console.log('[CACHE] Fetching brands in', brandBuckets.length, 'buckets...');
+    
     for (const bucket of brandBuckets) {
-      const brandResult = await hubspotAPI.searchBrands({
-        ...bucket,
-        properties: [
-          'hs_object_id',
-          'brand_name',
-          'main_category',
-          'target_gen',
-          'target_age_group__multi_',
-          'client_status',
-          'partnership_count'
-        ]
-      });
-      
-      if (brandResult.results) {
-        allBrands = [...allBrands, ...brandResult.results];
+      try {
+        console.log('[CACHE] Fetching bucket:', bucket.filterGroups[0].filters[0].value);
+        const brandResult = await hubspotAPI.searchBrands({
+          ...bucket,
+          properties: [
+            'hs_object_id',
+            'brand_name',
+            'main_category',
+            'target_gen',
+            'target_age_group__multi_',
+            'client_status',
+            'partnership_count'
+          ]
+        });
+        
+        if (brandResult.results) {
+          allBrands = [...allBrands, ...brandResult.results];
+          console.log('[CACHE] Fetched', brandResult.results.length, 'brands, total:', allBrands.length);
+        }
+      } catch (error) {
+        console.error('[CACHE] Error fetching brand bucket:', error.message);
       }
     }
 
-    console.log(`[CACHE] Fetched ${partnerships.length} partnerships and ${allBrands.length} brands`);
+    console.log(`[CACHE] ✅ Fetched ${partnerships.length} partnerships and ${allBrands.length} brands`);
+    console.log('[CACHE] Starting matching process...');
 
     // Perform matching (simplified scoring logic)
     const matchedPartnerships = partnerships.map(partnership => {
