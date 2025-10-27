@@ -23,6 +23,9 @@
     },
     "api/cachePartnerships.js": {
       "maxDuration": 300
+    },
+    "api/getPartnerships.js": {
+      "maxDuration": 10
     }
   },
   "crons": [
