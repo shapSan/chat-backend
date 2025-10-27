@@ -260,8 +260,12 @@ export default async function handler(req, res) {
     
     console.log(`[CACHE] ✅ Formatted ${matchedPartnerships.length} partnerships`);
 
+    // TEMPORARY: Limit to 200 to avoid response size issues
+    const limitedPartnerships = matchedPartnerships.slice(0, 200);
+    console.log(`[CACHE] ⚠️ Limiting to ${limitedPartnerships.length} partnerships due to response size constraints`);
+
     // Cache the results
-    await kv.set('hubspot-partnership-matches', matchedPartnerships);
+    await kv.set('hubspot-partnership-matches', limitedPartnerships);
     
     // Also cache timestamp
     await kv.set('hubspot-partnership-matches-timestamp', Date.now());
@@ -272,9 +276,10 @@ export default async function handler(req, res) {
 
     res.status(200).json({ 
       status: 'ok', 
-      partnerships: matchedPartnerships,  // Return actual data, not count
-      count: matchedPartnerships.length,
-      message: `Cached ${matchedPartnerships.length} partnerships with brand matches`
+      partnerships: limitedPartnerships,  // Return actual data, not count
+      count: limitedPartnerships.length,
+      total: matchedPartnerships.length,
+      message: `Cached ${limitedPartnerships.length} partnerships (limited from ${matchedPartnerships.length} total)`
     });
     
     console.log('[CACHE] ✅ Response sent successfully');
