@@ -403,11 +403,8 @@ export default async function handler(req, res) {
       details: error.message 
     });
   }
-  return; // End POST handler
-  }
+  } // End POST handler
   
   // Method not allowed
   return res.status(405).json({ error: 'Method not allowed. Use GET to fetch or POST to rebuild cache.' });
 }
-
-
