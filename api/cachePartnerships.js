@@ -37,21 +37,25 @@ export default async function handler(req, res) {
   
   try {
     // Use the defined pipeline stages for active partnerships
-    // No date filtering - we want ALL partnerships in active stages
+    // PLUS require start_date to exist to reduce data size
     const filterGroups = [
       {
-        // Filter by active pipeline stages using the IDs
+        // Filter by active pipeline stages AND must have start date
         filters: [
           {
             propertyName: 'hs_pipeline_stage',
             operator: 'IN',
             values: ACTIVE_STAGES  // Use the defined stage IDs
+          },
+          {
+            propertyName: 'start_date',
+            operator: 'HAS_PROPERTY'  // Must have a start date
           }
         ]
       }
     ];
     
-    console.log('[CACHE] Fetching partnerships in active stages:', ACTIVE_STAGES);
+    console.log('[CACHE] Fetching partnerships in active stages WITH start_date:', ACTIVE_STAGES);
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
     // Support pagination to get all matching partnerships
@@ -105,7 +109,7 @@ export default async function handler(req, res) {
         }
         
         const searchParams = {
-          limit: 20,  // REDUCED from 100 to test
+          limit: 100,  // Back to 100 now that we're filtering by start_date
           filterGroups,
           properties: partnershipProperties,
           // Add explicit sorting for stable pagination
