@@ -23,42 +23,83 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
   
-  // Only require auth for POST method (rebuild cache)
-  if (req.method === 'POST' && req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
-    // Allow POST without auth for frontend rebuild button
-    console.log('[CACHE] Frontend-initiated cache refresh (no auth)');
+  // Handle GET requests - return current cache status
+  if (req.method === 'GET') {
+    try {
+      const status = await kv.get('partnership-cache-status');
+      
+      if (!status) {
+        return res.status(200).json({
+          status: 'idle',
+          message: 'No cache rebuild in progress.'
+        });
+      }
+      
+      return res.status(200).json(status);
+    } catch (error) {
+      console.error('[CACHE] Error reading status:', error);
+      return res.status(500).json({
+        status: 'error',
+        error: 'Failed to read cache status',
+        message: error.message
+      });
+    }
   }
+  
+  // Handle POST requests - trigger cache rebuild
+  if (req.method === 'POST') {
+    // Only require auth for POST method (rebuild cache)
+    if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
+      // Allow POST without auth for frontend rebuild button
+      console.log('[CACHE] Frontend-initiated cache refresh (no auth)');
+    }
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed. Use POST to rebuild cache.' });
+    // Set initial 'starting' status before responding
+    try {
+      await kv.set('partnership-cache-status', {
+        status: 'starting',
+        message: 'Cache rebuild initiated...',
+        startTime: Date.now()
+      });
+    } catch (err) {
+      console.error('[CACHE] Failed to set starting status:', err);
+    }
+
+    // IMMEDIATELY return success - don't wait for the cache to build
+    res.status(200).json({ 
+      status: 'ok',
+      message: 'Cache rebuild started. Poll GET /api/cachePartnerships for status updates.'
+    });
+
+    // Now rebuild the cache in the background
+    // Vercel will keep this running for up to 5 minutes
+    rebuildCacheBackground().catch(err => {
+      console.error('[CACHE] Background rebuild failed:', err);
+    });
+    
+    return;
   }
-
-  // IMMEDIATELY return success - don't wait for the cache to build
-  res.status(200).json({ 
-    status: 'ok',
-    message: 'Cache rebuild started. Wait 15 seconds, then click Refresh to load updated data.'
-  });
-
-  // Now rebuild the cache in the background
-  // Vercel will keep this running for up to 5 minutes
-  rebuildCacheBackground().catch(err => {
-    console.error('[CACHE] Background rebuild failed:', err);
-  });
+  
+  // Method not allowed
+  return res.status(405).json({ error: 'Method not allowed. Use GET for status or POST to rebuild cache.' });
 }
 
 async function rebuildCacheBackground() {
 
   console.log('[CACHE] Starting partnership cache refresh...');
   
-  // Set initial status in KV
+  // Capture the original start time
+  const startTime = Date.now();
+  
+  // Update status to 'running'
   try {
     await kv.set('partnership-cache-status', {
       status: 'running',
-      startTime: Date.now(),
+      startTime,
       message: 'Fetching data from HubSpot...'
     });
   } catch (err) {
-    console.error('[CACHE] Failed to set initial status:', err);
+    console.error('[CACHE] Failed to set running status:', err);
   }
   
   try {
@@ -163,7 +204,7 @@ async function rebuildCacheBackground() {
               status: 'running',
               progress: `Fetched ${allPartnerships.length} partnerships...`,
               page: pageCount,
-              startTime: Date.now()
+              startTime // Keep original start time
             });
           } catch (err) {
             console.error('[CACHE] Failed to update progress:', err);
@@ -206,13 +247,19 @@ async function rebuildCacheBackground() {
     console.log(`[CACHE] Total partnerships fetched: ${partnerships.length} in ${pageCount} pages`);
     
     if (partnerships.length === 0) {
-      console.log('[CACHE] No partnerships found, returning empty response');
-      return res.status(200).json({ 
-        status: 'warning', 
-        message: 'No active partnerships found',
-        partnerships: [],
-        count: 0
-      });
+      console.log('[CACHE] No partnerships found, updating status...');
+      // Update status to indicate no data found
+      try {
+        await kv.set('partnership-cache-status', {
+          status: 'completed',
+          count: 0,
+          endTime: Date.now(),
+          message: 'No active partnerships found matching filters.'
+        });
+      } catch (err) {
+        console.error('[CACHE] Failed to set no-data status:', err);
+      }
+      return;
     }
 
     console.log('[CACHE] Starting brand fetching for matching...');
