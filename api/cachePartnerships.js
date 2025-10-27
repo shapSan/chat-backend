@@ -228,92 +228,18 @@ export default async function handler(req, res) {
     }
 
     console.log(`[CACHE] ✅ Fetched ${partnerships.length} partnerships and ${allBrands.length} brands`);
-    console.log('[CACHE] Starting matching process...');
+    console.log('[CACHE] Skipping matching, just formatting partnerships...');
 
-    // Perform matching (simplified scoring logic)
-    console.log('[CACHE] Starting matching process...');
-    
-    // Process in chunks to avoid timeouts
-    const CHUNK_SIZE = 50; // Process 50 partnerships at a time
-    const matchedPartnerships = [];
-    
-    for (let i = 0; i < partnerships.length; i += CHUNK_SIZE) {
-      const chunk = partnerships.slice(i, i + CHUNK_SIZE);
-      console.log(`[CACHE] Processing chunk ${Math.floor(i/CHUNK_SIZE) + 1}/${Math.ceil(partnerships.length/CHUNK_SIZE)} (${chunk.length} partnerships)`);
-      
-      const matchedChunk = chunk.map(partnership => {
+    // SIMPLIFIED: Skip brand matching entirely, just format partnerships
+    const matchedPartnerships = partnerships.map(partnership => {
       const props = partnership.properties;
       
-      // Debug log to see what fields we're getting
-      console.log('[CACHE] Sample partnership properties:', {
-        name: props.partnership_name,
-        genre_production: props.genre_production,
-        main_cast: props.main_cast,
-        hs_lastmodifieddate: props.hs_lastmodifieddate,
-        all_keys: Object.keys(props)
-      });
-      
-      // Score each brand for this partnership (SIMPLIFIED - just top 30)
-      const scoredBrands = allBrands.map(brand => {
-        const brandProps = brand.properties;
-        let score = Math.floor(Math.random() * 30) + 40; // Base score 40-70
-        
-        // Bonus for active brands
-        if (brandProps.client_status === 'Active') {
-          score += 20;
-        }
-        
-        // Bonus for high partnership count
-        const partnershipCount = parseInt(brandProps.partnership_count || 0);
-        if (partnershipCount > 10) score += 10;
-        if (partnershipCount > 5) score += 5;
-        
-        return {
-          id: brand.id,
-          name: brandProps.brand_name || 'Unknown Brand',
-          category: brandProps.main_category || 'General',
-          status: brandProps.client_status || 'Unknown',
-          score: Math.min(100, score) // Cap at 100
-        };
-      });
-      
-      // Sort by score and take top 30 IMMEDIATELY to save memory
-      scoredBrands.sort((a, b) => b.score - a.score);
-      const topBrands = scoredBrands.slice(0, 30);
-      
-      // Get the appropriate rating
-      const getRating = () => {
-        // Check movie rating first
-        if (props.movie_rating && props.movie_rating !== null && props.movie_rating !== '') {
-          return props.movie_rating;
-        }
-        // If no movie rating, check TV rating
-        if (props.tv_ratings && props.tv_ratings !== null && props.tv_ratings !== '') {
-          return props.tv_ratings;
-        }
-        // Check generic rating field as fallback
-        if (props.rating && props.rating !== null && props.rating !== '') {
-          return props.rating;
-        }
-        // If none exist, return TBD
-        return 'TBD';
-      };
-      
-      // Debug: Log first partnership to verify lastModified is present
-      if (partnership === partnerships[0]) {
-        console.log('[CACHE] First partnership lastModified value:', props.hs_lastmodifieddate);
-      }
-      
+      // Just return the partnership with empty matchedBrands
       const finalObject = {
-        // Spread all raw properties from HubSpot exactly as-is
         ...props,
-        // Add the HubSpot ID
         id: partnership.id,
-        // Add the 'name' property for the panel to use
         name: props.partnership_name || 'Untitled Project',
-        // Add matched brands
-        matchedBrands: topBrands,
-        // CRITICAL: Explicitly map fields that need to be at top level
+        matchedBrands: [], // Empty for now
         main_cast: props.main_cast || null,
         cast: props.main_cast || null,
         shoot_location__city_: props.shoot_location__city_ || null,
@@ -329,32 +255,12 @@ export default async function handler(req, res) {
         partnership_setting: props.partnership_setting || null
       };
       
-      // DEBUG: Log before storing to cache
-      logStage('B CACHE-IN', props, HB_KEYS.PARTNERSHIP_FIELDS);
-      logStage('C CACHE-SET', finalObject, HB_KEYS.PARTNERSHIP_FIELDS);
-      
-      // Verification log - only log first partnership to avoid spam
-      if (partnership === partnerships[0]) {
-        console.log('[CACHE-BUILD] Verifying final object structure:', {
-          hasName: !!finalObject.name,
-          name: finalObject.name,
-          hasId: !!finalObject.id,
-          hasMainCast: !!finalObject.main_cast,
-          hasPartnershipName: !!finalObject.partnership_name,
-          sampleKeys: Object.keys(finalObject).slice(0, 10)
-        });
-      }
-      
       return finalObject;
     });
     
-    matchedPartnerships.push(...matchedChunk);
-    console.log(`[CACHE] ✅ Processed chunk, total so far: ${matchedPartnerships.length}`);
-  }
-  
-  console.log(`[CACHE] ✅ Finished processing all ${matchedPartnerships.length} partnerships`);
+    console.log(`[CACHE] ✅ Formatted ${matchedPartnerships.length} partnerships`);
 
-    // Cache the results (no TTL - persistent like brands cache)
+    // Cache the results
     await kv.set('hubspot-partnership-matches', matchedPartnerships);
     
     // Also cache timestamp
