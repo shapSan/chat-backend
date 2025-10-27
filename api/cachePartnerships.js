@@ -105,7 +105,7 @@ export default async function handler(req, res) {
         }
         
         const searchParams = {
-          limit: 100,
+          limit: 20,  // REDUCED from 100 to test
           filterGroups,
           properties: partnershipProperties,
           // Add explicit sorting for stable pagination
