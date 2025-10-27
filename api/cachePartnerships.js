@@ -231,7 +231,17 @@ export default async function handler(req, res) {
     console.log('[CACHE] Starting matching process...');
 
     // Perform matching (simplified scoring logic)
-    const matchedPartnerships = partnerships.map(partnership => {
+    console.log('[CACHE] Starting matching process...');
+    
+    // Process in chunks to avoid timeouts
+    const CHUNK_SIZE = 50; // Process 50 partnerships at a time
+    const matchedPartnerships = [];
+    
+    for (let i = 0; i < partnerships.length; i += CHUNK_SIZE) {
+      const chunk = partnerships.slice(i, i + CHUNK_SIZE);
+      console.log(`[CACHE] Processing chunk ${Math.floor(i/CHUNK_SIZE) + 1}/${Math.ceil(partnerships.length/CHUNK_SIZE)} (${chunk.length} partnerships)`);
+      
+      const matchedChunk = chunk.map(partnership => {
       const props = partnership.properties;
       
       // Debug log to see what fields we're getting
@@ -243,12 +253,11 @@ export default async function handler(req, res) {
         all_keys: Object.keys(props)
       });
       
-      // Score each brand for this partnership
+      // Score each brand for this partnership (SIMPLIFIED - just top 30)
       const scoredBrands = allBrands.map(brand => {
         const brandProps = brand.properties;
         let score = Math.floor(Math.random() * 30) + 40; // Base score 40-70
         
-        // Simple scoring based on available data
         // Bonus for active brands
         if (brandProps.client_status === 'Active') {
           score += 20;
@@ -259,27 +268,6 @@ export default async function handler(req, res) {
         if (partnershipCount > 10) score += 10;
         if (partnershipCount > 5) score += 5;
         
-        // Genre-based scoring if genre exists
-        if (props.genre_production && brandProps.main_category) {
-          const genreCategories = {
-            'Action': ['Automotive', 'Sports & Fitness', 'Electronics & Appliances'],
-            'Comedy': ['Food & Beverage', 'Entertainment'],
-            'Drama': ['Fashion & Apparel', 'Health & Beauty'],
-            'Horror': ['Entertainment', 'Gaming'],
-            'Romance': ['Fashion & Apparel', 'Health & Beauty', 'Floral'],
-            'Thriller': ['Automotive', 'Security', 'Electronics & Appliances'],
-            'Family': ['Food & Beverage', 'Baby Care', 'Entertainment']
-          };
-          
-          const genres = (props.genre_production || '').split(';');
-          genres.forEach(genre => {
-            const categories = genreCategories[genre.trim()] || [];
-            if (categories.includes(brandProps.main_category)) {
-              score += 15;
-            }
-          });
-        }
-        
         return {
           id: brand.id,
           name: brandProps.brand_name || 'Unknown Brand',
@@ -289,7 +277,7 @@ export default async function handler(req, res) {
         };
       });
       
-      // Sort by score and take top 30
+      // Sort by score and take top 30 IMMEDIATELY to save memory
       scoredBrands.sort((a, b) => b.score - a.score);
       const topBrands = scoredBrands.slice(0, 30);
       
@@ -359,6 +347,12 @@ export default async function handler(req, res) {
       
       return finalObject;
     });
+    
+    matchedPartnerships.push(...matchedChunk);
+    console.log(`[CACHE] ✅ Processed chunk, total so far: ${matchedPartnerships.length}`);
+  }
+  
+  console.log(`[CACHE] ✅ Finished processing all ${matchedPartnerships.length} partnerships`);
 
     // Cache the results (no TTL - persistent like brands cache)
     await kv.set('hubspot-partnership-matches', matchedPartnerships);
