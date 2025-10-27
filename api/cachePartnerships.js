@@ -160,73 +160,10 @@ export default async function handler(req, res) {
 
     console.log('[CACHE] Starting brand fetching for matching...');
 
-    // Fetch brand pool for matching (425 brands total)
-    // Split into chunks respecting HubSpot's 200 limit
-    const brandBuckets = [
-      // 150 Active brands
-      {
-        filterGroups: [{
-          filters: [{
-            propertyName: 'client_status',
-            operator: 'EQ',
-            value: 'Active'
-          }]
-        }],
-        limit: 150
-      },
-      // 75 Inactive brands
-      {
-        filterGroups: [{
-          filters: [{
-            propertyName: 'client_status',
-            operator: 'EQ',
-            value: 'Inactive'
-          }]
-        }],
-        limit: 75
-      },
-      // 200 Pending brands (respecting API limit)
-      {
-        filterGroups: [{
-          filters: [{
-            propertyName: 'client_status',
-            operator: 'EQ',
-            value: 'Pending'
-          }]
-        }],
-        limit: 200
-      }
-    ];
-
-    let allBrands = [];
+    // SKIP BRAND FETCHING - not needed for now
+    const allBrands = [];
+    console.log('[CACHE] ⚠️ Skipping brand fetching to speed up cache build');
     
-    console.log('[CACHE] Fetching brands in', brandBuckets.length, 'buckets...');
-    
-    for (const bucket of brandBuckets) {
-      try {
-        console.log('[CACHE] Fetching bucket:', bucket.filterGroups[0].filters[0].value);
-        const brandResult = await hubspotAPI.searchBrands({
-          ...bucket,
-          properties: [
-            'hs_object_id',
-            'brand_name',
-            'main_category',
-            'target_gen',
-            'target_age_group__multi_',
-            'client_status',
-            'partnership_count'
-          ]
-        });
-        
-        if (brandResult.results) {
-          allBrands = [...allBrands, ...brandResult.results];
-          console.log('[CACHE] Fetched', brandResult.results.length, 'brands, total:', allBrands.length);
-        }
-      } catch (error) {
-        console.error('[CACHE] Error fetching brand bucket:', error.message);
-      }
-    }
-
     console.log(`[CACHE] ✅ Fetched ${partnerships.length} partnerships and ${allBrands.length} brands`);
     console.log('[CACHE] Skipping matching, just formatting partnerships...');
 
