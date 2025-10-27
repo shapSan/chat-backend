@@ -592,8 +592,11 @@ const hubspotAPI = {
       const responseClone = response.clone();
       const rawText = await responseClone.text();
       console.log(`  Raw Response (first 500 chars): ${rawText.substring(0, 500)}...`);
+      console.log(`  Raw Response total length: ${rawText.length} chars`);
       
+      console.log('[DEBUG searchProductions] About to parse JSON...');
       const data = await response.json();
+      console.log('[DEBUG searchProductions] ✅ JSON parsed successfully');
       console.log(`  Results Count: ${data.results?.length || 0}`);
       console.log(`  Has Paging: ${!!data.paging}`);
       if (data.paging?.next) {
