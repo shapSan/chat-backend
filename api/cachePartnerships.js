@@ -122,6 +122,10 @@ export default async function handler(req, res) {
         console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
         const result = await hubspotAPI.searchProductions(searchParams);
         
+        console.log(`[CACHE] Got result, checking data...`);
+        console.log(`[CACHE] result.results exists:`, !!result.results);
+        console.log(`[CACHE] result.results.length:`, result.results?.length || 0);
+        
         if (result.results && result.results.length > 0) {
           allPartnerships = [...allPartnerships, ...result.results];
           console.log(`[CACHE] Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
@@ -132,6 +136,7 @@ export default async function handler(req, res) {
         
       } catch (pageError) {
         console.error(`[CACHE] Error fetching partnerships page ${pageCount + 1}:`, pageError);
+        console.error(`[CACHE] Error stack:`, pageError.stack);
         break;
       }
     } while (after && pageCount < maxPages);
