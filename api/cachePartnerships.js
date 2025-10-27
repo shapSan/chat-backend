@@ -191,6 +191,7 @@ async function rebuildCacheBackground() {
         console.log(`[CACHE] Got result, checking data...`);
         console.log(`[CACHE] result.results exists:`, !!result.results);
         console.log(`[CACHE] result.results.length:`, result.results?.length || 0);
+        console.log(`[CACHE] result.paging:`, JSON.stringify(result.paging));
         
         if (result.results && result.results.length > 0) {
           allPartnerships = [...allPartnerships, ...result.results];
@@ -212,6 +213,11 @@ async function rebuildCacheBackground() {
         }
         
         after = result.paging?.next?.after;
+        if (after) {
+          console.log(`[CACHE] ✅ Has next page, after token: ${after}`);
+        } else {
+          console.log(`[CACHE] ⚠️ No next page - stopping pagination`);
+        }
         pageCount++;
         
       } catch (pageError) {
@@ -244,7 +250,13 @@ async function rebuildCacheBackground() {
     } while (after && pageCount < maxPages);
 
     const partnerships = allPartnerships;
-    console.log(`[CACHE] Total partnerships fetched: ${partnerships.length} in ${pageCount} pages`);
+    console.log(`[CACHE] =========================================`);
+    console.log(`[CACHE] PAGINATION SUMMARY:`);
+    console.log(`[CACHE]   Total fetched: ${partnerships.length}`);
+    console.log(`[CACHE]   Pages fetched: ${pageCount}`);
+    console.log(`[CACHE]   Max pages: ${maxPages}`);
+    console.log(`[CACHE]   Stopped because: ${after ? 'reached max pages limit' : 'no more pages from HubSpot'}`);
+    console.log(`[CACHE] =========================================`);
     
     if (partnerships.length === 0) {
       console.log('[CACHE] No partnerships found, updating status...');
