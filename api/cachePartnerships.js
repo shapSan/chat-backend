@@ -270,16 +270,18 @@ export default async function handler(req, res) {
     // Also cache timestamp
     await kv.set('hubspot-partnership-matches-timestamp', Date.now());
 
-    console.log('[CACHE] ✅ About to return response with', matchedPartnerships.length, 'partnerships');
-    console.log('[CACHE] First partnership:', matchedPartnerships[0]?.name || 'NO NAME');
-    console.log('[CACHE] Response will include partnerships array:', Array.isArray(matchedPartnerships));
+    console.log('[CACHE] ✅ About to return response with', limitedPartnerships.length, 'partnerships');
+    console.log('[CACHE] First partnership:', limitedPartnerships[0]?.name || 'NO NAME');
+    console.log('[CACHE] Response will include partnerships array:', Array.isArray(limitedPartnerships));
 
+    // DON'T return the full data in the response - it's too big and causes timeout
+    // Just return success and let the frontend fetch from KV
     res.status(200).json({ 
       status: 'ok', 
-      partnerships: limitedPartnerships,  // Return actual data, not count
+      partnerships: [], // Empty - frontend will fetch from KV
       count: limitedPartnerships.length,
       total: matchedPartnerships.length,
-      message: `Cached ${limitedPartnerships.length} partnerships (limited from ${matchedPartnerships.length} total)`
+      message: `Cached ${limitedPartnerships.length} partnerships (limited from ${matchedPartnerships.length} total). Use /api/getPartnerships to retrieve.`
     });
     
     console.log('[CACHE] ✅ Response sent successfully');
