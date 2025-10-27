@@ -33,6 +33,21 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed. Use POST to rebuild cache.' });
   }
 
+  // IMMEDIATELY return success - don't wait for the cache to build
+  res.status(200).json({ 
+    status: 'ok',
+    message: 'Cache rebuild started. Wait 15 seconds, then click Refresh to load updated data.'
+  });
+
+  // Now rebuild the cache in the background
+  // Vercel will keep this running for up to 5 minutes
+  rebuildCacheBackground().catch(err => {
+    console.error('[CACHE] Background rebuild failed:', err);
+  });
+}
+
+async function rebuildCacheBackground() {
+
   console.log('[CACHE] Starting partnership cache refresh...');
   
   try {
@@ -195,7 +210,7 @@ export default async function handler(req, res) {
       return finalObject;
     });
     
-    console.log(`[CACHE] ✅ Formatted ${matchedPartnerships.length} partnerships`);
+    console.log('[CACHE] ✅ Formatted ${matchedPartnerships.length} partnerships');
 
     // TEMPORARY: Limit to 200 to avoid response size issues
     const limitedPartnerships = matchedPartnerships.slice(0, 200);
@@ -207,27 +222,10 @@ export default async function handler(req, res) {
     // Also cache timestamp
     await kv.set('hubspot-partnership-matches-timestamp', Date.now());
 
-    console.log('[CACHE] ✅ About to return response with', limitedPartnerships.length, 'partnerships');
-    console.log('[CACHE] First partnership:', limitedPartnerships[0]?.name || 'NO NAME');
-    console.log('[CACHE] Response will include partnerships array:', Array.isArray(limitedPartnerships));
-
-    // DON'T return the full data in the response - it's too big and causes timeout
-    // Just return success and let the frontend fetch from KV
-    res.status(200).json({ 
-      status: 'ok', 
-      partnerships: [], // Empty - frontend will fetch from KV
-      count: limitedPartnerships.length,
-      total: matchedPartnerships.length,
-      message: `Cached ${limitedPartnerships.length} partnerships (limited from ${matchedPartnerships.length} total). Use /api/getPartnerships to retrieve.`
-    });
-    
-    console.log('[CACHE] ✅ Response sent successfully');
+    console.log('[CACHE] ✅ Cache rebuild complete!', limitedPartnerships.length, 'partnerships cached');
     
   } catch (error) {
     console.error('[CACHE] Fatal error during partnership cache refresh:', error);
-    res.status(500).json({ 
-      error: 'Failed to refresh partnership cache', 
-      details: error.message 
-    });
+    // Can't send error to client since we already responded
   }
 }
