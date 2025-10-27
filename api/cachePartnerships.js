@@ -50,6 +50,17 @@ async function rebuildCacheBackground() {
 
   console.log('[CACHE] Starting partnership cache refresh...');
   
+  // Set initial status in KV
+  try {
+    await kv.set('partnership-cache-status', {
+      status: 'running',
+      startTime: Date.now(),
+      message: 'Fetching data from HubSpot...'
+    });
+  } catch (err) {
+    console.error('[CACHE] Failed to set initial status:', err);
+  }
+  
   try {
     // Use the defined pipeline stages for active partnerships
     // PLUS require start_date to exist to reduce data size
@@ -118,11 +129,6 @@ async function rebuildCacheBackground() {
     
     do {
       try {
-        // Add delay between requests to avoid rate limits
-        if (pageCount > 0) {
-          await new Promise(resolve => setTimeout(resolve, 150));
-        }
-        
         const searchParams = {
           limit: 100,  // Back to 100 now that we're filtering by start_date
           filterGroups,
@@ -150,12 +156,48 @@ async function rebuildCacheBackground() {
           console.log(`[CACHE] Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
         }
         
+        // Update progress status every 2 pages
+        if (pageCount % 2 === 0) {
+          try {
+            await kv.set('partnership-cache-status', {
+              status: 'running',
+              progress: `Fetched ${allPartnerships.length} partnerships...`,
+              page: pageCount,
+              startTime: Date.now()
+            });
+          } catch (err) {
+            console.error('[CACHE] Failed to update progress:', err);
+          }
+        }
+        
         after = result.paging?.next?.after;
         pageCount++;
         
       } catch (pageError) {
         console.error(`[CACHE] Error fetching partnerships page ${pageCount + 1}:`, pageError);
         console.error(`[CACHE] Error stack:`, pageError.stack);
+        
+        // Update status with partial failure info
+        try {
+          await kv.set('partnership-cache-status', {
+            status: 'failed',
+            error: `Error fetching page ${pageCount + 1}: ${pageError.message}`,
+            partial: true,
+            count: allPartnerships.length,
+            endTime: Date.now()
+          });
+        } catch (err) {
+          console.error('[CACHE] Failed to update error status:', err);
+        }
+        
+        // Check if this is a rate limit error - if so, don't break immediately
+        if (pageError.message?.includes('429') || pageError.message?.toLowerCase().includes('rate limit')) {
+          console.log('[CACHE] Rate limit detected, will retry after backoff...');
+          // The hubspot-client RateLimiter should handle the retry
+          // Continue to next iteration rather than breaking
+          continue;
+        }
+        
         break;
       }
     } while (after && pageCount < maxPages);
@@ -223,8 +265,31 @@ async function rebuildCacheBackground() {
 
     console.log('[CACHE] ✅ Cache rebuild complete!', matchedPartnerships.length, 'partnerships cached');
     
+    // Update status to completed
+    try {
+      await kv.set('partnership-cache-status', {
+        status: 'completed',
+        count: matchedPartnerships.length,
+        endTime: Date.now(),
+        message: `${matchedPartnerships.length} partnerships cached.`
+      });
+    } catch (err) {
+      console.error('[CACHE] Failed to set completion status:', err);
+    }
+    
   } catch (error) {
     console.error('[CACHE] Fatal error during partnership cache refresh:', error);
-    // Can't send error to client since we already responded
+    
+    // Update status with fatal error info
+    try {
+      await kv.set('partnership-cache-status', {
+        status: 'failed',
+        error: error.message,
+        details: error.stack || '',
+        endTime: Date.now()
+      });
+    } catch (err) {
+      console.error('[CACHE] Failed to set error status:', err);
+    }
   }
 }
