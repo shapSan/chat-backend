@@ -346,7 +346,8 @@ export default async function handler(req, res) {
 
     res.status(200).json({ 
       status: 'ok', 
-      partnerships: matchedPartnerships.length,
+      partnerships: matchedPartnerships, // Return the actual data
+      count: matchedPartnerships.length,
       message: `Cached ${matchedPartnerships.length} partnerships with brand matches`
     });
     
