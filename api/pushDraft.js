@@ -195,7 +195,7 @@ async function resolveHubSpotUsers(brands, onStep = () => {}) {
   // --- TRACE 3.7: Log final user map ---
   console.log('[pushDraft TRACE 3.7] Final resolved user map:', userMap);
   
-  logStage('PUSH_DRAFT_RESOLVE_USERS', { userIds: Array.from(userIds) }, [], {
+  logStage('PUSH_DRAFT_RESOLVE_USERS', { userIds: Array.from(userIds), successCount, failCount, resolvedUsers: Object.keys(userMap) }, ['userIds', 'successCount', 'failCount', 'resolvedUsers'], {
     uniqueUserIds: Array.from(userIds),
     successCount,
     failCount,
@@ -304,7 +304,7 @@ function sanitizeBrand(b={}) {
   const secondaryOwnerId = b.secondaryOwnerId || b.secondary_owner || b.properties?.secondary_owner || null;
   const specialtyLeadId = b.specialtyLeadId || b.specialty_lead || b.properties?.specialty_lead || null;
   
-  logStage('PUSH_DRAFT_SANITIZE', b, HB_KEYS, {
+  logStage('PUSH_DRAFT_SANITIZE', b, HB_KEYS.PARTNERSHIP_FIELDS, {
     brandName: b.name || b.brand,
     hasAssets: !!b.assets,
     assetsCount: b.assets?.length || 0,
@@ -721,6 +721,7 @@ export default async function handler(req, res) {
 
     // Extract production data from the payload
     const pd = body.productionData && typeof body.productionData === "object" ? body.productionData : {};
+    logStage('PUSH_DRAFT_RECV_PD', pd, Object.keys(pd), { action: 'Received Production Data' });
     
     // Prioritize raw HubSpot fields, with fallbacks to old normalized names
     const projectName = cleanProjectName(pd.partnership_name || body.projectName || pd.projectName || "Project");
@@ -1071,7 +1072,7 @@ export default async function handler(req, res) {
         }
         */
 
-        logStage('PUSH_DRAFT_EMAIL_CREATED', { brandName: b.name, id: b.id }, HB_KEYS, {
+        logStage('PUSH_DRAFT_EMAIL_CREATED', { brandName: b.name, id: b.id }, HB_KEYS.PARTNERSHIP_FIELDS, {
           subject,
           recipients: draftRecipients,
           ccCount: finalCCList.length,
