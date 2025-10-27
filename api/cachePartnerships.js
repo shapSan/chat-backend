@@ -344,12 +344,18 @@ export default async function handler(req, res) {
     // Also cache timestamp
     await kv.set('hubspot-partnership-matches-timestamp', Date.now());
 
+    console.log('[CACHE] ✅ About to return response with', matchedPartnerships.length, 'partnerships');
+    console.log('[CACHE] First partnership:', matchedPartnerships[0]?.name || 'NO NAME');
+    console.log('[CACHE] Response will include partnerships array:', Array.isArray(matchedPartnerships));
+
     res.status(200).json({ 
       status: 'ok', 
       partnerships: matchedPartnerships,  // Return actual data, not count
       count: matchedPartnerships.length,
       message: `Cached ${matchedPartnerships.length} partnerships with brand matches`
     });
+    
+    console.log('[CACHE] ✅ Response sent successfully');
     
   } catch (error) {
     console.error('[CACHE] Fatal error during partnership cache refresh:', error);
@@ -359,5 +365,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
-
