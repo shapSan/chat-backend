@@ -122,13 +122,8 @@ const hubspotAPI = {
     
     console.log('[DEBUG searchBrands] Starting with filters:', filters);
     
-    // Ensure we're initialized before searching
-    if (!this.isInitialized) {
-      console.log('[DEBUG searchBrands] Not initialized, initializing now...');
-      await this.initialize();
-      // Add a small delay after initialization to ensure everything is ready
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+    // Skip initialization - let the first real fetch happen immediately
+    // The actual data fetch will fail if there's a connection issue, which is acceptable
     
     try {
       // Default properties to request - include new filter fields
@@ -486,10 +481,8 @@ const hubspotAPI = {
     // Acquire rate limit token first
     await hubspotLimiter.acquire();
     
-    // Ensure initialization
-    if (!this.isInitialized) {
-      await this.initialize();
-    }
+    // Skip initialization - let the first real fetch happen immediately
+    // The actual data fetch will fail if there's a connection issue, which is acceptable
     
     try {
       // Build the request body
@@ -576,7 +569,7 @@ const hubspotAPI = {
       
       // === LOG RAW RESPONSE ===
       console.log('[DEBUG searchProductions] === API RESPONSE ===');
-      console.log(`  Status: ${response.status} ${response.statusText}`);
+      console.log(`  Raw response received. Status: ${response.status} ${response.statusText}`);
       console.log(`  Headers:`, Object.fromEntries(response.headers.entries()));
       
       if (!response.ok) {
