@@ -132,46 +132,31 @@ async function rebuildCacheBackground() {
     const maxPages = 10; // Support up to 1000 partnerships
     
     const partnershipProperties = [
-      'partnership_name',
-      'hs_pipeline_stage',
-      'production_stage',         // Production stage field
-      'start_date',               // CORRECTED: Primary start date field
-      'production_start_date',    // Keep as fallback
-      'release__est__date',       // Primary release field with double underscores
-      'release_est_date',         // Keep as fallback
-      'content_type',             // Content type field (Film - Theatrical, etc.)
-      'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
-      'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
-      'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
-      'rating',                   // Generic rating field fallback
-      'hs_lastmodifieddate',      // Object last modified date/time - CRITICAL FOR SORTING
-      'genre_production',
-      'production_type',
-      'synopsis',
-      'main_cast',                // Main cast members
-      'shoot_location__city_',    // CRITICAL: Shooting location
-      'audience_segment',         // CRITICAL: Target audience
-      'partnership_status',       // Partnership status
-      'distributor',              // Distributor
-      'brand_name',               // Brand name
-      'amount',                   // Deal amount
-      'hollywood_branded_fee',    // HB fee
-      'closedate',                // Close date
-      'contract_sent_date',       // Contract sent date
-      'num_associated_contacts',  // Number of contacts
-      'est__shooting_end_date',   // Shooting end date
-      'production_end_date',      // Production end date
-      'time_period',              // Time period
-      'plot_location',            // Plot location
-      'storyline_location__city_',// Storyline city
-      'audience_segment',         // Audience segment
-      'partnership_setting'       // Partnership setting
+      'partnership_name',          // Essential - display name
+      'hs_pipeline_stage',         // Essential - for filtering by active stages
+      'start_date',                // Essential - for filtering + display
+      'release__est__date',        // Essential - display
+      'hs_lastmodifieddate',       // Essential - for sorting
+      'main_cast',                 // Essential - display
+      'genre_production',          // Essential - display/filtering
+      'production_type',           // Essential - display/filtering
+      'distributor',               // Useful - display
+      'shoot_location__city_',     // Keep - location display
+      'storyline_location__city_', // Keep - location fallback
+      'audience_segment',          // Keep - targeting/matching
+      'synopsis',                  // Keep - for context (can be large but needed)
+      // REMOVED: production_stage, content_type, movie_rating, tv_ratings, 
+      // sub_ratings_for_tv_content, rating, partnership_status, brand_name,
+      // amount, hollywood_branded_fee, closedate, contract_sent_date,
+      // num_associated_contacts, est__shooting_end_date, production_end_date,
+      // time_period, plot_location, partnership_setting, production_start_date,
+      // release_est_date (keeping only primary date fields)
     ];
     
     do {
       try {
         const searchParams = {
-          limit: 100,  // Back to 100 now that we're filtering by start_date
+          limit: 50,  // Reduced from 100 to prevent timeouts
           filterGroups,
           properties: partnershipProperties,
           // Add explicit sorting for stable pagination
@@ -296,16 +281,16 @@ async function rebuildCacheBackground() {
         main_cast: props.main_cast || null,
         cast: props.main_cast || null,
         shoot_location__city_: props.shoot_location__city_ || null,
-        location: props.shoot_location__city_ || null,
+        storyline_location__city_: props.storyline_location__city_ || null,
+        location: props.shoot_location__city_ || props.storyline_location__city_ || null,
         audience_segment: props.audience_segment || null,
         distributor: props.distributor || null,
         synopsis: props.synopsis || null,
         genre_production: props.genre_production || null,
         vibe: props.genre_production || null,
-        productionStartDate: props.start_date || props.production_start_date || null,
-        releaseDate: props.release__est__date || props.release_est_date || null,
+        productionStartDate: props.start_date || null,
+        releaseDate: props.release__est__date || null,
         productionType: props.production_type || null,
-        partnership_setting: props.partnership_setting || null
       };
       
       return finalObject;
