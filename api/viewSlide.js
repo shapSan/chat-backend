@@ -14,8 +14,13 @@ export default async function handler(req, res) {
   }
   
   try {
-    const url = `https://w24qls9w8lqauhdf.public.blob.vercel-storage.com/slides/${token}/index.html`;
-    const response = await fetch(url);
+    // --- CHANGE 1: Add cache-buster query parameter ---
+    // This forces our server to get the *latest* file from the blob
+    const cacheBuster = `v=${new Date().getTime()}`;
+    const url = `https://w24qls9w8lqauhdf.public.blob.vercel-storage.com/slides/${token}/index.html?${cacheBuster}`;
+    
+    // We also tell our fetch to bypass any intermediate caches
+    const response = await fetch(url, { cache: 'no-store' });
     
     if (!response.ok) {
       return res.status(404).send('Presentation not found');
@@ -25,7 +30,13 @@ export default async function handler(req, res) {
     
     // Serve HTML with proper headers
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    
+    // --- CHANGE 2: Update Cache-Control header ---
+    // This tells the browser/CDN not to cache this API route's response
+    res.setHeader(
+      'Cache-Control',
+      'no-cache, no-store, must-revalidate'
+    );
     res.status(200).send(html);
   } catch (error) {
     console.error('Error serving slide:', error);
