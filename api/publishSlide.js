@@ -126,8 +126,17 @@ export default async function handler(req, res) {
         
         // If this is a Brand Radar (has brandData.id), store the brand -> token mapping
         if (brandData?.id && templateId === 'brand-radar') {
-          await kv.set(`brand-radar-token:${brandData.id}`, existingToken);
-          console.log(`[publishSlide] Updated brand-radar-token:${brandData.id} -> ${existingToken}`);
+          // Detect if this is a partner (contact) or brand (company)
+          // Partners have email field, brands have category/tier
+          const isPartner = brandData.email && !brandData.category
+          
+          if (isPartner) {
+            await kv.set(`partner-radar-token:${brandData.id}`, existingToken);
+            console.log(`[publishSlide] Updated partner-radar-token:${brandData.id} -> ${existingToken}`);
+          } else {
+            await kv.set(`brand-radar-token:${brandData.id}`, existingToken);
+            console.log(`[publishSlide] Updated brand-radar-token:${brandData.id} -> ${existingToken}`);
+          }
         }
         
         console.log('[publishSlide] About to save to KV:', {
@@ -168,8 +177,17 @@ export default async function handler(req, res) {
         
         // If this is a Brand Radar (has brandData.id), store the brand -> token mapping
         if (brandData?.id && templateId === 'brand-radar') {
-          await kv.set(`brand-radar-token:${brandData.id}`, token);
-          console.log(`[publishSlide] Created brand-radar-token:${brandData.id} -> ${token}`);
+          // Detect if this is a partner (contact) or brand (company)
+          // Partners have email field, brands have category/tier
+          const isPartner = brandData.email && !brandData.category
+          
+          if (isPartner) {
+            await kv.set(`partner-radar-token:${brandData.id}`, token);
+            console.log(`[publishSlide] Created partner-radar-token:${brandData.id} -> ${token}`);
+          } else {
+            await kv.set(`brand-radar-token:${brandData.id}`, token);
+            console.log(`[publishSlide] Created brand-radar-token:${brandData.id} -> ${token}`);
+          }
         }
         
         const frontendUrl = 'https://www.hollywoodbranded.com/agentpitch/published';
