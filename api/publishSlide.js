@@ -66,11 +66,16 @@ export default async function handler(req, res) {
         }
       }
       
-      // Store main HTML
+      // Store main HTML with no-cache headers
       const htmlBlob = await put(`slides/${token}/index.html`, html, {
         access: 'public',
         contentType: 'text/html',
+        addRandomSuffix: false, // Use consistent path for updates
+        cacheControlMaxAge: 0, // Don't cache the HTML file
       });
+      
+      // Wait for blob to be fully available (helps with Vercel's CDN propagation)
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       // Store any assets
       const assetUrls = [];
