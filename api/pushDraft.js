@@ -484,8 +484,10 @@ async function generateAiBody({ project, vibe, cast, location, notes, brand, isI
       
       return `${greeting},
 
-As part of the opportunities currently being evaluated by several of our brand partners, **${cleanedProject}** (${distributorText}, releasing ${releaseDateText}) stands out as a strong potential fit for ${brand.name}.
+We just received an exciting new project that we think **${brand.name}** would be perfect for. **${cleanedProject}** (${distributorText}, releasing ${releaseDateText}) stands out as a strong potential fit for ${brand.name}.
 **Quick Links:** [Keep as placeholders]
+
+
 
 Here's how it could look:
 
@@ -545,7 +547,7 @@ Stacy`.trim();
       
       return `${greeting},
 
-Several of our brand partners are evaluating opportunities around **${cleanedProject}** (${distributorText}, releasing ${releaseDateText}). The project ${quickDescription}.
+We just received an exciting new project that we think **${brand.name}** would be perfect for. **${cleanedProject}** (${distributorText}, releasing ${releaseDateText}). The project ${quickDescription}.
 **Quick Links:** [Keep as placeholders]
 
 We see a strong alignment with **${brand.name}** and wanted to share how this could look:
