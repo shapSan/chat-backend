@@ -107,16 +107,30 @@ async function rebuildCacheBackground() {
     // PLUS require start_date to exist to reduce data size
     const filterGroups = [
       {
-        // Filter by active pipeline stages AND must have start date
+        // Group 1: ALL conditions must be met (AND)
         filters: [
           {
             propertyName: 'hs_pipeline_stage',
             operator: 'IN',
-            values: ACTIVE_STAGES  // Use the defined stage IDs
+            values: ["1111899943", "174586264", "174531875", "239211589", "174586263"]
           },
           {
-            propertyName: 'start_date',
-            operator: 'HAS_PROPERTY'  // Must have a start date
+            propertyName: 'have_contacts',
+            operator: 'HAS_PROPERTY'
+          },
+          {
+            propertyName: 'main_cast',
+            operator: 'HAS_PROPERTY'
+          }
+        ]
+      },
+      {
+        // Group 2: OR alternative (Franchise Property)
+        filters: [
+          {
+            propertyName: 'franchise_property',
+            operator: 'EQ',
+            value: 'Yes'
           }
         ]
       }
@@ -144,7 +158,7 @@ async function rebuildCacheBackground() {
       'shoot_location__city_',     // Keep - location display
       'storyline_location__city_', // Keep - location fallback
       'audience_segment',          // Keep - targeting/matching
-      'synopsis',                  // Keep - for context (can be large but needed)
+      // 'synopsis',                  // TEMPORARILY COMMENTED OUT - testing if large data causes failures
       // REMOVED: production_stage, content_type, movie_rating, tv_ratings, 
       // sub_ratings_for_tv_content, rating, partnership_status, brand_name,
       // amount, hollywood_branded_fee, closedate, contract_sent_date,
