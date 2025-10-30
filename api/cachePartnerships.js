@@ -299,7 +299,7 @@ async function rebuildCacheBackground() {
         location: props.shoot_location__city_ || props.storyline_location__city_ || null,
         audience_segment: props.audience_segment || null,
         distributor: props.distributor || null,
-        synopsis: props.synopsis || null,
+        // synopsis: props.synopsis || null,  // TEMPORARILY REMOVED - testing data size
         genre_production: props.genre_production || null,
         vibe: props.genre_production || null,
         productionStartDate: props.start_date || null,
