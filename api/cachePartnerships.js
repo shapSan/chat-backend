@@ -103,33 +103,14 @@ async function rebuildCacheBackground() {
   }
   
   try {
-    // Use simpler filter logic:
-    // Group 1: (Stage IS [..]) AND (Talent IS KNOWN)
-    // Group 2: OR (Franchise Property IS Yes)
+    // SIMPLIFIED TEST: Use absolute minimum filter - just main_cast
     const filterGroups = [
       {
-        // Group 1: (Stage IS [..]) AND (Talent IS KNOWN)
         filters: [
-          {
-            propertyName: 'hs_pipeline_stage',
-            operator: 'IN',
-            // Use the 5 stage IDs from our previous filter
-            values: ["1111899943", "174586264", "174531875", "239211589", "174586263"]
-          },
           {
             // 'Talent is known' maps to 'main_cast'
             propertyName: 'main_cast',
             operator: 'HAS_PROPERTY'
-          }
-        ]
-      },
-      {
-        // Group 2: OR (Franchise Property IS Yes)
-        filters: [
-          {
-            propertyName: 'franchise_property',
-            operator: 'EQ',
-            value: 'Yes'
           }
         ]
       }
