@@ -495,7 +495,7 @@ const hubspotAPI = {
           'partnership_status',
           'hs_pipeline_stage',
           'production_stage',      // Production stage (Pre-Production, Production, etc.)
-          'synopsis',
+          // 'synopsis',              // TEMPORARILY REMOVED - testing if large data causes failures
           'content_type',
           'distributor',
           'brand_name',
