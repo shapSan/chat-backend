@@ -112,25 +112,20 @@ async function rebuildCacheBackground() {
   
   try {
     // Use the defined pipeline stages for active partnerships
-    // PLUS require start_date to exist to reduce data size
     const filterGroups = [
       {
-        // Filter by active pipeline stages AND must have start date
+        // Filter by active pipeline stages only
         filters: [
           {
             propertyName: 'hs_pipeline_stage',
             operator: 'IN',
             values: ACTIVE_STAGES  // Use the defined stage IDs
-          },
-          {
-            propertyName: 'start_date',
-            operator: 'HAS_PROPERTY'  // Must have a start date
           }
         ]
       }
     ];
     
-    console.log('[CACHE] Fetching partnerships in active stages WITH start_date:', ACTIVE_STAGES);
+    console.log('[CACHE] Fetching partnerships in active stages:', ACTIVE_STAGES);
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
     // Support pagination to get all matching partnerships
