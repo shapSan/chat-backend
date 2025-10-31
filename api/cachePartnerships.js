@@ -53,10 +53,6 @@ export default async function handler(req, res) {
             ]
           },
           {
-            propertyName: 'have_contacts',
-            operator: 'HAS_PROPERTY'
-          },
-          {
             propertyName: 'main_cast',
             operator: 'HAS_PROPERTY'
           }
