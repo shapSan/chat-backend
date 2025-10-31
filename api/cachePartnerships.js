@@ -139,10 +139,12 @@ async function rebuildCacheBackground() {
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
     // Support pagination to get all matching partnerships
-    let allPartnerships = [];
+    // NEW STRATEGY: Save partnerships incrementally instead of collecting in memory
+    const partnershipList = []; // Lightweight list of IDs and names only
     let after = undefined;
     let pageCount = 0;
     const maxPages = 20; // Support up to 1000 partnerships
+    let totalSaved = 0;
     
     const partnershipProperties = [
       'partnership_name',          // Essential - display name
@@ -153,11 +155,11 @@ async function rebuildCacheBackground() {
       'main_cast',                 // Essential - display
       'genre_production',          // Essential - display/filtering
       'production_type',           // Essential - display/filtering
-      // 'distributor',               // Useful - display
-      // 'shoot_location__city_',     // Keep - location display
-      // 'storyline_location__city_', // Keep - location fallback
-      // 'audience_segment',          // Keep - targeting/matching
-      // 'synopsis',                  // Keep - for context (can be large but needed)
+      'distributor',               // Useful - display
+      'shoot_location__city_',     // Keep - location display
+      'storyline_location__city_', // Keep - location fallback
+      'audience_segment',          // Keep - targeting/matching
+      'synopsis',                  // Keep - for context (can be large but needed)
     ];
     
     do {
@@ -186,8 +188,47 @@ async function rebuildCacheBackground() {
         console.log(`[CACHE] result.paging:`, JSON.stringify(result.paging));
         
         if (result.results && result.results.length > 0) {
-          allPartnerships = [...allPartnerships, ...result.results];
-          console.log(`[CACHE] Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
+          // IMMEDIATELY save each partnership to its own key
+          for (const partnership of result.results) {
+            const props = partnership.properties;
+            
+            // Build the full partnership object
+            const fullPartnership = {
+              ...props,
+              id: partnership.id,
+              name: props.partnership_name || 'Untitled Project',
+              matchedBrands: [], // Empty for now
+              main_cast: props.main_cast || null,
+              cast: props.main_cast || null,
+              shoot_location__city_: props.shoot_location__city_ || null,
+              storyline_location__city_: props.storyline_location__city_ || null,
+              location: props.shoot_location__city_ || props.storyline_location__city_ || null,
+              audience_segment: props.audience_segment || null,
+              distributor: props.distributor || null,
+              synopsis: props.synopsis || null,
+              genre_production: props.genre_production || null,
+              vibe: props.genre_production || null,
+              productionStartDate: props.start_date || null,
+              releaseDate: props.release__est__date || null,
+              productionType: props.production_type || null,
+            };
+            
+            // Save full data to individual key
+            try {
+              await kv.set(`partnership:${partnership.id}`, fullPartnership);
+              totalSaved++;
+              
+              // Add to lightweight list (ID and name only)
+              partnershipList.push({
+                id: partnership.id,
+                name: props.partnership_name || 'Untitled Project'
+              });
+            } catch (saveError) {
+              console.error(`[CACHE] Failed to save partnership ${partnership.id}:`, saveError);
+            }
+          }
+          
+          console.log(`[CACHE] Saved ${result.results.length} partnerships (total: ${totalSaved})`);
         }
         
         // Update progress status every 2 pages
@@ -195,7 +236,7 @@ async function rebuildCacheBackground() {
           try {
             await kv.set('partnership-cache-status', {
               status: 'running',
-              progress: `Fetched ${allPartnerships.length} partnerships...`,
+              progress: `Saved ${totalSaved} partnerships...`,
               page: pageCount,
               startTime // Keep original start time
             });
@@ -222,7 +263,7 @@ async function rebuildCacheBackground() {
             status: 'failed',
             error: `Error fetching page ${pageCount + 1}: ${pageError.message}`,
             partial: true,
-            count: allPartnerships.length,
+            count: totalSaved,
             endTime: Date.now()
           });
         } catch (err) {
@@ -241,16 +282,15 @@ async function rebuildCacheBackground() {
       }
     } while (after && pageCount < maxPages);
 
-    const partnerships = allPartnerships;
     console.log(`[CACHE] =========================================`);
     console.log(`[CACHE] PAGINATION SUMMARY:`);
-    console.log(`[CACHE]   Total fetched: ${partnerships.length}`);
+    console.log(`[CACHE]   Total saved: ${totalSaved}`);
     console.log(`[CACHE]   Pages fetched: ${pageCount}`);
     console.log(`[CACHE]   Max pages: ${maxPages}`);
     console.log(`[CACHE]   Stopped because: ${after ? 'reached max pages limit' : 'no more pages from HubSpot'}`);
     console.log(`[CACHE] =========================================`);
     
-    if (partnerships.length === 0) {
+    if (totalSaved === 0) {
       console.log('[CACHE] No partnerships found, updating status...');
       // Update status to indicate no data found
       try {
@@ -266,63 +306,24 @@ async function rebuildCacheBackground() {
       return;
     }
 
-    console.log('[CACHE] Starting brand fetching for matching...');
-
-    // SKIP BRAND FETCHING - not needed for now
-    const allBrands = [];
-    console.log('[CACHE] ⚠️ Skipping brand fetching to speed up cache build');
+    console.log('[CACHE] Skipping brand fetching and matching...');
     
-    console.log(`[CACHE] ✅ Fetched ${partnerships.length} partnerships and ${allBrands.length} brands`);
-    console.log('[CACHE] Skipping matching, just formatting partnerships...');
-
-    // SIMPLIFIED: Skip brand matching entirely, just format partnerships
-    const matchedPartnerships = partnerships.map(partnership => {
-      const props = partnership.properties;
-      
-      // Just return the partnership with empty matchedBrands
-      const finalObject = {
-        ...props,
-        id: partnership.id,
-        name: props.partnership_name || 'Untitled Project',
-        matchedBrands: [], // Empty for now
-        main_cast: props.main_cast || null,
-        cast: props.main_cast || null,
-        shoot_location__city_: props.shoot_location__city_ || null,
-        storyline_location__city_: props.storyline_location__city_ || null,
-        location: props.shoot_location__city_ || props.storyline_location__city_ || null,
-        audience_segment: props.audience_segment || null,
-        distributor: props.distributor || null,
-        // synopsis: props.synopsis || null,
-        genre_production: props.genre_production || null,
-        vibe: props.genre_production || null,
-        productionStartDate: props.start_date || null,
-        releaseDate: props.release__est__date || null,
-        productionType: props.production_type || null,
-      };
-      
-      return finalObject;
-    });
-    
-    console.log('[CACHE] ✅ Formatted ${matchedPartnerships.length} partnerships');
-
-    // Cache ALL the results - no limit needed since we're not returning in response
-    console.log(`[CACHE] Caching all ${matchedPartnerships.length} partnerships to KV...`);
-
-    // Cache the results
-    await kv.set('hubspot-partnership-matches', matchedPartnerships);
+    // Save the lightweight partnership list
+    console.log(`[CACHE] Saving partnership list with ${partnershipList.length} entries...`);
+    await kv.set('partnership-list', partnershipList);
     
     // Also cache timestamp
-    await kv.set('hubspot-partnership-matches-timestamp', Date.now());
+    await kv.set('partnership-list-timestamp', Date.now());
 
-    console.log('[CACHE] ✅ Cache rebuild complete!', matchedPartnerships.length, 'partnerships cached');
+    console.log('[CACHE] ✅ Cache rebuild complete!', totalSaved, 'partnerships saved');
     
     // Update status to completed
     try {
       await kv.set('partnership-cache-status', {
         status: 'completed',
-        count: matchedPartnerships.length,
+        count: totalSaved,
         endTime: Date.now(),
-        message: `${matchedPartnerships.length} partnerships cached.`
+        message: `${totalSaved} partnerships cached.`
       });
     } catch (err) {
       console.error('[CACHE] Failed to set completion status:', err);
