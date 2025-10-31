@@ -95,7 +95,7 @@ export default async function handler(req, res) {
       // 'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
       // 'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
       // 'rating',                   // Generic rating field fallback
-      // 'hs_lastmodifieddate',      // Object last modified date/time - CRITICAL FOR SORTING
+      'hs_lastmodifieddate',      // Object last modified date/time - CRITICAL FOR SORTING
       // 'genre_production',
       // 'production_type',
       // 'synopsis',
