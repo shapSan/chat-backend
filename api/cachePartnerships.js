@@ -175,6 +175,9 @@ async function rebuildCacheBackground() {
         }
         
         console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
+        console.log('[CACHE] FULL REQUEST DETAILS:');
+        console.log('  URL:', `https://api.hubapi.com/crm/v3/objects/2-27025032/search`);
+        console.log('  Body:', JSON.stringify(searchParams, null, 2));
         const result = await hubspotAPI.searchProductions(searchParams);
         
         console.log(`[CACHE] Got result, checking data...`);
