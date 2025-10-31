@@ -103,29 +103,28 @@ async function rebuildCacheBackground() {
   }
   
   try {
-    // Use the defined pipeline stages for active partnerships
-    // PLUS require start_date to exist to reduce data size
+    // Use simpler filter logic:
+    // Group 1: (Stage IS [..]) AND (Talent IS KNOWN)
+    // Group 2: OR (Franchise Property IS Yes)
     const filterGroups = [
       {
-        // Group 1: ALL conditions must be met (AND)
+        // Group 1: (Stage IS [..]) AND (Talent IS KNOWN)
         filters: [
           {
             propertyName: 'hs_pipeline_stage',
             operator: 'IN',
+            // Use the 5 stage IDs from our previous filter
             values: ["1111899943", "174586264", "174531875", "239211589", "174586263"]
           },
           {
-            propertyName: 'have_contacts',
-            operator: 'HAS_PROPERTY'
-          },
-          {
+            // 'Talent is known' maps to 'main_cast'
             propertyName: 'main_cast',
             operator: 'HAS_PROPERTY'
           }
         ]
       },
       {
-        // Group 2: OR alternative (Franchise Property)
+        // Group 2: OR (Franchise Property IS Yes)
         filters: [
           {
             propertyName: 'franchise_property',
