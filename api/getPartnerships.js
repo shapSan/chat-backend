@@ -12,38 +12,54 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
   
+  // Check if requesting a specific partnership detail
+  const { id } = req.query;
+  
+  if (id) {
+    // GET PARTNERSHIP DETAIL BY ID
+    try {
+      console.log(`[GET_PARTNERSHIPS] Fetching partnership detail for ID: ${id}`);
+      
+      const partnership = await kv.get(`partnership:${id}`);
+      
+      if (!partnership) {
+        console.log(`[GET_PARTNERSHIPS] Partnership ${id} not found in cache`);
+        return res.status(404).json({ error: 'Partnership not found' });
+      }
+      
+      console.log(`[GET_PARTNERSHIPS] Successfully retrieved partnership: ${partnership.name}`);
+      return res.status(200).json(partnership);
+      
+    } catch (error) {
+      console.error('[GET_PARTNERSHIPS] Error fetching partnership detail:', error);
+      return res.status(500).json({ 
+        error: 'Failed to fetch partnership detail',
+        message: error.message 
+      });
+    }
+  }
+  
+  // GET PARTNERSHIP LIST (default behavior)
   try {
-    // Get cached partnership matches
-    const cachedMatches = await kv.get('hubspot-partnership-matches');
-    const cacheTimestamp = await kv.get('hubspot-partnership-matches-timestamp');
+    // Get cached partnership list (lightweight - just IDs and names)
+    const partnershipList = await kv.get('partnership-list');
+    const cacheTimestamp = await kv.get('partnership-list-timestamp');
     
-    if (!cachedMatches) {
+    if (!partnershipList) {
       return res.status(404).json({ 
         error: 'No cached partnerships found', 
         message: 'Please run the cache refresh first' 
       });
     }
     
-    // DEBUG: Log each item read from cache
-    if (Array.isArray(cachedMatches)) {
-      for (const item of cachedMatches) {
-        logStage('C2 CACHE-READ', item, HB_KEYS.PARTNERSHIP_FIELDS);
-      }
-    }
-    
     // Calculate cache age
     const cacheAge = cacheTimestamp ? Date.now() - cacheTimestamp : null;
     const cacheAgeMinutes = cacheAge ? Math.floor(cacheAge / 60000) : null;
     
-    // DEBUG: Log items being sent to UI (D stage)
-    if (Array.isArray(cachedMatches)) {
-      for (const item of cachedMatches) {
-        logStage('D UI-FEED', item, HB_KEYS.PARTNERSHIP_FIELDS);
-      }
-    }
+    console.log(`[GET_PARTNERSHIPS] Returning ${partnershipList.length} partnerships from list`);
     
     res.status(200).json({ 
-      partnerships: cachedMatches,
+      partnerships: partnershipList,
       cacheAge: cacheAgeMinutes,
       timestamp: cacheTimestamp
     });
