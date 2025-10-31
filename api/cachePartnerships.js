@@ -103,12 +103,17 @@ async function rebuildCacheBackground() {
   }
   
   try {
-    // SIMPLIFIED TEST: Use absolute minimum filter - just main_cast
+    // TEST: Use (Stage AND Talent) filter with minimal properties
     const filterGroups = [
       {
+        // Group 1: (Stage IS [..]) AND (Talent IS KNOWN)
         filters: [
           {
-            // 'Talent is known' maps to 'main_cast'
+            propertyName: 'hs_pipeline_stage',
+            operator: 'IN',
+            values: ["1111899943", "174586264", "174531875", "239211589", "174586263"]
+          },
+          {
             propertyName: 'main_cast',
             operator: 'HAS_PROPERTY'
           }
@@ -125,26 +130,9 @@ async function rebuildCacheBackground() {
     let pageCount = 0;
     const maxPages = 10; // Support up to 1000 partnerships
     
+    // TEST: Requesting ONLY the name to minimize data size
     const partnershipProperties = [
       'partnership_name',          // Essential - display name
-      'hs_pipeline_stage',         // Essential - for filtering by active stages
-      'start_date',                // Essential - for filtering + display
-      'release__est__date',        // Essential - display
-      'hs_lastmodifieddate',       // Essential - for sorting
-      'main_cast',                 // Essential - display
-      'genre_production',          // Essential - display/filtering
-      'production_type',           // Essential - display/filtering
-      'distributor',               // Useful - display
-      'shoot_location__city_',     // Keep - location display
-      'storyline_location__city_', // Keep - location fallback
-      'audience_segment',          // Keep - targeting/matching
-      // 'synopsis',                  // TEMPORARILY COMMENTED OUT - testing if large data causes failures
-      // REMOVED: production_stage, content_type, movie_rating, tv_ratings, 
-      // sub_ratings_for_tv_content, rating, partnership_status, brand_name,
-      // amount, hollywood_branded_fee, closedate, contract_sent_date,
-      // num_associated_contacts, est__shooting_end_date, production_end_date,
-      // time_period, plot_location, partnership_setting, production_start_date,
-      // release_est_date (keeping only primary date fields)
     ];
     
     do {
