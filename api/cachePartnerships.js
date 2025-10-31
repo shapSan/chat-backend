@@ -7,10 +7,11 @@ export const maxDuration = 300;
 
 // Active pipeline stages for partnerships
 const ACTIVE_STAGES = [
-  "174586264",  // Pre-Production
-  "174586263",  // Development  
-  "174531873",  // In Production
-  "174531874",  // Post-Production
+  "1111899943",  // From your filter
+  "174586264",   // From your filter
+  "174531875",   // From your filter
+  "239211589",   // From your filter
+  "174586263"    // From your filter
 ];
 
 export default async function handler(req, res) {
