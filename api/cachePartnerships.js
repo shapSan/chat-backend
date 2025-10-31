@@ -103,10 +103,10 @@ async function rebuildCacheBackground() {
   }
   
   try {
-    // TEST: Use (Stage AND Talent) filter with minimal properties
+    // Original correct filter logic
     const filterGroups = [
       {
-        // Group 1: (Stage IS [..]) AND (Talent IS KNOWN)
+        // Group 1: (Stage AND have_contacts AND main_cast)
         filters: [
           {
             propertyName: 'hs_pipeline_stage',
@@ -114,8 +114,22 @@ async function rebuildCacheBackground() {
             values: ["1111899943", "174586264", "174531875", "239211589", "174586263"]
           },
           {
+            propertyName: 'have_contacts',
+            operator: 'HAS_PROPERTY'
+          },
+          {
             propertyName: 'main_cast',
             operator: 'HAS_PROPERTY'
+          }
+        ]
+      },
+      {
+        // Group 2: OR (Franchise Property IS Yes)
+        filters: [
+          {
+            propertyName: 'franchise_property',
+            operator: 'EQ',
+            value: 'Yes'
           }
         ]
       }
@@ -128,11 +142,22 @@ async function rebuildCacheBackground() {
     let allPartnerships = [];
     let after = undefined;
     let pageCount = 0;
-    const maxPages = 10; // Support up to 1000 partnerships
+    const maxPages = 20; // Support up to 1000 partnerships
     
-    // TEST: Requesting ONLY the name to minimize data size
     const partnershipProperties = [
       'partnership_name',          // Essential - display name
+      'hs_pipeline_stage',         // Essential - for filtering by active stages
+      'start_date',                // Essential - for filtering + display
+      'release__est__date',        // Essential - display
+      'hs_lastmodifieddate',       // Essential - for sorting
+      'main_cast',                 // Essential - display
+      'genre_production',          // Essential - display/filtering
+      'production_type',           // Essential - display/filtering
+      // 'distributor',               // Useful - display
+      // 'shoot_location__city_',     // Keep - location display
+      // 'storyline_location__city_', // Keep - location fallback
+      // 'audience_segment',          // Keep - targeting/matching
+      // 'synopsis',                  // Keep - for context (can be large but needed)
     ];
     
     do {
@@ -267,7 +292,7 @@ async function rebuildCacheBackground() {
         location: props.shoot_location__city_ || props.storyline_location__city_ || null,
         audience_segment: props.audience_segment || null,
         distributor: props.distributor || null,
-        // synopsis: props.synopsis || null,  // TEMPORARILY REMOVED - testing data size
+        // synopsis: props.synopsis || null,
         genre_production: props.genre_production || null,
         vibe: props.genre_production || null,
         productionStartDate: props.start_date || null,
