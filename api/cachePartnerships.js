@@ -40,12 +40,34 @@ export default async function handler(req, res) {
     // No date filtering - we want ALL partnerships in active stages
     const filterGroups = [
       {
-        // Filter by active pipeline stages using the IDs
         filters: [
           {
             propertyName: 'hs_pipeline_stage',
             operator: 'IN',
-            values: ACTIVE_STAGES  // Use the defined stage IDs
+            values: [
+              "1111899943",
+              "174586264",
+              "174531875",
+              "239211589",
+              "174586263"
+            ]
+          },
+          {
+            propertyName: 'have_contacts',
+            operator: 'HAS_PROPERTY'
+          },
+          {
+            propertyName: 'main_cast',
+            operator: 'HAS_PROPERTY'
+          }
+        ]
+      },
+      {
+        filters: [
+          {
+            propertyName: 'franchise_property',
+            operator: 'EQ',
+            value: 'Yes'
           }
         ]
       }
