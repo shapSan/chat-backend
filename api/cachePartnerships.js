@@ -148,18 +148,18 @@ async function rebuildCacheBackground() {
     
     const partnershipProperties = [
       'partnership_name',          // Essential - display name
-      'hs_pipeline_stage',         // Essential - for filtering by active stages
-      'start_date',                // Essential - for filtering + display
-      'release__est__date',        // Essential - display
-      'hs_lastmodifieddate',       // Essential - for sorting
-      'main_cast',                 // Essential - display
-      'genre_production',          // Essential - display/filtering
-      'production_type',           // Essential - display/filtering
-      'distributor',               // Useful - display
-      'shoot_location__city_',     // Keep - location display
-      'storyline_location__city_', // Keep - location fallback
-      'audience_segment',          // Keep - targeting/matching
-      'synopsis',                  // Keep - for context (can be large but needed)
+      // 'hs_pipeline_stage',         // Essential - for filtering by active stages
+      // 'start_date',                // Essential - for filtering + display
+      // 'release__est__date',        // Essential - display
+      // 'hs_lastmodifieddate',       // Essential - for sorting
+      // 'main_cast',                 // Essential - display
+      // 'genre_production',          // Essential - display/filtering
+      // 'production_type',           // Essential - display/filtering
+      // 'distributor',               // Useful - display
+      // 'shoot_location__city_',     // Keep - location display
+      // 'storyline_location__city_', // Keep - location fallback
+      // 'audience_segment',          // Keep - targeting/matching
+      // 'synopsis',                  // Keep - for context (can be large but needed)
     ];
     
     do {
@@ -192,25 +192,11 @@ async function rebuildCacheBackground() {
           for (const partnership of result.results) {
             const props = partnership.properties;
             
-            // Build the full partnership object
+            // Build the full partnership object (minimal for now)
             const fullPartnership = {
-              ...props,
               id: partnership.id,
               name: props.partnership_name || 'Untitled Project',
-              matchedBrands: [], // Empty for now
-              main_cast: props.main_cast || null,
-              cast: props.main_cast || null,
-              shoot_location__city_: props.shoot_location__city_ || null,
-              storyline_location__city_: props.storyline_location__city_ || null,
-              location: props.shoot_location__city_ || props.storyline_location__city_ || null,
-              audience_segment: props.audience_segment || null,
-              distributor: props.distributor || null,
-              synopsis: props.synopsis || null,
-              genre_production: props.genre_production || null,
-              vibe: props.genre_production || null,
-              productionStartDate: props.start_date || null,
-              releaseDate: props.release__est__date || null,
-              productionType: props.production_type || null,
+              partnership_name: props.partnership_name || 'Untitled Project',
             };
             
             // Save full data to individual key
