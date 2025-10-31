@@ -27,6 +27,18 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     // Return current cache status for polling
     try {
+      // Check if a build is currently running
+      const buildStatus = await kv.get('hubspot-partnership-build-status');
+      if (buildStatus && buildStatus.status === 'running') {
+        const elapsed = Date.now() - buildStatus.startTime;
+        return res.status(200).json({
+          status: 'running',
+          message: buildStatus.message || 'Building cache...',
+          progress: `Building... (${Math.floor(elapsed / 1000)}s elapsed)`
+        });
+      }
+      
+      // Otherwise check for completed cache
       const cachedData = await kv.get('hubspot-partnership-matches');
       const timestamp = await kv.get('hubspot-partnership-matches-timestamp');
       
@@ -57,6 +69,13 @@ export default async function handler(req, res) {
   }
 
   console.log('[CACHE] Starting partnership cache refresh...');
+  
+  // Set building status immediately so polling can see it
+  await kv.set('hubspot-partnership-build-status', {
+    status: 'running',
+    startTime: Date.now(),
+    message: 'Building cache from HubSpot...'
+  });
   
   try {
     // Use the defined pipeline stages for active partnerships
@@ -384,6 +403,9 @@ export default async function handler(req, res) {
     
     // Also cache timestamp
     await kv.set('hubspot-partnership-matches-timestamp', Date.now());
+    
+    // Clear the building status
+    await kv.del('hubspot-partnership-build-status');
 
     res.status(200).json({ 
       status: 'ok', 
@@ -393,6 +415,10 @@ export default async function handler(req, res) {
     
   } catch (error) {
     console.error('[CACHE] Fatal error during partnership cache refresh:', error);
+    
+    // Clear the building status on error
+    await kv.del('hubspot-partnership-build-status');
+    
     res.status(500).json({ 
       error: 'Failed to refresh partnership cache', 
       details: error.message 
