@@ -122,8 +122,13 @@ const hubspotAPI = {
     
     console.log('[DEBUG searchBrands] Starting with filters:', filters);
     
-    // Skip initialization - let the first real fetch happen immediately
-    // The actual data fetch will fail if there's a connection issue, which is acceptable
+    // Ensure we're initialized before searching
+    if (!this.isInitialized) {
+      console.log('[DEBUG searchBrands] Not initialized, initializing now...');
+      await this.initialize();
+      // Add a small delay after initialization to ensure everything is ready
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
     
     try {
       // Default properties to request - include new filter fields
@@ -317,8 +322,9 @@ const hubspotAPI = {
           });
 
           if (!response.ok) {
-          // Clone the response BEFORE reading body to avoid "body used already" error
-          const errorBody = await response.clone().text();
+          // Clone the response to avoid "body used already" error
+          const responseClone = response.clone();
+          const errorBody = await response.text();
           console.error(`[DEBUG searchBrands] HubSpot API error (attempt ${attempts}/${maxAttempts}):`, response.status, errorBody);
           
           // Handle rate limiting with exponential backoff
@@ -481,8 +487,10 @@ const hubspotAPI = {
     // Acquire rate limit token first
     await hubspotLimiter.acquire();
     
-    // Skip initialization - let the first real fetch happen immediately
-    // The actual data fetch will fail if there's a connection issue, which is acceptable
+    // Ensure initialization
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
     
     try {
       // Build the request body
@@ -547,18 +555,9 @@ const hubspotAPI = {
         console.log('[DEBUG searchProductions] Paginating with after:', filters.after);
       }
       
-      // === DETAILED API DEBUGGING ===
-      const url = `${this.baseUrl}/crm/v3/objects/${this.OBJECTS.PARTNERSHIPS}/search`;
-      const maskedApiKey = hubspotApiKey ? `${hubspotApiKey.substring(0, 8)}...${hubspotApiKey.substring(hubspotApiKey.length - 4)}` : 'NOT_SET';
+      console.log('[DEBUG searchProductions] Making request with body:', JSON.stringify(requestBody, null, 2));
       
-      console.log('[DEBUG searchProductions] === API REQUEST DETAILS ===');
-      console.log(`  URL: ${url}`);
-      console.log(`  API Key (masked): ${maskedApiKey}`);
-      console.log(`  Request Body:`);
-      console.log(JSON.stringify(requestBody, null, 2));
-      console.log('=======================================');
-      
-      const response = await fetch(url, {
+      const response = await fetch(`${this.baseUrl}/crm/v3/objects/${this.OBJECTS.PARTNERSHIPS}/search`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hubspotApiKey}`,
@@ -566,49 +565,23 @@ const hubspotAPI = {
         },
         body: JSON.stringify(requestBody)
       });
-      
-      // === LOG RAW RESPONSE ===
-      console.log('[DEBUG searchProductions] === API RESPONSE ===');
-      console.log(`  Raw response received. Status: ${response.status} ${response.statusText}`);
-      console.log(`  Headers:`, Object.fromEntries(response.headers.entries()));
-      
+
       if (!response.ok) {
         const errorBody = await response.text();
-        console.error('[DEBUG searchProductions] ❌ API ERROR:');
-        console.error(`  Status: ${response.status}`);
-        console.error(`  Error Body:`, errorBody);
-        console.log('=======================================');
         throw new Error(`HubSpot API error: ${response.status}`);
       }
-      
-      // Clone response to log raw text before parsing
-      const responseClone = response.clone();
-      const rawText = await responseClone.text();
-      console.log(`  Raw Response (first 500 chars): ${rawText.substring(0, 500)}...`);
-      console.log(`  Raw Response total length: ${rawText.length} chars`);
-      
-      console.log('[DEBUG searchProductions] About to parse JSON...');
+
       const data = await response.json();
-      console.log('[DEBUG searchProductions] ✅ JSON parsed successfully');
-      console.log(`  Results Count: ${data.results?.length || 0}`);
-      console.log(`  Has Paging: ${!!data.paging}`);
-      if (data.paging?.next) {
-        console.log(`  Next Page Available: ${data.paging.next.after}`);
-      }
-      console.log('=======================================');
       
-      // REMOVED: Debug logging that was causing crash
-      // The logStage call was failing with "keys is not iterable"
-      // if (Array.isArray(data?.results)) {
-      //   for (const rec of data.results) {
-      //     logStage('A RAW', rec, HB_KEYS);
-      //   }
-      // }
+      // DEBUG: Log each raw record from HubSpot
+      if (Array.isArray(data?.results)) {
+        for (const rec of data.results) {
+          logStage('A RAW', rec, HB_KEYS);
+        }
+      }
       
       return data;
     } catch (error) {
-      console.error('[DEBUG searchProductions] Exception:', error.message);
-      console.error('[DEBUG searchProductions] Stack:', error.stack);
       return {
         results: []
       };
@@ -618,11 +591,6 @@ const hubspotAPI = {
   async getPartnershipForProject(projectName) {
     if (!projectName) return null;
     
-    console.log(`\n========================================`);
-    console.log(`[getPartnershipForProject] STARTING SEARCH`);
-    console.log(`  Project Name: "${projectName}"`);
-    console.log(`========================================\n`);
-    
     // --- Cache check first ---
     const cleanProjectName = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 100);
     const cacheKey = `partnership-data:${cleanProjectName}`;
@@ -630,110 +598,64 @@ const hubspotAPI = {
     try {
       const cachedData = await kv.get(cacheKey);
       if (cachedData) {
-        // Check cache staleness (3 hour threshold)
-        const cacheAge = cachedData.cachedAt ? Date.now() - new Date(cachedData.cachedAt).getTime() : Infinity;
-        const CACHE_STALENESS_THRESHOLD = 3 * 60 * 60 * 1000; // 3 hours
+        console.log(`[getPartnershipForProject] Cache HIT for: "${projectName}"`);
         
-        if (cacheAge < CACHE_STALENESS_THRESHOLD) {
-          console.log(`[getPartnershipForProject] ✅ Cache HIT for: "${projectName}" (age: ${Math.round(cacheAge / 60000)}min)`);
-          
-          // CRITICAL: Validate cached cast data to fix any previously cached corrupt data
-          if (cachedData.cast && typeof cachedData.cast === 'string') {
-            const castLower = cachedData.cast.toLowerCase();
-            // Check if the cached cast is actually synopsis text
-            if (castLower.startsWith('of characters') || 
-                castLower.includes('ensemble cast') ||
-                castLower.includes('confront') ||
-                castLower.includes('re-emergence')) {
-              console.log('[getPartnershipForProject] ⚠️ FIXING corrupt cached cast data');
-              cachedData.cast = null;
-              cachedData.main_cast = null;
-              // Don't return yet - let it re-save the fixed data below
-            } else {
-              // Good cache, return it
-              return cachedData;
-            }
+        // CRITICAL: Validate cached cast data to fix any previously cached corrupt data
+        if (cachedData.cast && typeof cachedData.cast === 'string') {
+          const castLower = cachedData.cast.toLowerCase();
+          // Check if the cached cast is actually synopsis text
+          if (castLower.startsWith('of characters') || 
+              castLower.includes('ensemble cast') ||
+              castLower.includes('confront') ||
+              castLower.includes('re-emergence')) {
+            console.log('[getPartnershipForProject] FIXING corrupt cached cast data:', cachedData.cast.substring(0, 100));
+            cachedData.cast = null;
+            cachedData.main_cast = null;
+            // Don't return yet - let it re-save the fixed data below
           } else {
-            // No cast or cast is already null, cache is fine
+            // Good cache, return it
             return cachedData;
           }
         } else {
-          console.log(`[getPartnershipForProject] ⚠️ Cache STALE for: "${projectName}" (age: ${Math.round(cacheAge / 60000)}min) - refetching`);
+          // No cast or cast is already null, cache is fine
+          return cachedData;
         }
-      } else {
-        console.log(`[getPartnershipForProject] ❌ Cache MISS for: "${projectName}"`);
       }
+      console.log(`[getPartnershipForProject] Cache MISS for: "${projectName}"`);
     } catch (e) {
-      console.error('[getPartnershipForProject] ⚠️ KV cache check failed:', e.message);
+      console.error('[getPartnershipForProject] KV cache check failed:', e.message);
     }
     // --- End cache check ---
     
     // Acquire rate limit token first
     await hubspotLimiter.acquire();
     
-    console.log(`\n--- LIVE HUBSPOT SEARCH ---`);
-    console.log(`Strategy: Multi-approach search with scoring`);
+    console.log('[getPartnershipForProject] Searching for:', projectName);
     
     try {
-      let allResults = [];
-      
-      // STRATEGY 0: Exact match with EQ operator (fastest, most reliable)
-      console.log(`\n[Strategy 0] EXACT MATCH search for: "${projectName}"`);
-      let results0 = await this.searchProductions({
+      // First try with CONTAINS_TOKEN for partial matching
+      let results = await this.searchProductions({
         filterGroups: [{
           filters: [{
             propertyName: 'partnership_name',
-            operator: 'EQ',
+            operator: 'CONTAINS_TOKEN',
             value: projectName
           }]
         }],
-        limit: 5
+        limit: 10  // Get more results for better matching
       });
-      console.log(`  → Found ${results0?.results?.length || 0} results`);
-      if (results0?.results?.length) {
-        results0.results.forEach(r => {
-          console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
-        });
-        allResults.push(...results0.results);
-      }
       
-      // STRATEGY 1: CONTAINS_TOKEN match (if no exact match)
-      if (!allResults.length) {
-        console.log(`\n[Strategy 1] CONTAINS_TOKEN search for: "${projectName}"`);
-        let results1 = await this.searchProductions({
-          filterGroups: [{
-            filters: [{
-              propertyName: 'partnership_name',
-              operator: 'CONTAINS_TOKEN',
-              value: projectName
-            }]
-          }],
-          limit: 10
-        });
-        console.log(`  → Found ${results1?.results?.length || 0} results`);
-        if (results1?.results?.length) {
-          results1.results.forEach(r => {
-            console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
-          });
-          allResults.push(...results1.results);
-        }
-      }
-      
-      // STRATEGY 2: If no exact match and has spaces, try word-by-word OR search (IMPROVED)
-      if (!allResults.length && projectName.includes(' ')) {
-        // Extract ALL significant words (length >= 2, not common stopwords)
-        const allWords = projectName.split(' ');
-        console.log(`\n[Strategy 2] DEBUG: All words from split: [${allWords.join(', ')}]`);
-        
-        const words = allWords.filter(word => 
-          word.length >= 2 && !['the', 'and', 'for', 'with', 'of'].includes(word.toLowerCase())
+      // If no results, try a more relaxed search with just the main words
+      if (!results?.results?.length && projectName.includes(' ')) {
+        const mainWords = projectName.split(' ').filter(word => 
+          word.length > 3 && !['the', 'and', 'for', 'with'].includes(word.toLowerCase())
         );
         
-        console.log(`[Strategy 2] DEBUG: After filtering (length>=2, no stopwords): [${words.join(', ')}]`);
-        
-        if (words.length > 0) {
-          console.log(`[Strategy 2] Word-by-word OR search for ALL significant words: [${words.join(', ')}]`);
-          const filterGroups = words.map(word => ({
+        if (mainWords.length > 0) {
+          console.log('[getPartnershipForProject] Trying with main words:', mainWords);
+          
+          // Search for any of the main words
+          const filterGroups = mainWords.map(word => ({
             filters: [{
               propertyName: 'partnership_name',
               operator: 'CONTAINS_TOKEN',
@@ -741,155 +663,45 @@ const hubspotAPI = {
             }]
           }));
           
-          console.log(`[Strategy 2] DEBUG: Created ${filterGroups.length} filter groups`);
-          console.log(`[Strategy 2] DEBUG: Filter groups structure:`, JSON.stringify(filterGroups, null, 2));
-          
-          let results2 = await this.searchProductions({
+          results = await this.searchProductions({
             filterGroups,
-            limit: 30 // Increased to catch more matches
+            limit: 20
           });
-          console.log(`  → Found ${results2?.results?.length || 0} results`);
-          if (results2?.results?.length) {
-            results2.results.forEach(r => {
-              if (!allResults.find(ar => ar.id === r.id)) {
-                console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
-                allResults.push(r);
-              }
-            });
-          }
         }
       }
       
-      // STRATEGY 3: Fallback - get recent partnerships and filter client-side
-      if (!allResults.length) {
-        console.log(`\n[Strategy 3] Broad search + client-side filtering`);
-        let results3 = await this.searchProductions({
-          limit: 100, // Increased from 50 to get more candidates
-          sorts: [{
-            propertyName: 'hs_lastmodifieddate',
-            direction: 'DESCENDING'
-          }]
-        });
-        
-        console.log(`\n[Strategy 3 DEBUG] Raw HubSpot results:`);
-        if (results3?.results?.length) {
-          console.log(`  Total partnerships returned: ${results3.results.length}`);
-          console.log(`  First 10 partnership names:`);
-          results3.results.slice(0, 10).forEach((r, idx) => {
-            console.log(`    ${idx + 1}. "${r.properties.partnership_name}" (ID: ${r.id})`);
-          });
-          
-          // Client-side filtering with detailed logging
-          const projectLower = projectName.toLowerCase();
-          console.log(`\n  Filtering for matches with: "${projectLower}"`);
-          
-          const filtered = results3.results.filter(r => {
-            const prodName = (r.properties.partnership_name || '').toLowerCase();
-            const matches = prodName.includes(projectLower) || projectLower.includes(prodName);
-            
-            if (matches) {
-              console.log(`    ✅ MATCH: "${r.properties.partnership_name}" contains "${projectName}"`);
-            }
-            
-            return matches;
-          });
-          
-          console.log(`  → Found ${results3.results.length} total, ${filtered.length} matched "${projectName}"`);
-          
-          if (filtered.length) {
-            filtered.forEach(r => {
-              console.log(`    - "${r.properties.partnership_name}" (ID: ${r.id})`);
-            });
-            allResults.push(...filtered);
-          } else {
-            console.log(`  ⚠️ No matches found in client-side filtering`);
-            console.log(`  🔍 Trying fuzzy matching on individual words...`);
-            
-            // Try fuzzy word matching as last resort
-            const projectWords = projectLower.split(/\s+/).filter(w => w.length > 2);
-            const fuzzyFiltered = results3.results.filter(r => {
-              const prodName = (r.properties.partnership_name || '').toLowerCase();
-              const matchCount = projectWords.filter(word => prodName.includes(word)).length;
-              const matchRatio = matchCount / projectWords.length;
-              
-              if (matchRatio >= 0.5) { // At least 50% of words match
-                console.log(`    🔍 Fuzzy match (${Math.round(matchRatio * 100)}%): "${r.properties.partnership_name}"`);
-                return true;
-              }
-              return false;
-            });
-            
-            if (fuzzyFiltered.length) {
-              console.log(`  → Fuzzy matching found ${fuzzyFiltered.length} candidates`);
-              allResults.push(...fuzzyFiltered);
-            }
-          }
-        } else {
-          console.log(`  ⚠️ Broad search returned NO results at all!`);
-        }
-      }
-      
-      console.log(`\n--- SCORING RESULTS ---`);
-      console.log(`Total candidates: ${allResults.length}`);
-      
-      if (allResults.length > 0) {
+      if (results?.results?.length > 0) {
         // Score each result based on similarity
         const projectLower = projectName.toLowerCase();
-        const projectWords = projectLower.split(/\s+/).filter(w => w.length > 0);
-        
-        const scoredResults = allResults.map(r => {
+        const scoredResults = results.results.map(r => {
           const prodName = r.properties.partnership_name?.toLowerCase() || '';
-          const prodWords = prodName.split(/\s+/).filter(w => w.length > 0);
           let score = 0;
-          let reasons = [];
           
           // Exact match gets highest score
           if (prodName === projectLower) {
             score = 100;
-            reasons.push('exact match');
           } else {
             // Count matching words
-            let matchedWords = 0;
-            projectWords.forEach(word => {
-              if (prodWords.includes(word)) {
-                score += 10;
-                matchedWords++;
-              } else if (prodName.includes(word)) {
-                score += 5;
-                matchedWords++;
-              }
-            });
+            const projectWords = projectLower.split(/\s+/);
+            const prodWords = prodName.split(/\s+/);
             
-            if (matchedWords > 0) {
-              reasons.push(`${matchedWords}/${projectWords.length} words matched`);
-            }
+            projectWords.forEach(word => {
+              if (prodWords.includes(word)) score += 10;
+              else if (prodName.includes(word)) score += 5;
+            });
             
             // Bonus if starts with same word
             if (projectWords[0] && prodWords[0] === projectWords[0]) {
               score += 20;
-              reasons.push('same first word');
-            }
-            
-            // Bonus for similar length (avoids matching very short or long names)
-            const lengthDiff = Math.abs(prodWords.length - projectWords.length);
-            if (lengthDiff <= 1) {
-              score += 10;
-              reasons.push('similar length');
             }
           }
           
-          console.log(`  "${r.properties.partnership_name}" → Score: ${score} (${reasons.join(', ')})`);
-          return { ...r, score, reasons };
+          return { ...r, score };
         });
         
         // Sort by score and get best match
         scoredResults.sort((a, b) => b.score - a.score);
         const partnership = scoredResults[0];
-        
-        console.log(`\n--- BEST MATCH ---`);
-        console.log(`  Name: "${partnership.properties.partnership_name}"`);
-        console.log(`  Score: ${partnership.score}`);
-        console.log(`  Reasons: ${partnership.reasons.join(', ')}`);
         
         if (partnership && partnership.score > 0) {
           const props = partnership.properties;
@@ -972,18 +784,13 @@ const hubspotAPI = {
             setting: props.partnership_setting || props.setting || null
           };
           
-          // --- Save to cache with timestamp (3 hour TTL) ---
+          // --- Save to cache (1 hour TTL) ---
           try {
-            const cacheData = {
-              ...partnershipResult,
-              cachedAt: new Date().toISOString()
-            };
-            await kv.set(cacheKey, cacheData, { ex: 10800 }); // 3 hours
-            console.log(`\n[getPartnershipForProject] ✅ Saved to cache: "${cacheKey}" (3hr TTL)`);
+            await kv.set(cacheKey, partnershipResult, { ex: 3600 });
+            console.log(`[getPartnershipForProject] Saved to cache: "${cacheKey}"`);
           } catch (e) {
-            console.error('[getPartnershipForProject] ⚠️ KV cache set failed:', e.message);
+            console.error('[getPartnershipForProject] KV cache set failed:', e.message);
           }
-          console.log(`========================================\n`);
           // --- End cache save ---
           
           return partnershipResult;
@@ -1198,57 +1005,6 @@ const hubspotAPI = {
     });
     if (!response.ok) return { results: [] };
     return response.json();
-  },
-
-  /**
-   * Get a single object by ID with specified properties
-   * @param {string} objectType - Object type (e.g., 'companies', '2-26628489' for brands)
-   * @param {string} objectId - The object ID
-   * @param {string[]} properties - Array of property names to retrieve
-   * @returns {Promise<Object>} The full HubSpot object with nested properties
-   */
-  async getObjectById(objectType, objectId, properties = []) {
-    await hubspotLimiter.acquire();
-    
-    // Map common object types to their HubSpot equivalents
-    const typeMap = {
-      'companies': this.OBJECTS.BRANDS,
-      'brands': this.OBJECTS.BRANDS,
-      'partnerships': this.OBJECTS.PARTNERSHIPS,
-      'deals': this.OBJECTS.DEALS,
-      'contacts': this.OBJECTS.CONTACTS
-    };
-    
-    const mappedType = typeMap[objectType.toLowerCase()] || objectType;
-    
-    // Build URL with properties query parameter
-    const propsQuery = properties.length > 0 
-      ? `?properties=${properties.join('&properties=')}` 
-      : '';
-    
-    const url = `${this.baseUrl}/crm/v3/objects/${mappedType}/${objectId}${propsQuery}`;
-    
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${hubspotApiKey}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (!response.ok) {
-        const errorBody = await response.text();
-        console.error(`[getObjectById] HubSpot API error for ${objectType}/${objectId}:`, response.status, errorBody);
-        return null;
-      }
-      
-      const data = await response.json();
-      console.log(`[getObjectById] Successfully fetched ${objectType}/${objectId}`);
-      return data;
-    } catch (error) {
-      console.error(`[getObjectById] Error fetching ${objectType}/${objectId}:`, error.message);
-      return null;
-    }
   }
 };
 
