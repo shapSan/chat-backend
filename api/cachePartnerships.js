@@ -23,14 +23,37 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
   
-  // Only require auth for POST method (rebuild cache)
-  if (req.method === 'POST' && req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
-    // Allow POST without auth for frontend rebuild button
-    console.log('[CACHE] Frontend-initiated cache refresh (no auth)');
+  // Allow GET for status checks, POST for rebuilding
+  if (req.method === 'GET') {
+    // Return current cache status for polling
+    try {
+      const cachedData = await kv.get('hubspot-partnership-matches');
+      const timestamp = await kv.get('hubspot-partnership-matches-timestamp');
+      
+      if (cachedData && Array.isArray(cachedData)) {
+        return res.status(200).json({
+          status: 'completed',
+          partnerships: cachedData.length,
+          message: `Cache contains ${cachedData.length} partnerships`,
+          timestamp: timestamp
+        });
+      } else {
+        return res.status(200).json({
+          status: 'idle',
+          partnerships: 0,
+          message: 'No cache found'
+        });
+      }
+    } catch (error) {
+      return res.status(500).json({
+        status: 'error',
+        error: error.message
+      });
+    }
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed. Use POST to rebuild cache.' });
+    return res.status(405).json({ error: 'Method not allowed. Use GET for status, POST to rebuild cache.' });
   }
 
   console.log('[CACHE] Starting partnership cache refresh...');
