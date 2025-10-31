@@ -84,39 +84,39 @@ export default async function handler(req, res) {
     
     const partnershipProperties = [
       'partnership_name',
-      'hs_pipeline_stage',
-      'production_stage',         // Production stage field
-      'start_date',               // CORRECTED: Primary start date field
-      'production_start_date',    // Keep as fallback
-      'release__est__date',       // Primary release field with double underscores
-      'release_est_date',         // Keep as fallback
-      'content_type',             // Content type field (Film - Theatrical, etc.)
-      'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
-      'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
-      'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
-      'rating',                   // Generic rating field fallback
-      'hs_lastmodifieddate',      // Object last modified date/time - CRITICAL FOR SORTING
-      'genre_production',
-      'production_type',
-      'synopsis',
-      'main_cast',                // Main cast members
-      'shoot_location__city_',    // CRITICAL: Shooting location
-      'audience_segment',         // CRITICAL: Target audience
-      'partnership_status',       // Partnership status
-      'distributor',              // Distributor
-      'brand_name',               // Brand name
-      'amount',                   // Deal amount
-      'hollywood_branded_fee',    // HB fee
-      'closedate',                // Close date
-      'contract_sent_date',       // Contract sent date
-      'num_associated_contacts',  // Number of contacts
-      'est__shooting_end_date',   // Shooting end date
-      'production_end_date',      // Production end date
-      'time_period',              // Time period
-      'plot_location',            // Plot location
-      'storyline_location__city_',// Storyline city
-      'audience_segment',         // Audience segment
-      'partnership_setting'       // Partnership setting
+      // 'hs_pipeline_stage',
+      // 'production_stage',         // Production stage field
+      // 'start_date',               // CORRECTED: Primary start date field
+      // 'production_start_date',    // Keep as fallback
+      // 'release__est__date',       // Primary release field with double underscores
+      // 'release_est_date',         // Keep as fallback
+      // 'content_type',             // Content type field (Film - Theatrical, etc.)
+      // 'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
+      // 'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
+      // 'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
+      // 'rating',                   // Generic rating field fallback
+      // 'hs_lastmodifieddate',      // Object last modified date/time - CRITICAL FOR SORTING
+      // 'genre_production',
+      // 'production_type',
+      // 'synopsis',
+      // 'main_cast',                // Main cast members
+      // 'shoot_location__city_',    // CRITICAL: Shooting location
+      // 'audience_segment',         // CRITICAL: Target audience
+      // 'partnership_status',       // Partnership status
+      // 'distributor',              // Distributor
+      // 'brand_name',               // Brand name
+      // 'amount',                   // Deal amount
+      // 'hollywood_branded_fee',    // HB fee
+      // 'closedate',                // Close date
+      // 'contract_sent_date',       // Contract sent date
+      // 'num_associated_contacts',  // Number of contacts
+      // 'est__shooting_end_date',   // Shooting end date
+      // 'production_end_date',      // Production end date
+      // 'time_period',              // Time period
+      // 'plot_location',            // Plot location
+      // 'storyline_location__city_',// Storyline city
+      // 'audience_segment',         // Audience segment
+      // 'partnership_setting'       // Partnership setting
     ];
     
     do {
