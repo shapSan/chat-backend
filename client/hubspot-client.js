@@ -566,9 +566,13 @@ const hubspotAPI = {
         body: JSON.stringify(requestBody)
       });
 
+      console.log('[DEBUG searchProductions] Response status:', response.status);
+      console.log('[DEBUG searchProductions] Response headers:', Object.fromEntries(response.headers.entries()));
+
       if (!response.ok) {
         const errorBody = await response.text();
-        throw new Error(`HubSpot API error: ${response.status}`);
+        console.error('[DEBUG searchProductions] Error response:', errorBody);
+        throw new Error(`HubSpot API error: ${response.status} - ${errorBody}`);
       }
 
       const data = await response.json();
