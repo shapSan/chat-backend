@@ -23,149 +23,89 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
   
-  // Handle GET requests - return current cache status
-  if (req.method === 'GET') {
-    try {
-      const status = await kv.get('partnership-cache-status');
-      
-      if (!status) {
-        return res.status(200).json({
-          status: 'idle',
-          message: 'No cache rebuild in progress.'
-        });
-      }
-      
-      return res.status(200).json(status);
-    } catch (error) {
-      console.error('[CACHE] Error reading status:', error);
-      return res.status(500).json({
-        status: 'error',
-        error: 'Failed to read cache status',
-        message: error.message
-      });
-    }
+  // Only require auth for POST method (rebuild cache)
+  if (req.method === 'POST' && req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
+    // Allow POST without auth for frontend rebuild button
+    console.log('[CACHE] Frontend-initiated cache refresh (no auth)');
   }
-  
-  // Handle POST requests - trigger cache rebuild
-  if (req.method === 'POST') {
-    // Only require auth for POST method (rebuild cache)
-    if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
-      // Allow POST without auth for frontend rebuild button
-      console.log('[CACHE] Frontend-initiated cache refresh (no auth)');
-    }
 
-    // Set initial 'starting' status before responding
-    try {
-      await kv.set('partnership-cache-status', {
-        status: 'starting',
-        message: 'Cache rebuild initiated...',
-        startTime: Date.now()
-      });
-    } catch (err) {
-      console.error('[CACHE] Failed to set starting status:', err);
-    }
-
-    // IMMEDIATELY return success - don't wait for the cache to build
-    res.status(200).json({ 
-      status: 'ok',
-      message: 'Cache rebuild started. Poll GET /api/cachePartnerships for status updates.'
-    });
-
-    // Now rebuild the cache in the background
-    // Vercel will keep this running for up to 5 minutes
-    rebuildCacheBackground().catch(err => {
-      console.error('[CACHE] Background rebuild failed:', err);
-    });
-    
-    return;
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed. Use POST to rebuild cache.' });
   }
-  
-  // Method not allowed
-  return res.status(405).json({ error: 'Method not allowed. Use GET for status or POST to rebuild cache.' });
-}
-
-async function rebuildCacheBackground() {
 
   console.log('[CACHE] Starting partnership cache refresh...');
   
-  // Capture the original start time
-  const startTime = Date.now();
-  
-  // Update status to 'running'
   try {
-    await kv.set('partnership-cache-status', {
-      status: 'running',
-      startTime,
-      message: 'Fetching data from HubSpot...'
-    });
-  } catch (err) {
-    console.error('[CACHE] Failed to set running status:', err);
-  }
-  
-  try {
-    // Original correct filter logic
+    // Use the defined pipeline stages for active partnerships
+    // No date filtering - we want ALL partnerships in active stages
     const filterGroups = [
       {
-        // Group 1: (Stage AND have_contacts AND main_cast)
+        // Filter by active pipeline stages using the IDs
         filters: [
           {
             propertyName: 'hs_pipeline_stage',
             operator: 'IN',
-            values: ["1111899943", "174586264", "174531875", "239211589", "174586263"]
-          },
-          {
-            propertyName: 'have_contacts',
-            operator: 'HAS_PROPERTY'
-          },
-          {
-            propertyName: 'main_cast',
-            operator: 'HAS_PROPERTY'
-          }
-        ]
-      },
-      {
-        // Group 2: OR (Franchise Property IS Yes)
-        filters: [
-          {
-            propertyName: 'franchise_property',
-            operator: 'EQ',
-            value: 'Yes'
+            values: ACTIVE_STAGES  // Use the defined stage IDs
           }
         ]
       }
     ];
     
-    console.log('[CACHE] Fetching partnerships in active stages WITH start_date:', ACTIVE_STAGES);
+    console.log('[CACHE] Fetching partnerships in active stages:', ACTIVE_STAGES);
     console.log('[CACHE] Filter groups:', JSON.stringify(filterGroups, null, 2));
     
     // Support pagination to get all matching partnerships
-    // NEW STRATEGY: Save partnerships incrementally instead of collecting in memory
-    const partnershipList = []; // Lightweight list of IDs and names only
+    let allPartnerships = [];
     let after = undefined;
     let pageCount = 0;
-    const maxPages = 20; // Support up to 1000 partnerships
-    let totalSaved = 0;
+    const maxPages = 10; // Support up to 1000 partnerships
     
     const partnershipProperties = [
-      'partnership_name',          // Essential - display name
-      // 'hs_pipeline_stage',         // Essential - for filtering by active stages
-      // 'start_date',                // Essential - for filtering + display
-      // 'release__est__date',        // Essential - display
-      // 'hs_lastmodifieddate',       // Essential - for sorting
-      // 'main_cast',                 // Essential - display
-      // 'genre_production',          // Essential - display/filtering
-      // 'production_type',           // Essential - display/filtering
-      // 'distributor',               // Useful - display
-      // 'shoot_location__city_',     // Keep - location display
-      // 'storyline_location__city_', // Keep - location fallback
-      // 'audience_segment',          // Keep - targeting/matching
-      // 'synopsis',                  // Keep - for context (can be large but needed)
+      'partnership_name',
+      'hs_pipeline_stage',
+      'production_stage',         // Production stage field
+      'start_date',               // CORRECTED: Primary start date field
+      'production_start_date',    // Keep as fallback
+      'release__est__date',       // Primary release field with double underscores
+      'release_est_date',         // Keep as fallback
+      'content_type',             // Content type field (Film - Theatrical, etc.)
+      'movie_rating',             // MPAA movie ratings (G, PG, PG-13, R, NC-17)
+      'tv_ratings',               // TV ratings (TV-G, TV-PG, TV-14, TV-MA)
+      'sub_ratings_for_tv_content', // TV sub-ratings (D, L, S, V)
+      'rating',                   // Generic rating field fallback
+      'hs_lastmodifieddate',      // Object last modified date/time - CRITICAL FOR SORTING
+      'genre_production',
+      'production_type',
+      'synopsis',
+      'main_cast',                // Main cast members
+      'shoot_location__city_',    // CRITICAL: Shooting location
+      'audience_segment',         // CRITICAL: Target audience
+      'partnership_status',       // Partnership status
+      'distributor',              // Distributor
+      'brand_name',               // Brand name
+      'amount',                   // Deal amount
+      'hollywood_branded_fee',    // HB fee
+      'closedate',                // Close date
+      'contract_sent_date',       // Contract sent date
+      'num_associated_contacts',  // Number of contacts
+      'est__shooting_end_date',   // Shooting end date
+      'production_end_date',      // Production end date
+      'time_period',              // Time period
+      'plot_location',            // Plot location
+      'storyline_location__city_',// Storyline city
+      'audience_segment',         // Audience segment
+      'partnership_setting'       // Partnership setting
     ];
     
     do {
       try {
+        // Add delay between requests to avoid rate limits
+        if (pageCount > 0) {
+          await new Promise(resolve => setTimeout(resolve, 150));
+        }
+        
         const searchParams = {
-          limit: 50,  // Reduced from 100 to prevent timeouts
+          limit: 100,
           filterGroups,
           properties: partnershipProperties,
           // Add explicit sorting for stable pagination
@@ -182,152 +122,239 @@ async function rebuildCacheBackground() {
         console.log(`[CACHE] Fetching partnerships page ${pageCount + 1}...`);
         const result = await hubspotAPI.searchProductions(searchParams);
         
-        console.log(`[CACHE] Got result, checking data...`);
-        console.log(`[CACHE] result.results exists:`, !!result.results);
-        console.log(`[CACHE] result.results.length:`, result.results?.length || 0);
-        console.log(`[CACHE] result.paging:`, JSON.stringify(result.paging));
-        
         if (result.results && result.results.length > 0) {
-          // IMMEDIATELY save each partnership to its own key
-          for (const partnership of result.results) {
-            const props = partnership.properties;
-            
-            // Build the full partnership object (minimal for now)
-            const fullPartnership = {
-              id: partnership.id,
-              name: props.partnership_name || 'Untitled Project',
-              partnership_name: props.partnership_name || 'Untitled Project',
-            };
-            
-            // Save full data to individual key
-            try {
-              await kv.set(`partnership:${partnership.id}`, fullPartnership);
-              totalSaved++;
-              
-              // Add to lightweight list (ID and name only)
-              partnershipList.push({
-                id: partnership.id,
-                name: props.partnership_name || 'Untitled Project'
-              });
-            } catch (saveError) {
-              console.error(`[CACHE] Failed to save partnership ${partnership.id}:`, saveError);
-            }
-          }
-          
-          console.log(`[CACHE] Saved ${result.results.length} partnerships (total: ${totalSaved})`);
-        }
-        
-        // Update progress status every 2 pages
-        if (pageCount % 2 === 0) {
-          try {
-            await kv.set('partnership-cache-status', {
-              status: 'running',
-              progress: `Saved ${totalSaved} partnerships...`,
-              page: pageCount,
-              startTime // Keep original start time
-            });
-          } catch (err) {
-            console.error('[CACHE] Failed to update progress:', err);
-          }
+          allPartnerships = [...allPartnerships, ...result.results];
+          console.log(`[CACHE] Fetched ${result.results.length} partnerships (total: ${allPartnerships.length})`);
         }
         
         after = result.paging?.next?.after;
-        if (after) {
-          console.log(`[CACHE] ✅ Has next page, after token: ${after}`);
-        } else {
-          console.log(`[CACHE] ⚠️ No next page - stopping pagination`);
-        }
         pageCount++;
         
       } catch (pageError) {
         console.error(`[CACHE] Error fetching partnerships page ${pageCount + 1}:`, pageError);
-        console.error(`[CACHE] Error stack:`, pageError.stack);
-        
-        // Update status with partial failure info
-        try {
-          await kv.set('partnership-cache-status', {
-            status: 'failed',
-            error: `Error fetching page ${pageCount + 1}: ${pageError.message}`,
-            partial: true,
-            count: totalSaved,
-            endTime: Date.now()
-          });
-        } catch (err) {
-          console.error('[CACHE] Failed to update error status:', err);
-        }
-        
-        // Check if this is a rate limit error - if so, don't break immediately
-        if (pageError.message?.includes('429') || pageError.message?.toLowerCase().includes('rate limit')) {
-          console.log('[CACHE] Rate limit detected, will retry after backoff...');
-          // The hubspot-client RateLimiter should handle the retry
-          // Continue to next iteration rather than breaking
-          continue;
-        }
-        
         break;
       }
     } while (after && pageCount < maxPages);
 
-    console.log(`[CACHE] =========================================`);
-    console.log(`[CACHE] PAGINATION SUMMARY:`);
-    console.log(`[CACHE]   Total saved: ${totalSaved}`);
-    console.log(`[CACHE]   Pages fetched: ${pageCount}`);
-    console.log(`[CACHE]   Max pages: ${maxPages}`);
-    console.log(`[CACHE]   Stopped because: ${after ? 'reached max pages limit' : 'no more pages from HubSpot'}`);
-    console.log(`[CACHE] =========================================`);
+    const partnerships = allPartnerships;
+    console.log(`[CACHE] Total partnerships fetched: ${partnerships.length} in ${pageCount} pages`);
     
-    if (totalSaved === 0) {
-      console.log('[CACHE] No partnerships found, updating status...');
-      // Update status to indicate no data found
-      try {
-        await kv.set('partnership-cache-status', {
-          status: 'completed',
-          count: 0,
-          endTime: Date.now(),
-          message: 'No active partnerships found matching filters.'
-        });
-      } catch (err) {
-        console.error('[CACHE] Failed to set no-data status:', err);
-      }
-      return;
+    if (partnerships.length === 0) {
+      return res.status(200).json({ 
+        status: 'warning', 
+        message: 'No active partnerships found',
+        partnerships: 0
+      });
     }
 
-    console.log('[CACHE] Skipping brand fetching and matching...');
+    // Fetch brand pool for matching (425 brands total)
+    // Split into chunks respecting HubSpot's 200 limit
+    const brandBuckets = [
+      // 150 Active brands
+      {
+        filterGroups: [{
+          filters: [{
+            propertyName: 'client_status',
+            operator: 'EQ',
+            value: 'Active'
+          }]
+        }],
+        limit: 150
+      },
+      // 75 Inactive brands
+      {
+        filterGroups: [{
+          filters: [{
+            propertyName: 'client_status',
+            operator: 'EQ',
+            value: 'Inactive'
+          }]
+        }],
+        limit: 75
+      },
+      // 200 Pending brands (respecting API limit)
+      {
+        filterGroups: [{
+          filters: [{
+            propertyName: 'client_status',
+            operator: 'EQ',
+            value: 'Pending'
+          }]
+        }],
+        limit: 200
+      }
+    ];
+
+    let allBrands = [];
     
-    // Save the lightweight partnership list
-    console.log(`[CACHE] Saving partnership list with ${partnershipList.length} entries...`);
-    await kv.set('partnership-list', partnershipList);
+    for (const bucket of brandBuckets) {
+      const brandResult = await hubspotAPI.searchBrands({
+        ...bucket,
+        properties: [
+          'hs_object_id',
+          'brand_name',
+          'main_category',
+          'target_gen',
+          'target_age_group__multi_',
+          'client_status',
+          'partnership_count'
+        ]
+      });
+      
+      if (brandResult.results) {
+        allBrands = [...allBrands, ...brandResult.results];
+      }
+    }
+
+    console.log(`[CACHE] Fetched ${partnerships.length} partnerships and ${allBrands.length} brands`);
+
+    // Perform matching (simplified scoring logic)
+    const matchedPartnerships = partnerships.map(partnership => {
+      const props = partnership.properties;
+      
+      // Debug log to see what fields we're getting
+      console.log('[CACHE] Sample partnership properties:', {
+        name: props.partnership_name,
+        genre_production: props.genre_production,
+        main_cast: props.main_cast,
+        hs_lastmodifieddate: props.hs_lastmodifieddate,
+        all_keys: Object.keys(props)
+      });
+      
+      // Score each brand for this partnership
+      const scoredBrands = allBrands.map(brand => {
+        const brandProps = brand.properties;
+        let score = Math.floor(Math.random() * 30) + 40; // Base score 40-70
+        
+        // Simple scoring based on available data
+        // Bonus for active brands
+        if (brandProps.client_status === 'Active') {
+          score += 20;
+        }
+        
+        // Bonus for high partnership count
+        const partnershipCount = parseInt(brandProps.partnership_count || 0);
+        if (partnershipCount > 10) score += 10;
+        if (partnershipCount > 5) score += 5;
+        
+        // Genre-based scoring if genre exists
+        if (props.genre_production && brandProps.main_category) {
+          const genreCategories = {
+            'Action': ['Automotive', 'Sports & Fitness', 'Electronics & Appliances'],
+            'Comedy': ['Food & Beverage', 'Entertainment'],
+            'Drama': ['Fashion & Apparel', 'Health & Beauty'],
+            'Horror': ['Entertainment', 'Gaming'],
+            'Romance': ['Fashion & Apparel', 'Health & Beauty', 'Floral'],
+            'Thriller': ['Automotive', 'Security', 'Electronics & Appliances'],
+            'Family': ['Food & Beverage', 'Baby Care', 'Entertainment']
+          };
+          
+          const genres = (props.genre_production || '').split(';');
+          genres.forEach(genre => {
+            const categories = genreCategories[genre.trim()] || [];
+            if (categories.includes(brandProps.main_category)) {
+              score += 15;
+            }
+          });
+        }
+        
+        return {
+          id: brand.id,
+          name: brandProps.brand_name || 'Unknown Brand',
+          category: brandProps.main_category || 'General',
+          status: brandProps.client_status || 'Unknown',
+          score: Math.min(100, score) // Cap at 100
+        };
+      });
+      
+      // Sort by score and take top 30
+      scoredBrands.sort((a, b) => b.score - a.score);
+      const topBrands = scoredBrands.slice(0, 30);
+      
+      // Get the appropriate rating
+      const getRating = () => {
+        // Check movie rating first
+        if (props.movie_rating && props.movie_rating !== null && props.movie_rating !== '') {
+          return props.movie_rating;
+        }
+        // If no movie rating, check TV rating
+        if (props.tv_ratings && props.tv_ratings !== null && props.tv_ratings !== '') {
+          return props.tv_ratings;
+        }
+        // Check generic rating field as fallback
+        if (props.rating && props.rating !== null && props.rating !== '') {
+          return props.rating;
+        }
+        // If none exist, return TBD
+        return 'TBD';
+      };
+      
+      // Debug: Log first partnership to verify lastModified is present
+      if (partnership === partnerships[0]) {
+        console.log('[CACHE] First partnership lastModified value:', props.hs_lastmodifieddate);
+      }
+      
+      const finalObject = {
+        // Spread all raw properties from HubSpot exactly as-is
+        ...props,
+        // Add the HubSpot ID
+        id: partnership.id,
+        // Add the 'name' property for the panel to use
+        name: props.partnership_name || 'Untitled Project',
+        // Add matched brands
+        matchedBrands: topBrands,
+        // CRITICAL: Explicitly map fields that need to be at top level
+        main_cast: props.main_cast || null,
+        cast: props.main_cast || null,
+        shoot_location__city_: props.shoot_location__city_ || null,
+        location: props.shoot_location__city_ || null,
+        audience_segment: props.audience_segment || null,
+        distributor: props.distributor || null,
+        synopsis: props.synopsis || null,
+        genre_production: props.genre_production || null,
+        vibe: props.genre_production || null,
+        productionStartDate: props.start_date || props.production_start_date || null,
+        releaseDate: props.release__est__date || props.release_est_date || null,
+        productionType: props.production_type || null,
+        partnership_setting: props.partnership_setting || null
+      };
+      
+      // DEBUG: Log before storing to cache
+      logStage('B CACHE-IN', props, HB_KEYS.PARTNERSHIP_FIELDS);
+      logStage('C CACHE-SET', finalObject, HB_KEYS.PARTNERSHIP_FIELDS);
+      
+      // Verification log - only log first partnership to avoid spam
+      if (partnership === partnerships[0]) {
+        console.log('[CACHE-BUILD] Verifying final object structure:', {
+          hasName: !!finalObject.name,
+          name: finalObject.name,
+          hasId: !!finalObject.id,
+          hasMainCast: !!finalObject.main_cast,
+          hasPartnershipName: !!finalObject.partnership_name,
+          sampleKeys: Object.keys(finalObject).slice(0, 10)
+        });
+      }
+      
+      return finalObject;
+    });
+
+    // Cache the results (no TTL - persistent like brands cache)
+    await kv.set('hubspot-partnership-matches', matchedPartnerships);
     
     // Also cache timestamp
-    await kv.set('partnership-list-timestamp', Date.now());
+    await kv.set('hubspot-partnership-matches-timestamp', Date.now());
 
-    console.log('[CACHE] ✅ Cache rebuild complete!', totalSaved, 'partnerships saved');
-    
-    // Update status to completed
-    try {
-      await kv.set('partnership-cache-status', {
-        status: 'completed',
-        count: totalSaved,
-        endTime: Date.now(),
-        message: `${totalSaved} partnerships cached.`
-      });
-    } catch (err) {
-      console.error('[CACHE] Failed to set completion status:', err);
-    }
+    res.status(200).json({ 
+      status: 'ok', 
+      partnerships: matchedPartnerships.length,
+      message: `Cached ${matchedPartnerships.length} partnerships with brand matches`
+    });
     
   } catch (error) {
     console.error('[CACHE] Fatal error during partnership cache refresh:', error);
-    
-    // Update status with fatal error info
-    try {
-      await kv.set('partnership-cache-status', {
-        status: 'failed',
-        error: error.message,
-        details: error.stack || '',
-        endTime: Date.now()
-      });
-    } catch (err) {
-      console.error('[CACHE] Failed to set error status:', err);
-    }
+    res.status(500).json({ 
+      error: 'Failed to refresh partnership cache', 
+      details: error.message 
+    });
   }
 }
