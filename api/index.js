@@ -329,7 +329,7 @@ Remember: Make it specific, cinematic, and show the brand naturally integrated i
      * GENERATE IMAGE
      * ======================= */
     if (req.body.generateImage === true) {
-      const { prompt, dimensions, model, imageUrl, projectName, brandName, slideContent } = req.body;
+      const { prompt, dimensions, model, imageUrl, referenceImage, projectName, brandName, slideContent } = req.body;
       if (!prompt) return res.status(400).json({ error: 'Missing required fields', details: 'prompt is required' });
 
       try {
@@ -345,6 +345,7 @@ Remember: Make it specific, cinematic, and show the brand naturally integrated i
             prompt,
             sessionId,
             imageUrl, // For editing existing images
+            referenceImage, // NEW: For using reference image
             projectName,
             brandName,
             slideContent,
