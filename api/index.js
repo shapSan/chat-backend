@@ -225,15 +225,46 @@ export default async function handler(req, res) {
      * GENERATE INTELLIGENT PROMPT
      * ======================= */
     if (req.body.generatePrompt === true) {
-      const { projectName, brandName, synopsis, cast, headline, body, dates } = req.body;
+      const { 
+        projectName, 
+        brandName, 
+        brandCategory,
+        synopsis, 
+        cast, 
+        headline, 
+        body, 
+        dates,
+        templateId,
+        firstSlideContext 
+      } = req.body;
 
       try {
         await progressPush(sessionId, runId, { type: 'info', text: '🎬 Crafting intelligent prompt...', runId });
         
-        // Build context for OpenAI
+        console.log('[generatePrompt] Received params:', {
+          templateId,
+          firstSlideContext,
+          brandName,
+          brandCategory,
+          projectName
+        });
+        
+        // Build context for OpenAI using the new parameters
         const contextParts = [];
-        if (projectName && projectName !== 'this production') contextParts.push(`Production: "${projectName}"`);
-        if (brandName && brandName !== 'the brand') contextParts.push(`Brand: ${brandName}`);
+        
+        // Use firstSlideContext if provided (this contains the template-aware context)
+        if (firstSlideContext) {
+          contextParts.push(`Context: ${firstSlideContext}`);
+        } else {
+          // Fallback to individual fields
+          if (projectName && projectName !== 'this production') contextParts.push(`Production: "${projectName}"`);
+          if (brandName && brandName !== 'the brand') {
+            const brandInfo = brandCategory ? `${brandName} (${brandCategory})` : brandName;
+            contextParts.push(`Brand: ${brandInfo}`);
+          }
+        }
+        
+        // Add slide-specific content
         if (synopsis) contextParts.push(`Synopsis: ${synopsis}`);
         if (cast) contextParts.push(`Cast: ${cast}`);
         if (headline) contextParts.push(`Slide Headline: ${headline}`);
@@ -242,7 +273,26 @@ export default async function handler(req, res) {
         
         const context = contextParts.join('\n');
         
-        const systemPrompt = `You are an expert at creating cinematic image generation prompts for Hollywood brand integration pitches.
+        // Adapt system prompt based on template type
+        let systemPrompt;
+        if (templateId === 'brand-radar') {
+          systemPrompt = `You are an expert at creating professional product photography and lifestyle imagery prompts for brand marketing materials.
+
+Your goal: Create a prompt that will generate an image showcasing the brand's product in an aspirational, professional setting that aligns with their brand identity.
+
+Key principles:
+1. PRODUCT FOCUS - The brand's product should be the hero of the image
+2. LIFESTYLE CONTEXT - Show the product in use within the target audience's lifestyle
+3. PROFESSIONAL QUALITY - Studio lighting, clean composition, professional photography
+4. BRAND ALIGNMENT - Match the brand's aesthetic and target demographic
+5. ASPIRATIONAL - Make it visually compelling and desirable
+
+Format: Write a single, detailed image generation prompt (no preamble, no explanation, just the prompt itself).
+
+Example good prompt:
+"A clean, modern lifestyle shot of Nike running shoes on a minimalist wooden surface with soft natural window lighting from the left. The shoes are positioned at a 3/4 angle showing the iconic swoosh logo clearly. Morning sunlight creates gentle shadows. In the background, slightly out of focus, a yoga mat and water bottle suggest an active lifestyle. Shot with a 50mm lens at f/2.8, professional product photography, clean composition, aspirational fitness aesthetic."`;
+        } else if (templateId === 'one-sheet-teaser') {
+          systemPrompt = `You are an expert at creating cinematic image generation prompts for Hollywood brand integration pitches.
 
 Your goal: Create a prompt that will generate an image that makes the brand EXCITED and helps them VISUALIZE their product naturally integrated into this production.
 
@@ -257,12 +307,20 @@ Format: Write a single, detailed image generation prompt (no preamble, no explan
 
 Example good prompt:
 "A tense wide shot inside a sleek, neon-lit corporate office. Callum Turner as Case hunches over a futuristic desk covered with holographic displays, while Briana Middleton as Molly stands by the window overlooking a rainy cyberpunk cityscape. A Clicks smartphone sits prominently on the desk, its unique design catching the blue neon glow, naturally integrated as their communication device for the heist. Cinematic lighting with strong rim lights, atmospheric haze, shot on ARRI Alexa, 2.39:1 aspect ratio, professional Hollywood cinematography."`;
+        } else {
+          // Default fallback
+          systemPrompt = `You are an expert at creating professional image generation prompts for brand presentations.
 
-        const userPrompt = `Create an intelligent, cinematic image generation prompt for this branded entertainment opportunity:
+Create a visually compelling, professional image prompt that showcases the subject matter in the best possible light. Use professional photography terminology and describe lighting, composition, and style clearly.
+
+Format: Write a single, detailed image generation prompt (no preamble, no explanation, just the prompt itself).`;
+        }
+
+        const userPrompt = `Create an intelligent, professional image generation prompt for this opportunity:
 
 ${context}
 
-Remember: Make it specific, cinematic, and show the brand naturally integrated into an authentic scene from the production. Make the brand excited to see themselves in this world!`;
+Remember: Make it specific, professional, and visually compelling!`;
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
